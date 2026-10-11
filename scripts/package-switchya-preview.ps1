@@ -15,7 +15,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$')][string]$SourceRevision,
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$')]
-    [string]$Version = '0.1.0-preview.1',
+    [string]$Version = '0.1.0-preview.2',
     [string]$OutputDirectory = 'E:\switchya-artifacts'
 )
 
@@ -153,6 +153,7 @@ explicitly exported private launch-info file as explained in the user guide:
 .\switchya.exe models
 .\switchya.exe chat --project 'C:\projects\my-app' --model 'MODEL_ID'
 .\switchya.exe sessions
+.\switchya.exe agent sessions
 ```
 
 Use a real model ID returned by `models`. File edits and commands require an
@@ -163,6 +164,9 @@ Read [RELEASE-NOTES.md](RELEASE-NOTES.md) for this preview's verification limits
 and [the user guide](docs/SWITCHYA.md) for browser/CLI handoff, providers, accounts,
 interruptions and recovery. Codex supports structured app runs; Claude launches
 in an external terminal and that terminal session is not tracked by Switchya.
+Saved Codex conversations can be inspected with `agent show`, continued with
+`agent continue`, and reviewed after an uncertain interruption with
+`agent recover --reviewed`. Run `agent --help` for the required arguments.
 
 ## Switchyard Gateway
 

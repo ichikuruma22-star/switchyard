@@ -1,11 +1,11 @@
 [package]
 name = "switchya-desktop"
-version = "0.1.0"
+version = "0.1.0-preview.2"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
 description = "Native desktop shell for the Switchya local agent workspace"
-repository = "https://github.com/krutftw/switchyard"
+repository = "https://github.com/ichikuruma22-star/switchyard"
 
 # Keep GUI system dependencies out of the standalone gateway workspace.
 [workspace]

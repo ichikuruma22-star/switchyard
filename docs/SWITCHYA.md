@@ -5,8 +5,8 @@ desktop shell use the same built-in agent and saved project sessions. The
 independently installable [Switchyard Gateway](../README.md#switchyard-gateway)
 provides model access and routing.
 
-The [**Windows x64 portable preview**](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.1)
-is tagged `switchya-v0.1.0-preview.1`. Its archive contains the native desktop
+The [**Windows x64 portable preview**](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.2)
+is tagged `switchya-v0.1.0-preview.2`. Its archive contains the native desktop
 shell and `switchya` CLI, targeting Windows 10/11 x64. It is unsigned and has
 no installer or bundled runtime DLLs. Install the
 [Microsoft Visual C++ v14 x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)
@@ -17,24 +17,26 @@ remain in your application-data directory; they are not stored inside the ZIP.
 
 Gateway downloads remain a separate product. The gateway's Windows and Linux
 release does not establish Switchya desktop availability on those platforms.
-Separate Linux checks are not a Linux desktop release. There is no macOS app
-binary; ARM and Intel source checks are not linked applications or macOS
-runtime tests. Source-build instructions remain below.
+Separate Linux checks are not a Linux desktop release. Linux and macOS
+desktop downloads are not included. Native workspace tests pass on Linux
+x64/ARM64 and macOS Apple Silicon/Intel; those tests do not exercise the
+separate desktop shell. Source-build instructions remain below.
 
 ## Preview verification status
 
-The verification snapshot is from 3 October 2026. The [platform report](PLATFORM-VERIFICATION.md)
-separates builds, source checks and runtime observations.
+The source verification snapshot is from 11 October 2026. The [platform report](PLATFORM-VERIFICATION.md)
+separates current source checks from the earlier preview's runtime observations.
+The release notes bundled with the ZIP record checks of the published binaries.
 
 | Area | Evidence and limits |
 |---|---|
-| Windows automated checks | 88 tests passed across the four new packages: agent engine 15, agent tools 13, adapters 22 and app host 38. The 38 host tests passed again after the final lint refactor. All four packages passed all-targets Clippy with warnings denied. This count is not a whole-gateway-workspace test total. |
-| UI checks | The final complete `app-ui/tests/*.test.mjs` run passed all 56 tests. |
-| Browser workflow | A controlled local provider exercised file reads, proposed patches, edit approval/denial and command approval, recorded command results, saved-session reload and CLI handoff. These are fixture checks, not live-model quality results. |
-| Native Windows shell | Release version/help and startup checks passed, including a responding window and healthy local host. Interaction inside the native GUI has not been verified; the browser workflow above is a separate check. |
+| Windows automated checks | 55 app tests and 30 adapter tests passed locally. One live adapter test is opt-in and was not run in this release verification. Native whole-workspace CI passed, as did formatting and warnings-denied Clippy. |
+| UI checks | All 66 workspace UI tests passed; the gateway dashboard suite also passed in CI. |
+| Browser workflow | Earlier controlled-provider checks exercised file reads, patch and command approvals, denial without file changes, saved-session reload and CLI handoff. Current automated tests cover saved Codex conversations and activity summaries. These checks do not establish live-model coding quality. |
+| Native Windows shell | The published ZIP's release notes record its startup and host checks. Native webview interaction is a separate boundary from browser and host tests. |
 | Portable release package | The release includes a SHA-256 file and a manifest of every packaged file. Verify the downloaded archive against those files. |
 | Accounts and model quality | Actual account sign-ins and live AI coding quality remain unverified. Account tests use controlled fixtures. Claude subscription quota remains unavailable because its documented status command does not expose it. |
-| Other platforms | 91 native Linux tests passed. Both macOS architectures passed app and desktop source checks. Linux and macOS desktop downloads are not included in this preview; see the platform report for the separate build/runtime limits. |
+| Other platforms | Native workspace CI passed on Linux x64/ARM64 and both macOS architectures. Linux and macOS desktop downloads are not included; see the platform report for the separate desktop build/runtime limits. |
 
 See [Accounts](ACCOUNTS.md) for the current sign-in, usage and native-terminal
 boundaries. A source check, fixture run or successful build does not establish

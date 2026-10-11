@@ -8,7 +8,7 @@ independent API gateway for other tools and applications.
 
 | Start here | Purpose | Availability |
 |---|---|---|
-| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.1) |
+| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.2) |
 | [Native desktop build](desktop/README.md) | Build the separate desktop shell | Separate Cargo workspace; operating-system runtime verification is distinct from gateway verification |
 | [Switchyard Gateway](#switchyard-gateway) | Protocol translation, routing, credential pools, and its operations dashboard | [v0.1.0 Windows x64 and Linux x64 downloads](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.0) |
 

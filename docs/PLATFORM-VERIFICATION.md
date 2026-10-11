@@ -1,5 +1,29 @@
 # Platform verification
 
+## Switchya 0.1.0-preview.2 source verification — 11 October 2026
+
+[PR #1](https://github.com/ichikuruma22-star/switchyard/pull/1) adds durable Codex
+conversations, saved activity, explicit continuation/recovery, and the matching
+`switchya agent` CLI commands. [All six CI jobs passed for its final source](https://github.com/ichikuruma22-star/switchyard/actions/runs/38115521845):
+native workspace tests on Windows x64, Linux x64/ARM64, and macOS Apple
+Silicon/Intel, plus formatting, warnings-denied Clippy and both UI suites.
+The separate Tauri desktop workspace is not built by that CI workflow.
+
+Local Windows checks passed 55 app tests, 30 adapter tests, and 66 workspace UI
+tests. One opt-in live adapter test was excluded. The Windows CLI candidate
+built from `97d59fc` passed 13 executable checks, including saved-session
+readback, crash recovery, explicit review, host attachment and owned-host
+cleanup. Those executable checks submitted no model turns.
+
+Preview 2 targets Windows 10/11 x64. Its CLI and desktop shell report
+`0.1.0-preview.2`; the independently released Gateway remains at `0.1.0`.
+The release notes included in the preview ZIP record the final binary and
+package checks. The adjacent manifest records the source revision and all
+packaged file hashes. No Linux or macOS desktop package is distributed, and
+the Linux GUI dependency advisory below remains unresolved.
+
+## Historical preview 1 verification — 3 October 2026
+
 Local verification for the Switchya 0.1.0 preview, 3 October 2026. This report distinguishes checks that execute native code from source checks for another platform.
 
 | Platform | Verified result | Remaining boundary |
