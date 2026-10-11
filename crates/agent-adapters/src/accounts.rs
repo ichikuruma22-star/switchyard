@@ -137,7 +137,7 @@ impl AccountRuntime {
             _ = self.inner.shutdown.cancelled() => Err(AdapterError::Unavailable("Account runtime is shutting down.".into())),
             outcome = tokio::time::timeout(PROBE_TIMEOUT, inspect_process(&mut process, binding)) => outcome.unwrap_or_else(|_| Err(AdapterError::Unavailable("The account check timed out. Try refreshing again.".into()))),
         };
-        process.stop().await;
+        process.stop().await?;
         result
     }
 
@@ -445,7 +445,10 @@ async fn run_login(
             _ = cancel.cancelled() => None,
             outcome = tokio::time::timeout(PROBE_TIMEOUT, inspect_process(&mut probe,&binding)) => Some(outcome),
         };
-        probe.stop().await;
+        if let Err(error) = probe.stop().await {
+            set_login(&state, "failed", Some(&error.to_string()));
+            return;
+        }
         match result {
             None => {
                 set_login(&state, "cancelled", Some("Sign-in was cancelled."));
@@ -499,7 +502,10 @@ async fn run_login(
         )
         .await;
     }
-    process.stop().await;
+    if let Err(error) = process.stop().await {
+        set_login(&state, "failed", Some(&error.to_string()));
+        return;
+    }
     match result {
         None => set_login(
             &state,
@@ -699,8 +705,35 @@ mod tests {
                 .unwrap()
                 .contains("fixture-do-not-forward")
         );
-        process.stop().await;
+        process.stop().await.unwrap();
         assert!(process.child.try_wait().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn account_cleanup_reaps_fresh_children_and_is_idempotent() {
+        let compiled = fixture();
+        for _ in 0..3 {
+            let dir = tempfile::tempdir().unwrap();
+            let binding = binding(&dir, "codex");
+            // Fresh executable paths reproduced Windows teardown exceeding the
+            // old 500 ms wait. Keep the immediate exit assertion after stop.
+            let executable = dir.path().join(compiled.file_name().unwrap());
+            std::fs::copy(&compiled, &executable).unwrap();
+            let mut process =
+                AccountProcess::spawn(executable, &["inspect"], &binding, false).unwrap();
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                inspect_process(&mut process, &binding),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(process.child.try_wait().unwrap().is_none());
+            process.stop().await.unwrap();
+            assert!(process.child.try_wait().unwrap().is_some());
+            process.stop().await.unwrap();
+            assert!(process.child.try_wait().unwrap().is_some());
+        }
     }
 
     #[tokio::test]
@@ -720,7 +753,7 @@ mod tests {
                 .is_err(),
                 "{scenario}"
             );
-            process.stop().await;
+            process.stop().await.unwrap();
             assert!(process.child.try_wait().unwrap().is_some());
         }
     }
@@ -753,7 +786,7 @@ mod tests {
                 assert_eq!(remote.as_deref(), Some("fixture-login"));
                 assert!(state.lock().auth_url.is_some());
             }
-            process.stop().await;
+            process.stop().await.unwrap();
         }
     }
 
@@ -787,31 +820,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(canceled["status"], "canceled");
-        process.stop().await;
+        process.stop().await.unwrap();
         assert!(process.child.try_wait().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn existing_cli_login_is_rejected_before_discovery_or_spawn() {
+        let runtime = AccountRuntime::new();
+        for agent in ["codex", "claude"] {
+            let binding = ProfileBinding {
+                id: format!("system-{agent}"),
+                name: "Existing CLI".into(),
+                agent_id: agent.into(),
+                home: PathBuf::new(),
+                managed: false,
+            };
+            let error = runtime.start_login(binding).await.unwrap_err();
+            assert!(
+                matches!(error, AdapterError::Invalid(ref message) if message.contains("read-only"))
+            );
+        }
+        assert!(runtime.inner.jobs.lock().is_empty());
+        runtime.shutdown().await;
     }
 
     #[tokio::test]
     async fn claude_status_fixture_has_no_quota_or_untyped_secret_output() {
         let dir = tempfile::tempdir().unwrap();
-        let binding = binding(&dir, "claude");
-        let mut process =
-            AccountProcess::spawn(fixture(), &["claude_status"], &binding, false).unwrap();
-        let snapshot = tokio::time::timeout(
-            Duration::from_secs(5),
-            inspect_process(&mut process, &binding),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(snapshot.auth_status, "signed_out");
-        assert_eq!(snapshot.usage.status, "unavailable");
-        assert!(
-            !serde_json::to_string(&snapshot)
-                .unwrap()
-                .contains("fixture-do-not-forward")
-        );
-        process.stop().await;
+        for managed in [true, false] {
+            let binding = if managed {
+                binding(&dir, "claude")
+            } else {
+                ProfileBinding {
+                    id: "system-claude".into(),
+                    name: "Existing Claude CLI".into(),
+                    agent_id: "claude".into(),
+                    home: PathBuf::new(),
+                    managed: false,
+                }
+            };
+            crate::profile::validate(&binding, "claude").unwrap();
+            let mut process = AccountProcess::spawn(
+                fixture(),
+                &["claude_status", "auth", "status", "--json"],
+                &binding,
+                false,
+            )
+            .unwrap();
+            let snapshot = tokio::time::timeout(
+                Duration::from_secs(5),
+                inspect_process(&mut process, &binding),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(snapshot.auth_status, "signed_out");
+            assert_eq!(snapshot.usage.status, "unavailable");
+            assert!(
+                !serde_json::to_string(&snapshot)
+                    .unwrap()
+                    .contains("fixture-do-not-forward")
+            );
+            process.stop().await.unwrap();
+        }
     }
     #[test]
     fn usage_maps_used_percent_and_preserves_unknown() {

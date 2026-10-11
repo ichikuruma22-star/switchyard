@@ -1,5 +1,5 @@
 //! Private account profiles. Only labels and selections are persisted here;
-//! official CLI processes own their credentials inside separate profile homes.
+//! official CLIs own credentials in their existing configuration or managed homes.
 use crate::api::{AppState, body, no_query};
 use crate::{AppError, Result};
 use axum::Json;
@@ -25,6 +25,15 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 const SYSTEM_CODEX: &str = "system-codex";
+const SYSTEM_CLAUDE: &str = "system-claude";
+
+fn system_profile(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        SYSTEM_CODEX => Some(("Existing Codex CLI", "codex")),
+        SYSTEM_CLAUDE => Some(("Existing Claude CLI", "claude")),
+        _ => None,
+    }
+}
 const MAX_PROFILES: usize = 32;
 const MAX_MANIFEST: u64 = 128 * 1024;
 
@@ -59,7 +68,7 @@ impl Default for Manifest {
             profiles: Vec::new(),
             defaults: Defaults {
                 codex: Some(SYSTEM_CODEX.into()),
-                claude: None,
+                claude: Some(SYSTEM_CLAUDE.into()),
             },
         }
     }
@@ -214,7 +223,9 @@ impl AccountManager {
             crate::startup::private_directory(&home)?;
         }
         let mut cache = BTreeMap::new();
-        cache.insert(SYSTEM_CODEX.into(), CachedProfile::default());
+        for id in [SYSTEM_CODEX, SYSTEM_CLAUDE] {
+            cache.insert(id.into(), CachedProfile::default());
+        }
         for profile in &manifest.profiles {
             cache.insert(profile.id.clone(), CachedProfile::default());
         }
@@ -255,16 +266,12 @@ impl AccountManager {
         }
     }
 
-    fn record<'a>(state: &'a ProfileState, id: &str) -> Result<Option<&'a ProfileRecord>> {
-        if id == SYSTEM_CODEX {
-            return Ok(None);
-        }
+    fn record<'a>(state: &'a ProfileState, id: &str) -> Result<&'a ProfileRecord> {
         state
             .manifest
             .profiles
             .iter()
             .find(|profile| profile.id == id)
-            .map(Some)
             .ok_or_else(|| {
                 AppError::new(
                     StatusCode::NOT_FOUND,
@@ -275,15 +282,16 @@ impl AccountManager {
     }
 
     fn binding(&self, state: &ProfileState, id: &str) -> Result<ProfileBinding> {
-        let Some(profile) = Self::record(state, id)? else {
+        if let Some((name, agent_id)) = system_profile(id) {
             return Ok(ProfileBinding {
-                id: SYSTEM_CODEX.into(),
-                name: "Existing Codex CLI".into(),
-                agent_id: "codex".into(),
+                id: id.into(),
+                name: name.into(),
+                agent_id: agent_id.into(),
                 home: PathBuf::new(),
                 managed: false,
             });
-        };
+        }
+        let profile = Self::record(state, id)?;
         let home = self.inner.homes.join(&profile.id);
         check_directory_chain(&home)?;
         crate::startup::private_directory(&home)?;
@@ -302,11 +310,12 @@ impl AccountManager {
     }
 
     fn view(state: &ProfileState, id: &str) -> Result<ProfileView> {
-        let record = Self::record(state, id)?;
-        let (name, agent_id, managed) = record
-            .map_or(("Existing Codex CLI", "codex", false), |profile| {
-                (profile.name.as_str(), profile.agent_id.as_str(), true)
-            });
+        let (name, agent_id, managed) = if let Some((name, agent_id)) = system_profile(id) {
+            (name, agent_id, false)
+        } else {
+            let profile = Self::record(state, id)?;
+            (profile.name.as_str(), profile.agent_id.as_str(), true)
+        };
         let cached = state
             .cache
             .get(id)
@@ -325,7 +334,8 @@ impl AccountManager {
 
     pub(crate) fn cached(&self) -> (Vec<ProfileView>, Defaults) {
         let state = lock(&self.inner.state);
-        let profiles = std::iter::once(SYSTEM_CODEX)
+        let profiles = [SYSTEM_CODEX, SYSTEM_CLAUDE]
+            .into_iter()
             .chain(
                 state
                     .manifest
@@ -602,7 +612,7 @@ impl AccountManager {
                 return Err(AppError::new(
                     StatusCode::CONFLICT,
                     "system_profile_read_only",
-                    "The existing Codex account is read-only here. Create a managed profile to sign in.",
+                    "Existing CLI accounts are read-only here. Create a managed profile to sign in.",
                 ));
             }
             let cached = state
@@ -675,7 +685,9 @@ impl AccountManager {
 
     pub(crate) fn cached_login(&self, id: &str) -> Result<Option<LoginJob>> {
         let state = lock(&self.inner.state);
-        Self::record(&state, id)?;
+        if system_profile(id).is_none() {
+            Self::record(&state, id)?;
+        }
         Ok(state.cache.get(id).and_then(|cached| cached.login.clone()))
     }
 
@@ -825,7 +837,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
     }
     for agent in ["codex", "claude"] {
         if let Some(id) = selected(&manifest.defaults, agent) {
-            let valid = agent == "codex" && id == SYSTEM_CODEX
+            let valid = system_profile(id).is_some_and(|(_, profile_agent)| profile_agent == agent)
                 || manifest
                     .profiles
                     .iter()
@@ -1177,10 +1189,22 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let manager = AccountManager::open(temp.path()).unwrap();
         let (profiles, defaults) = manager.cached();
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].id, SYSTEM_CODEX);
-        assert!(profiles[0].read_only);
+        assert_eq!(profiles.len(), 2);
+        for (profile, (id, name, agent)) in profiles.iter().zip([
+            (SYSTEM_CODEX, "Existing Codex CLI", "codex"),
+            (SYSTEM_CLAUDE, "Existing Claude CLI", "claude"),
+        ]) {
+            assert_eq!(profile.id, id);
+            assert_eq!(profile.name, name);
+            assert_eq!(profile.agent_id, agent);
+            assert!(profile.read_only && !profile.managed && profile.selected);
+            assert_eq!(profile.account.auth_status, "unknown");
+            assert_eq!(profile.account.checked_at_ms, 0);
+            assert!(!profile.refreshing);
+        }
+        assert_eq!(std::fs::read_dir(&manager.inner.homes).unwrap().count(), 0);
         assert_eq!(defaults.codex.as_deref(), Some(SYSTEM_CODEX));
+        assert_eq!(defaults.claude.as_deref(), Some(SYSTEM_CLAUDE));
         let work = manager.create_profile("codex", "  Work  ").unwrap();
         let personal = manager.create_profile("claude", "Personal").unwrap();
         assert_eq!(work.name, "Work");
@@ -1223,6 +1247,80 @@ mod tests {
     }
 
     #[test]
+    fn existing_claude_is_selectable_in_legacy_metadata_without_migrating_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("account-profiles.json");
+        let legacy = serde_json::to_vec(&json!({
+            "schema_version": 1, "profiles": [],
+            "defaults": {"codex": SYSTEM_CODEX, "claude": null}
+        }))
+        .unwrap();
+        write_manifest(temp.path(), &path, &legacy).unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), legacy);
+        assert!(manager.cached().1.claude.is_none());
+        let (profile, defaults) = manager.select_profile(SYSTEM_CLAUDE).unwrap();
+        assert!(profile.read_only && !profile.managed && profile.selected);
+        assert_eq!(defaults.claude.as_deref(), Some(SYSTEM_CLAUDE));
+        drop(manager);
+
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let state = lock(&manager.inner.state);
+        let binding = manager.resolve_locked(&state, "claude", None).unwrap();
+        assert_eq!(binding.id, SYSTEM_CLAUDE);
+        assert_eq!(binding.name, "Existing Claude CLI");
+        assert!(!binding.managed && binding.home.as_os_str().is_empty());
+        assert!(state.manifest.profiles.is_empty());
+        for (agent, wrong_id) in [("codex", SYSTEM_CLAUDE), ("claude", SYSTEM_CODEX)] {
+            assert!(
+                manager
+                    .resolve_locked(&state, agent, Some(wrong_id))
+                    .is_err()
+            );
+            let mut invalid = state.manifest.clone();
+            if agent == "codex" {
+                invalid.defaults.codex = Some(wrong_id.into());
+            } else {
+                invalid.defaults.claude = Some(wrong_id.into());
+            }
+            assert!(validate_manifest(&invalid).is_err());
+        }
+        assert!(manager.binding(&state, "system-unknown").is_err());
+        assert_eq!(std::fs::read_dir(&manager.inner.homes).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn existing_cli_profiles_pass_account_gates_without_starting_a_cli() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let adapters = AdapterManager::new();
+        for (id, agent) in [(SYSTEM_CODEX, "codex"), (SYSTEM_CLAUDE, "claude")] {
+            manager.select_profile(id).unwrap();
+            for profile_id in [None, Some(id)] {
+                let error = manager
+                    .start_run(
+                        &adapters,
+                        StartRequest {
+                            adapter_id: agent.into(),
+                            project_path: temp.path().to_owned(),
+                            prompt: "No CLI may be spawned.".into(),
+                            // Stops at adapter validation after the account gates.
+                            command_id: "invalid".into(),
+                            continue_run_id: None,
+                            profile: None,
+                        },
+                        profile_id,
+                    )
+                    .unwrap_err();
+                assert_eq!(error.message, "command_id must be a UUID.");
+            }
+        }
+        assert!(adapters.list_runs().is_empty());
+        manager.shutdown().await;
+        adapters.shutdown().await;
+    }
+
+    #[test]
     fn metadata_edits_never_overwrite_an_external_change() {
         let temp = tempfile::tempdir().unwrap();
         let manager = AccountManager::open(temp.path()).unwrap();
@@ -1235,7 +1333,7 @@ mod tests {
         };
         assert_eq!(error.code, "profile_metadata_changed");
         assert_eq!(std::fs::read(&path).unwrap(), externally_changed);
-        assert_eq!(manager.cached().0.len(), 1);
+        assert_eq!(manager.cached().0.len(), 2);
         assert!(AccountManager::open(temp.path()).is_err());
     }
 
@@ -1276,7 +1374,11 @@ mod tests {
         let manager = AccountManager::open(temp.path()).unwrap();
         let profile = manager.create_profile("codex", "Work").unwrap();
         let adapters = AdapterManager::new();
-        assert!(manager.begin_login(SYSTEM_CODEX, &adapters).await.is_err());
+        for id in [SYSTEM_CODEX, SYSTEM_CLAUDE] {
+            let error = manager.begin_login(id, &adapters).await.unwrap_err();
+            assert_eq!(error.code, "system_profile_read_only");
+            assert!(manager.cached_login(id).unwrap().is_none());
+        }
         assert!(manager.begin_login(&profile.id, &adapters).await.is_err());
         let request = || StartRequest {
             adapter_id: "codex".into(),

@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 fn main() {
     let scenario = std::env::args().nth(1).unwrap_or_default();
     if scenario == "claude_status" {
+        assert_eq!(std::env::args().skip(2).collect::<Vec<_>>(), ["auth", "status", "--json"]);
         println!(r#"{{"loggedIn":false,"secret":"fixture-do-not-forward"}}"#);
         return;
     }

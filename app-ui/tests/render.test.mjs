@@ -58,6 +58,12 @@ test('workspace, review and adapter render with the shipped HTM/Preact runtime',
   for(const expected of ['fixture.txt','<script>literal</script>','File created','Allow Claude Code to use Edit?','old text','new text','Exact tool input','ordinary chat'])assert.ok(claudeShown.includes(expected),expected);
   assert.ok(!flatten(root).some(node=>node.localName==='script'),'tool content must remain text');
   render(null,root);
+  // Claude Code runs shell work through PowerShell on this host: its command must be
+  // readable and copyable in the approval, exactly like Bash.
+  render(html`<div><${ApprovalSummary} approval=${{method:'claude/can_use_tool',can_allow_once:true,preview:{request:{tool_name:'PowerShell',description:'List the project',input:{command:'Get-ChildItem -Path E:\\projects'}}}}}/><${ClaudeItem} entry=${{item:{id:'ps',type:'claudeTool',name:'PowerShell',input:{command:'Get-ChildItem -Path E:\\projects'},status:'completed',output:'adapters.js'}}}/></div>`,root);
+  const shellShown=textOf();
+  for(const expected of ['Allow Claude Code to use PowerShell?','Get-ChildItem -Path E:\\projects','Copy command','Exact tool input','adapters.js'])assert.ok(shellShown.includes(expected),expected);
+  render(null,root);
   const { AccountsDialog }=await import('../accounts.js');
   render(html`<${AccountsDialog} api=${{}} open=${false} onRefresh=${()=>{}} profiles=${[
     {id:'c',name:'Codex profile',agent_id:'codex',managed:true,account:{auth_status:'signed_in',email:'fixture@example.test',plan:'Fixture',checked_at_ms:1234,usage:{status:'available',windows:[{id:'daily',name:'Daily',remaining_percent:0,used_percent:100,resets_at:2345}]}}},
@@ -65,6 +71,19 @@ test('workspace, review and adapter render with the shipped HTM/Preact runtime',
   ]}/>`,root);
   tags=flatten(root).map(node=>node.localName);assert.equal(tags.filter(tag=>tag==='meter').length,1);assert.ok(tags.includes('dialog'));assert.ok(tags.includes('input'));
   render(null,root);
+  for(const [agent,name,label] of [['codex','Existing Codex CLI','Codex'],['claude','Existing Claude CLI','Claude Code']]){
+    render(html`<${AccountsDialog} api=${{}} open=${false} onRefresh=${()=>{}} profiles=${[
+      {id:`system-${agent}`,name,agent_id:agent,managed:false,read_only:true,account:{auth_status:'signed_out',usage:{status:'unavailable'}}},
+    ]}/>`,root);
+    assert.ok(textOf().includes(name));
+    assert.ok(textOf().includes(`Uses the existing ${label} CLI sign-in and configuration.`));
+    const buttons=flatten(root).filter(node=>node.localName==='button').map(node=>flatten(node).filter(item=>item.nodeType===3).map(item=>item.data).join(''));
+    assert.ok(buttons.includes('Refresh account'));
+    assert.ok(buttons.includes('Use as default'));
+    assert.ok(!buttons.includes('Sign in'));
+    assert.ok(!buttons.includes('Open Claude Code'));
+    render(null,root);
+  }
   assert.throws(()=>render(html`<><span>Unsupported fragment</span></>`,root),{name:'InvalidCharacterError'});
   render(null,root);
 });

@@ -13,7 +13,12 @@ pub(crate) fn validate(profile: &ProfileBinding, agent: &str) -> Result<()> {
             "Managed account directory is unavailable.".into(),
         ));
     }
-    if !profile.managed && (profile.id != "system-codex" || agent != "codex") {
+    if !profile.managed
+        && !matches!(
+            (profile.id.as_str(), agent),
+            ("system-codex", "codex") | ("system-claude", "claude")
+        )
+    {
         return Err(AdapterError::Invalid(
             "Unknown existing CLI profile.".into(),
         ));
@@ -111,6 +116,68 @@ mod tests {
             &json!({"codexHome":"/wrong-profile"}),
             Some(&profile)
         ));
+    }
+
+    #[test]
+    fn existing_profiles_preserve_cli_configuration_and_reject_unknown_identities() {
+        for (id, agent) in [("system-codex", "codex"), ("system-claude", "claude")] {
+            let profile = ProfileBinding {
+                id: id.into(),
+                name: "Existing CLI".into(),
+                agent_id: agent.into(),
+                home: std::path::PathBuf::new(),
+                managed: false,
+            };
+            validate(&profile, agent).unwrap();
+            let mut command = Command::new("fixture");
+            configure(&mut command, Some(&profile));
+            assert_eq!(command.as_std().get_args().count(), 0);
+            assert!(command.as_std().get_current_dir().is_none());
+            // An existing profile inherits auth, endpoints, configuration and
+            // runtime options. Only parent Codex routing can be removed.
+            for (key, value) in command.as_std().get_envs() {
+                let key = key.to_string_lossy().to_ascii_uppercase();
+                assert!(key.starts_with("CODEX_INTERNAL_") || key.starts_with("CODEX_APP_SERVER_"));
+                assert!(value.is_none());
+            }
+            let mut invalid = profile.clone();
+            invalid.id = "unregistered".into();
+            assert!(validate(&invalid, agent).is_err());
+            invalid.id = if agent == "codex" {
+                "system-claude"
+            } else {
+                "system-codex"
+            }
+            .into();
+            assert!(validate(&invalid, agent).is_err());
+            assert!(validate(&profile, if agent == "codex" { "claude" } else { "codex" }).is_err());
+        }
+    }
+
+    #[test]
+    fn managed_claude_still_uses_its_private_config_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut profile = ProfileBinding {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            agent_id: "claude".into(),
+            home: dir.path().canonicalize().unwrap(),
+            managed: true,
+        };
+        validate(&profile, "claude").unwrap();
+        let mut command = Command::new("fixture");
+        configure(&mut command, Some(&profile));
+        assert_eq!(
+            command
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "CLAUDE_CONFIG_DIR")
+                .and_then(|(_, value)| value),
+            Some(profile.home.as_os_str())
+        );
+        assert_eq!(command.as_std().get_args().count(), 0);
+        profile.home = dir.path().join("missing");
+        assert!(validate(&profile, "claude").is_err());
     }
 
     #[test]

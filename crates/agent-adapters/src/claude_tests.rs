@@ -52,15 +52,42 @@ fn request(project: &Path, previous: Option<String>) -> StartRequest {
     }
 }
 
+fn existing_profile() -> ProfileBinding {
+    ProfileBinding {
+        id: "system-claude".into(),
+        name: "Existing Claude CLI".into(),
+        agent_id: "claude".into(),
+        home: PathBuf::new(),
+        managed: false,
+    }
+}
+
 fn start(manager: &AdapterManager, scenario: &str) -> (tempfile::TempDir, AdapterRun) {
+    start_profile(manager, scenario, true)
+}
+
+fn start_profile(
+    manager: &AdapterManager,
+    scenario: &str,
+    managed: bool,
+) -> (tempfile::TempDir, AdapterRun) {
     let directory = tempfile::tempdir().unwrap();
     let project = directory.path().canonicalize().unwrap();
+    let mut request = request(&project, None);
+    if !managed {
+        request.profile = Some(existing_profile());
+    }
+    profile::validate(request.profile.as_ref().unwrap(), "claude").unwrap();
     let run = manager
         .start_process(
-            request(&project, None),
+            request,
             project,
             fixture(),
-            vec![scenario.into()],
+            vec![if managed {
+                scenario.into()
+            } else {
+                format!("system:{scenario}")
+            }],
         )
         .unwrap();
     (directory, run)
@@ -91,9 +118,14 @@ async fn wait(
 
 #[tokio::test]
 async fn claude_permission_decisions_bind_exact_input_and_keep_diagnostics_private() {
-    for decision in [ApprovalDecision::AllowOnce, ApprovalDecision::Deny] {
+    for (managed, decision) in [
+        (true, ApprovalDecision::AllowOnce),
+        (true, ApprovalDecision::Deny),
+        (false, ApprovalDecision::AllowOnce),
+        (false, ApprovalDecision::Deny),
+    ] {
         let manager = AdapterManager::new();
-        let (directory, run) = start(&manager, "allow");
+        let (directory, run) = start_profile(&manager, "allow", managed);
         let pending = wait(&manager, &run.id, |run| {
             run.state == RunState::AwaitingApproval
         })
@@ -318,38 +350,69 @@ async fn claude_special_interactions_are_deny_only_and_unknown_controls_are_reje
 
 #[tokio::test]
 async fn claude_continuation_after_restart_resumes_only_the_new_message() {
-    let data = tempfile::tempdir().unwrap();
-    let manager = AdapterManager::open(data.path()).unwrap();
-    let (directory, first) = start(&manager, "durable");
-    let first = wait(&manager, &first.id, |run| !run.state.is_active()).await;
-    assert_eq!(first.state, RunState::Completed);
-    manager.shutdown().await;
-    drop(manager);
-    let manager = AdapterManager::open(data.path()).unwrap();
-    let project = directory.path().canonicalize().unwrap();
-    let request = request(&project, Some(first.id.clone()));
-    let next = manager
-        .start_process(
-            request.clone(),
-            project.clone(),
-            fixture(),
-            vec!["resume".into()],
-        )
-        .unwrap();
-    let repeated = manager.start(request).unwrap();
-    assert_eq!(repeated.id, next.id);
-    let next = wait(&manager, &next.id, |run| !run.state.is_active()).await;
-    assert_eq!(next.state, RunState::Completed);
-    assert_eq!(next.thread_id, first.thread_id);
-    assert_eq!(next.conversation_id, first.conversation_id);
-    let sent = std::fs::read_to_string(project.join("received-input.json")).unwrap();
-    assert!(sent.contains("New followup literal"));
-    assert!(!sent.contains("First message literal"));
-    manager.shutdown().await;
+    for managed in [true, false] {
+        let data = tempfile::tempdir().unwrap();
+        let manager = AdapterManager::open(data.path()).unwrap();
+        let (directory, first) = start_profile(&manager, "durable", managed);
+        let first = wait(&manager, &first.id, |run| !run.state.is_active()).await;
+        assert_eq!(first.state, RunState::Completed);
+        manager.shutdown().await;
+        drop(manager);
+        let manager = AdapterManager::open(data.path()).unwrap();
+        let project = directory.path().canonicalize().unwrap();
+        let mut request = request(&project, Some(first.id.clone()));
+        let original = manager.run_profile(&first.id).unwrap().unwrap();
+        assert_eq!(original.managed, managed);
+        if !managed {
+            assert_eq!(original, existing_profile());
+        }
+        request.profile = Some(original);
+        let mut changed = request.clone();
+        changed.profile = if managed {
+            Some(existing_profile())
+        } else {
+            self::request(&project, Some(first.id.clone())).profile
+        };
+        assert!(matches!(
+            manager.start_process(
+                changed.clone(),
+                project.clone(),
+                fixture(),
+                vec!["resume".into()]
+            ),
+            Err(AdapterError::Conflict(_))
+        ));
+        let next = manager
+            .start_process(
+                request.clone(),
+                project.clone(),
+                fixture(),
+                vec![if managed {
+                    "resume".into()
+                } else {
+                    "system:resume".into()
+                }],
+            )
+            .unwrap();
+        assert!(matches!(
+            manager.start(changed),
+            Err(AdapterError::Conflict(_))
+        ));
+        let repeated = manager.start(request).unwrap();
+        assert_eq!(repeated.id, next.id);
+        let next = wait(&manager, &next.id, |run| !run.state.is_active()).await;
+        assert_eq!(next.state, RunState::Completed);
+        assert_eq!(next.thread_id, first.thread_id);
+        assert_eq!(next.conversation_id, first.conversation_id);
+        let sent = std::fs::read_to_string(project.join("received-input.json")).unwrap();
+        assert!(sent.contains("New followup literal"));
+        assert!(!sent.contains("First message literal"));
+        manager.shutdown().await;
+    }
 }
 
 #[tokio::test]
-async fn claude_requires_an_explicit_managed_account() {
+async fn claude_requires_an_explicit_valid_account() {
     let directory = tempfile::tempdir().unwrap();
     let mut request = request(&directory.path().canonicalize().unwrap(), None);
     request.profile = None;

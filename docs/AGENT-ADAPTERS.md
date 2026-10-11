@@ -2,7 +2,7 @@
 
 Switchya's own durable engine and existing agent CLIs are separate execution backends. `switchyard-agent-adapters` implements a real Codex app-server integration over newline-delimited structured JSON on stdio. It creates a Codex thread, or resumes a saved one when the user explicitly continues a conversation, starts one user turn, streams its structured progress, hands supported approval requests to the human, and interrupts or stops its owned process tree. The caller must explicitly start a run. Discovery, reading a run, event polling and reconnecting never start or replay work.
 
-Claude Code is also a structured adapter, using its bidirectional `stream-json` CLI. It streams replies and tool activity, forwards permission requests, and resumes saved sessions in a managed Claude account. The optional **Open Claude Code** action still launches an independent terminal. Oh My Pi is discovery-only. The Claude workspace integration is newer than the published `preview.2` archive.
+Claude Code is also a structured adapter, using its bidirectional `stream-json` CLI. It streams replies and tool activity, forwards permission requests, and resumes saved sessions in the selected existing CLI or managed Claude account. The optional **Open Claude Code** action still launches an independent terminal. Oh My Pi is discovery-only. The Claude workspace integration is newer than the published `preview.2` archive.
 
 ## Protocol evidence
 
@@ -16,7 +16,9 @@ The local CLI labels app-server experimental. Other releases may be compatible b
 
 A fresh, empty managed Codex home was used for a real initialize/thread-start check without a model turn, login or account read. Version 0.159.3 rejected `approval_policy="untrusted"` at startup despite retaining that schema variant. The supported `on-request` policy passed initialize and thread-start, returning `readOnly`, disabled shell network, and `user` approval review. No global configuration was changed.
 
-Claude protocol behavior was checked against the installed **Claude Code 2.1.286** on 11 October 2026 and the official [Agent SDK Python transport](https://github.com/anthropics/claude-agent-sdk-python/tree/b6e9d12fe1cc98dde988ab7b7713c1feeee50c6c). An isolated loopback mock API and a dummy key exercised the real CLI through Switchya's HTTP routes: exact approval, denial, interruption, host restart and resumption of the same CLI session. Browser checks approved one fixture write and continued the conversation. These checks used a test-supplied account-status snapshot; they did not inspect or verify a live sign-in, contact a remote model, or establish model quality.
+Claude protocol behavior was checked against the installed **Claude Code 2.1.286** on 11 October 2026 and the official [Agent SDK Python transport](https://github.com/anthropics/claude-agent-sdk-python/tree/b6e9d12fe1cc98dde988ab7b7713c1feeee50c6c). An isolated loopback mock API and a dummy key exercised the real CLI through Switchya's HTTP routes: exact approval, denial, interruption, host restart and resumption of the same CLI session. Browser checks approved one fixture write and continued the conversation. Those protocol checks used a test-supplied account-status snapshot.
+
+Later that day, live Windows runs used an existing Codex CLI account and a managed Claude profile whose official sign-in was completed by the user inside the Switchya workflow. The CLIs reported `gpt-6-astra` and `claude-opus-5`, respectively. Both agents read this repository, made reviewed source edits and ran checks through Switchya. This establishes those observed account/model workflows; it does not establish other accounts, every model, cross-platform authentication or comparative model quality.
 
 ## Host API
 
@@ -68,8 +70,11 @@ Codex performs its own patch validation and execution. Switchya does not claim i
 
 ### Claude Code
 
-The child uses the selected managed `CLAUDE_CONFIG_DIR`, `--permission-mode default`,
-`--permission-prompt-tool stdio`, and partial structured messages. Switchya checks
+The child uses the selected account: `system-claude` inherits the installed CLI's
+environment and configuration, while a managed profile sets its private
+`CLAUDE_CONFIG_DIR` and clears inherited credential/provider overrides. Both use
+`--permission-mode default`, `--permission-prompt-tool stdio`, and partial
+structured messages. Switchya checks
 the initialization response's `current_permission_mode` before sending input,
 then checks the CLI's session ID, canonical working directory and permission mode.
 It does not request bypass, auto, or accept-edits mode. Existing CLI allow/deny
@@ -139,11 +144,11 @@ CI and has no production authentication bypass.
 
 ### Account profiles
 
-`AccountRuntime` provides explicit `inspect`, `start_login`, `login`, `cancel_login`, and `shutdown` operations. Status snapshots expose only typed sign-in, email, plan and usage fields, plus observation time. Raw protocol objects, tokens and stderr never reach the API. A managed Codex child gets its own `CODEX_HOME` and `cli_auth_credentials_store="file"`; a managed Claude child gets its own `CLAUDE_CONFIG_DIR`. Credential/provider/internal routing environment overrides are cleared only in that child. The existing system Codex profile preserves its existing auth/configuration and cannot log in through this runtime. No credential copying, global environment mutation, logout or removal is implemented.
+`AccountRuntime` provides explicit `inspect`, `start_login`, `login`, `cancel_login`, and `shutdown` operations. Status snapshots expose only typed sign-in, email, plan and usage fields, plus observation time. Raw protocol objects, tokens and stderr never reach the API. A managed Codex child gets its own `CODEX_HOME` and `cli_auth_credentials_store="file"`; a managed Claude child gets its own `CLAUDE_CONFIG_DIR`. Credential/provider/internal routing environment overrides are cleared only in that child. The built-in `system-codex` and `system-claude` profiles preserve their existing environment/auth/configuration and cannot log in through this runtime. Only these exact unmanaged ID/agent pairs are accepted. Parent Codex internal routing variables are still removed from every child. Both built-ins remain pinned through saved conversation continuation; changing the default cannot move a conversation to another profile. No credential copying, global environment mutation, logout or removal is implemented.
 
 Codex initialize must confirm the canonical selected `codexHome` before account methods or model runs. Inspection uses `account/read` with `refreshToken=false`, then `account/rateLimits/read` with reset-credit details excluded. Named limit snapshots take precedence over the legacy snapshot. Missing limits and `ordinaryUsageAllowed=null` remain unavailable; usage percentages are used percentages, and remaining percentage is clamped `100 - used`. Account metadata is not proof that a token remains valid.
 
-Claude inspection uses the official `auth status --json` command. Recognized `loggedIn`, `email`, and `subscriptionType` fields are filtered; unknown status shapes remain unknown. Claude's documented status-line quota fields do not establish an independent quota-query command, so this adapter reports subscription usage as unavailable. A proposed fresh-empty-home live Claude status probe was blocked by automatic approval review; no retry was made. Claude parsing and lifecycle checks use fixtures and are not a claim of verified live sign-in.
+Claude inspection uses the official `auth status --json` command. Recognized `loggedIn`, `email`, and `subscriptionType` fields are filtered; unknown status shapes remain unknown. Claude's documented status-line quota fields do not establish an independent quota-query command, so this adapter reports subscription usage as unavailable. Managed-profile sign-in and real Claude model/tool use were verified on Windows on 11 October 2026; automated parsing and lifecycle checks still use isolated fixtures.
 
 Claude's current official [credential-management documentation](https://code.claude.com/docs/en/authentication#credential-management) explicitly states that `CLAUDE_CONFIG_DIR` also scopes the macOS Keychain entry, in addition to relocating credential files and the macOS file fallback. This supports the profile design on macOS; actual macOS sign-in and simultaneous account operation have not been tested here.
 

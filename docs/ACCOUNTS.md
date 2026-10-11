@@ -1,10 +1,19 @@
 # CLI account profiles
 
-Switchya can keep multiple Codex and Claude Code sign-ins in separate managed
-profiles. Profiles belong to the official CLIs; they do not turn subscription
+Switchya can use an existing Codex or Claude Code CLI sign-in, or keep multiple
+sign-ins in separate managed profiles. Profiles belong to the official CLIs;
+they do not turn subscription
 credentials into gateway API keys. Install the relevant CLI separately.
 
 ## Use accounts
+
+Already signed in through the installed CLI? Select **Existing Codex CLI** or
+**Existing Claude CLI** in **Accounts** or the existing-agent account selector.
+No new profile or sign-in is needed. **Refresh account** explicitly checks the
+selected CLI's status. New installations default to these entries; existing
+saved defaults, including an unset Claude default, are preserved.
+
+To keep another sign-in in an isolated managed profile:
 
 1. Open **Accounts**, choose Codex or Claude Code, and create a named profile.
 2. Choose **Refresh account**. New profiles show unknown status until this
@@ -20,10 +29,13 @@ credentials into gateway API keys. Install the relevant CLI separately.
 erase credentials. To add another identity, create another profile. This
 version has no logout, profile removal or credential replacement controls.
 
-The **Existing Codex CLI** entry uses the current CLI configuration. Account
-management treats it as read-only: it can be selected and explicitly inspected,
-but Switchya cannot start a replacement login for it. It may be used for a
-Codex run without first requesting account inspection.
+The **Existing Codex CLI** (`system-codex`) and **Existing Claude CLI**
+(`system-claude`) entries use the installed CLIs' environment and configuration
+as inherited by the Switchya host, including an existing `CLAUDE_CONFIG_DIR`.
+Account management treats both as read-only for sign-in: they can be selected
+and explicitly inspected, but Switchya cannot start a replacement login for
+them. They may be used without first requesting account inspection. Manage
+their sign-ins through the official CLIs.
 
 Managed profiles require a successful signed-in status check before starting
 work. A status check is a snapshot, not a guarantee that the next request will
@@ -36,6 +48,10 @@ profiles. Each accepted run pins its account identity and private CLI home.
 Changing the selected default affects later runs only. Retrying the same
 command keeps the original binding, including after a default change; changing
 that command's profile, agent or request content returns a conflict.
+Continuation after a restart keeps the original profile, including either
+built-in CLI profile. For an existing CLI profile, keep that CLI's account and
+configuration consistent when continuing: Switchya saves the profile binding,
+not a snapshot of credentials or global settings.
 
 Sign-in is rejected while the profile has an active tracked run, refresh or
 login. It also requires a confirmed signed-out snapshot and an additional
@@ -43,8 +59,9 @@ official CLI status check before login starts. Already signed-in credentials
 are not replaced by the sign-in action.
 
 Choose **Claude Code** in **Existing agents** to keep its conversation, tool
-activity and approval requests inside Switchya. A signed-in managed Claude
-profile is required. Its default permission mode retains existing CLI allow
+activity and approval requests inside Switchya. Choose **Existing Claude CLI**
+or a managed Claude profile with a confirmed sign-in. Its default permission
+mode retains existing CLI allow
 and deny rules; Switchya forwards requests that require a decision.
 
 The optional **Open Claude Code** account action starts the official CLI in a separate native

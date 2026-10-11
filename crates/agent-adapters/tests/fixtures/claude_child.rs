@@ -18,10 +18,14 @@ fn idle(session: &str) {
 fn main() {
     let args: Vec<_> = std::env::args().collect();
     let scenario = args.get(1).map(String::as_str).unwrap_or("allow");
+    let (existing, scenario) = scenario.strip_prefix("system:")
+        .map_or((false, scenario), |scenario| (true, scenario));
     assert!(args.windows(2).any(|pair| pair == ["--permission-mode", "default"]));
     assert!(args.windows(2).any(|pair| pair == ["--permission-prompt-tool", "stdio"]));
     assert_eq!(std::env::var("CLAUDE_CODE_SDK_READS_SESSION_STATE").as_deref(), Ok("1"));
-    assert!(std::env::var_os("CLAUDE_CONFIG_DIR").is_some());
+    if !existing {
+        assert!(std::env::var_os("CLAUDE_CONFIG_DIR").is_some());
+    }
     assert!(!args.iter().any(|arg| arg.contains("literal")), "prompts must travel over stdin");
     let resuming = args.iter().any(|arg| arg.starts_with("--resume="));
     assert_eq!(resuming, scenario == "resume");

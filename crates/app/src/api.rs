@@ -782,10 +782,37 @@ mod tests {
         let harness = Harness::new().await;
         let (status, initial) = harness.request("GET", "/api/account-profiles", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(initial["profiles"].as_array().unwrap().len(), 1);
+        assert_eq!(initial["profiles"].as_array().unwrap().len(), 2);
         assert_eq!(initial["profiles"][0]["id"], "system-codex");
         assert_eq!(initial["profiles"][0]["read_only"], true);
         assert_eq!(initial["profiles"][0]["refreshing"], false);
+        assert_eq!(initial["profiles"][1]["id"], "system-claude");
+        assert_eq!(initial["profiles"][1]["name"], "Existing Claude CLI");
+        assert_eq!(initial["profiles"][1]["agent_id"], "claude");
+        assert_eq!(initial["profiles"][1]["managed"], false);
+        assert_eq!(initial["profiles"][1]["read_only"], true);
+        assert_eq!(initial["profiles"][1]["account"]["auth_status"], "unknown");
+        for (id, agent) in [("system-codex", "codex"), ("system-claude", "claude")] {
+            let (status, selected) = harness
+                .request(
+                    "POST",
+                    &format!("/api/account-profiles/{id}/select"),
+                    Some(json!({})),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(selected["defaults"][agent], id);
+            assert_eq!(selected["profile"]["selected"], true);
+            let (status, rejected) = harness
+                .request(
+                    "POST",
+                    &format!("/api/account-profiles/{id}/login"),
+                    Some(json!({})),
+                )
+                .await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(rejected["error"]["code"], "system_profile_read_only");
+        }
         let (status, created) = harness
             .request(
                 "POST",

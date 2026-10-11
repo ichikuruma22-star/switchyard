@@ -192,10 +192,9 @@ impl AdapterManager {
         if let Some(profile) = &request.profile {
             profile::validate(profile, &request.adapter_id)?;
         }
-        if request.adapter_id == "claude" && !request.profile.as_ref().is_some_and(|p| p.managed) {
+        if request.adapter_id == "claude" && request.profile.is_none() {
             return Err(AdapterError::Invalid(
-                "Select a managed Claude Code account in Switchya before starting a conversation."
-                    .into(),
+                "Select a Claude Code account in Switchya before starting a conversation.".into(),
             ));
         }
         if uuid::Uuid::parse_str(&request.command_id).is_err() {

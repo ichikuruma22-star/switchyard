@@ -1,11 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adapterTranscript, mergeAdapterEvents, groupConversations, continuationTarget, continuationBlocker, codexItemSummary, approvalSummary } from '../adapters.js';
+import { adapterTranscript, mergeAdapterEvents, groupConversations, continuationTarget, continuationBlocker, codexItemSummary, approvalSummary, lifecycleOnlyItem } from '../adapters.js';
 import { readAdapterJournal, writeAdapterJournal } from '../adapter-journal.js';
 const event=(seq,kind,payload={},run_id='r')=>({seq,kind,payload,run_id,at_ms:seq});
 test('external run keeps the actual human task and final assistant text once',()=>{
   const items=adapterTranscript([event(1,'user_task',{text:'Inspect the project'}),event(2,'assistant_delta',{item_id:'i',text:'Hel'}),event(3,'assistant_delta',{item_id:'i',text:'lo'}),event(4,'item_completed',{item:{id:'i',type:'agentMessage',text:'Hello'}})]);
   assert.equal(items.length,2);assert.equal(items[0].type,'user');assert.equal(items[0].text,'Inspect the project');assert.equal(items[1].text,'Hello');
+});
+test('empty lifecycle items do not surround the actual bubbles of a turn',()=>{
+  const items=adapterTranscript([
+    event(1,'user_task',{text:'Inspect the project'}),
+    event(2,'item_started',{item:{id:'u1',type:'userMessage',status:'completed'}}),
+    event(3,'item_completed',{item:{id:'u1',type:'userMessage',status:'completed'}}),
+    event(4,'item_started',{item:{id:'r1',type:'reasoning'}}),
+    event(5,'item_completed',{item:{id:'r1',type:'reasoning'}}),
+    event(6,'item_started',{item:{id:'a1',type:'agentMessage'}}),
+    event(7,'assistant_delta',{item_id:'a1',text:'Hel'}),
+    event(8,'item_completed',{item:{id:'a1',type:'agentMessage',text:'Hello'}}),
+    event(9,'item_started',{item:{id:'r2',type:'reasoning'}}),
+    event(10,'item_completed',{item:{id:'r2',type:'reasoning'}}),
+  ]);
+  assert.deepEqual(items.map(item=>item.type),['user','assistant']);
+  assert.equal(items[1].text,'Hello');
+});
+test('a completed message without text keeps the text already streamed',()=>{
+  const items=adapterTranscript([event(1,'assistant_delta',{item_id:'a',text:'Partial answer'}),event(2,'item_completed',{item:{id:'a',type:'agentMessage',text:''}})]);
+  assert.deepEqual(items.map(item=>item.text),['Partial answer']);
+  const once=adapterTranscript([event(1,'item_started',{item:{id:'a',type:'agentMessage',text:'Partial'}}),event(2,'item_completed',{item:{id:'a',type:'agentMessage',text:'Partial answer'}})]);
+  assert.deepEqual(once.map(item=>item.text),['Partial answer']);
+  // A corrected final message replaces streamed text, even when it is shorter.
+  const corrected=adapterTranscript([event(1,'assistant_delta',{item_id:'a',text:'Draft that was revised'}),event(2,'item_completed',{item:{id:'a',type:'agentMessage',text:'Final answer'}})]);
+  assert.deepEqual(corrected.map(item=>item.text),['Final answer']);
+  const shorter=adapterTranscript([event(1,'assistant_delta',{item_id:'a',text:'Hello obsolete suffix'}),event(2,'item_completed',{item:{id:'a',type:'agentMessage',text:'Hello'}})]);
+  assert.deepEqual(shorter.map(item=>item.text),['Hello']);
+  // A started announcement must not shorten text the deltas already delivered.
+  const announced=adapterTranscript([event(1,'assistant_delta',{item_id:'a',text:'Hello there'}),event(2,'item_started',{item:{id:'a',type:'agentMessage',text:'Hello'}}),event(3,'item_completed',{item:{id:'a',type:'agentMessage',text:'Hello there'}})]);
+  assert.deepEqual(announced.map(item=>item.text),['Hello there']);
+  // Re-reading the same page of saved history must not add a second bubble.
+  const repeated=adapterTranscript([event(1,'assistant_delta',{item_id:'a',text:'Hel'}),event(2,'item_completed',{item:{id:'a',type:'agentMessage',text:'Hello'}}),event(3,'item_completed',{item:{id:'a',type:'agentMessage',text:'Hello'}}),event(4,'item_completed',{item:{id:'b',type:'agentMessage',text:'Second message'}})]);
+  assert.deepEqual(repeated.map(item=>item.text),['Hello','Second message']);
+});
+test('reported failures and readable reasoning are never treated as empty noise',()=>{
+  assert.equal(lifecycleOnlyItem({id:'i',type:'fileChange',status:'failed',changes:[]}),false);
+  assert.equal(lifecycleOnlyItem({id:'i',type:'reasoning',text:'Planning the fix'}),false);
+  assert.equal(lifecycleOnlyItem({id:'i',type:'reasoning',status:'completed'}),true);
+  const items=adapterTranscript([event(1,'item_completed',{item:{id:'i',type:'reasoning',text:'Planning the fix'}}),event(2,'item_completed',{item:{id:'d',type:'claudeTool',name:'Bash',status:'declined',input:{command:'rm -rf .'}}})]);
+  assert.deepEqual(items.map(item=>item.type),['activity','claude_item']);
+  assert.equal(items[0].payload.item.text,'Planning the fix');
 });
 test('external tool and unfamiliar events retain exact untrusted payloads',()=>{
   const payload={item:{type:'future',output:'<img onerror="bad">'}};
@@ -106,8 +147,10 @@ test('file changes keep exact paths, kinds and change text',()=>{
   assert.equal(codexItemSummary({type:'fileChange',changes:[{path:'one'}]}).title,'Edit 1 file');
 });
 test('unfamiliar Codex items stay raw activity with a readable label',()=>{
-  const items=adapterTranscript([event(1,'item_completed',{item:{id:'r',type:'reasoning',status:'completed'}})]);
-  assert.equal(items[0].type,'activity');assert.equal(codexItemSummary({type:'webSearch'}).title,'Web search');
+  // An item reporting only its ID and type is lifecycle noise; one with content stays.
+  const items=adapterTranscript([event(1,'item_completed',{item:{id:'r',type:'reasoning',status:'completed'}}),event(2,'item_completed',{item:{id:'w',type:'webSearch',status:'completed',query:'switchya'}})]);
+  assert.equal(items.length,1);
+  assert.equal(items[0].type,'activity');assert.equal(items[0].payload.item.query,'switchya');assert.equal(codexItemSummary({type:'webSearch'}).title,'Web search');
 });
 test('approval summaries show the exact proposed command, network host and stdin kind',()=>{
   const approval=(params,method='item/commandExecution/requestApproval',item=null)=>({method,preview:{params:{threadId:'t',turnId:'u',itemId:'i',startedAtMs:1,...params},item}});
