@@ -23,6 +23,8 @@ pub(crate) struct AppState {
     pub(crate) config_path: PathBuf,
     pub(crate) adapters: AdapterManager,
     pub(crate) accounts: crate::accounts::AccountManager,
+    pub(crate) workspace_reads: Arc<tokio::sync::Semaphore>,
+    pub(crate) terminals: crate::terminals::TerminalManager,
 }
 
 pub(crate) fn router(
@@ -43,6 +45,25 @@ pub(crate) fn router(
             post(crate::providers::refresh),
         )
         .route("/api/projects", get(projects).post(open_project))
+        .route(
+            "/api/workspace",
+            get(crate::workspace::selection).post(crate::workspace::save_selection),
+        )
+        .route("/api/projects/{id}/files", get(crate::workspace::directory))
+        .route("/api/projects/{id}/file", get(crate::workspace::file))
+        .route(
+            "/api/projects/{id}/changes",
+            get(crate::git_review::changes),
+        )
+        .route("/api/projects/{id}/diff", get(crate::git_review::diff))
+        .route(
+            "/api/terminals",
+            get(crate::terminals::list).post(crate::terminals::start),
+        )
+        .route("/api/terminals/{id}", get(crate::terminals::output))
+        .route("/api/terminals/{id}/input", post(crate::terminals::input))
+        .route("/api/terminals/{id}/resize", post(crate::terminals::resize))
+        .route("/api/terminals/{id}/close", post(crate::terminals::close))
         .route("/api/sessions", get(sessions).post(create_session))
         .route("/api/sessions/{id}", get(session))
         .route("/api/sessions/{id}/turns", post(submit_turn))
@@ -186,7 +207,7 @@ fn decode_query_part(value: &str) -> Result<String> {
     Ok(decoded)
 }
 
-fn query(uri: &Uri, allowed: &[&str]) -> Result<BTreeMap<String, String>> {
+pub(crate) fn query(uri: &Uri, allowed: &[&str]) -> Result<BTreeMap<String, String>> {
     let mut output = BTreeMap::new();
     if let Some(raw) = uri.query() {
         if raw.is_empty() || raw.len() > 2048 {
@@ -585,6 +606,8 @@ mod tests {
                 config_path: runtime.config_path.clone(),
                 adapters: AdapterManager::new(),
                 accounts: crate::accounts::AccountManager::open(&options.data_dir).unwrap(),
+                workspace_reads: Arc::new(tokio::sync::Semaphore::new(4)),
+                terminals: crate::terminals::TerminalManager::default(),
             });
             Self {
                 router: router(

@@ -93,6 +93,9 @@ impl Store {
              );
              CREATE INDEX IF NOT EXISTS sessions_project ON sessions(project_id);
              CREATE INDEX IF NOT EXISTS operations_session ON operations(session_id, state);
+             CREATE TABLE IF NOT EXISTS workspace_state (
+                id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL
+             );
              PRAGMA user_version=1;",
         )?;
         let store = Self {
@@ -118,6 +121,28 @@ impl Store {
         let mut query = connection.prepare("SELECT value FROM projects ORDER BY rowid DESC")?;
         let rows = query.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|row| decode(row?)).collect()
+    }
+
+    pub(crate) fn workspace_state(&self) -> Result<Option<Value>> {
+        let text = self
+            .connection
+            .lock()
+            .query_row("SELECT value FROM workspace_state WHERE id=1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        text.map(decode).transpose()
+    }
+
+    pub(crate) fn save_workspace_state(&self, value: &Value) -> Result<()> {
+        let text = serde_json::to_string(value)?;
+        if text.len() > 16 * 1024 {
+            return Err(AgentError::Invalid(
+                "workspace preferences exceed their size limit".into(),
+            ));
+        }
+        self.connection.lock().execute("INSERT INTO workspace_state(id,value) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value", [text])?;
+        Ok(())
     }
 
     pub(crate) fn sessions(&self, project: Option<&str>) -> Result<Vec<Session>> {

@@ -6,6 +6,7 @@ mod api;
 mod assets;
 pub mod cli;
 mod error;
+mod git_review;
 mod guard;
 mod launch;
 #[cfg(windows)]
@@ -13,6 +14,12 @@ mod launch;
 mod launch_acl;
 mod providers;
 mod startup;
+#[allow(unsafe_code)]
+mod terminal_platform;
+mod terminals;
+mod workspace;
+#[cfg(test)]
+mod workspace_tests;
 
 pub use error::{AppError, Result};
 pub use launch::LaunchInfo;
@@ -96,12 +103,15 @@ pub async fn start_host(options: AppOptions) -> Result<RunningHost> {
         }
     };
     let cancel = CancellationToken::new();
+    let terminals = terminals::TerminalManager::default();
     let state = Arc::new(api::AppState {
         engine: runtime.engine.clone(),
         gateway: runtime.gateway.clone(),
         config_path: runtime.config_path.clone(),
         adapters: adapters.clone(),
         accounts: accounts.clone(),
+        workspace_reads: Arc::new(tokio::sync::Semaphore::new(4)),
+        terminals: terminals.clone(),
     });
     let router = api::router(state, port, launch.token.clone(), cancel.clone());
     let stopped = cancel.clone();
@@ -135,13 +145,15 @@ pub async fn start_host(options: AppOptions) -> Result<RunningHost> {
                 },
             }
         };
-        let (_, _, engine, served) = tokio::join!(
+        let (_, _, terminal_result, engine, served) = tokio::join!(
             accounts.shutdown(),
             adapters.shutdown(),
+            terminals.shutdown(),
             runtime.shutdown(),
             drain
         );
         engine?;
+        terminal_result?;
         served
     });
     Ok(RunningHost {

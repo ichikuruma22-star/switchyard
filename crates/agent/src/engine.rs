@@ -117,6 +117,20 @@ impl AppEngine {
         self.inner.store.projects()
     }
 
+    pub fn project(&self, id: &str) -> Result<Project> {
+        self.inner.store.project(id)
+    }
+
+    /// Local workspace navigation belongs to the data directory, not a browser
+    /// origin whose randomly allocated loopback port changes on every launch.
+    pub fn workspace_state(&self) -> Result<Option<Value>> {
+        self.inner.store.workspace_state()
+    }
+
+    pub fn save_workspace_state(&self, value: &Value) -> Result<()> {
+        self.inner.store.save_workspace_state(value)
+    }
+
     pub fn open_project(&self, path: impl AsRef<Path>) -> Result<Project> {
         let root = std::fs::canonicalize(path.as_ref()).map_err(|_| {
             AgentError::Invalid("project path does not name an accessible directory".into())

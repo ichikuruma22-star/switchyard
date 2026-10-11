@@ -9,6 +9,42 @@
 mod command;
 mod files;
 
+/// Read-only workspace views share the agent tools' anchored filesystem policy.
+/// These entry points never execute commands or apply edits.
+pub fn project_directory(root: &Path, path: &str) -> Result<Value, ToolError> {
+    files::directory(root, path)
+}
+
+pub fn project_file(root: &Path, path: &str) -> ToolResult {
+    files::read(
+        root,
+        &ReadArgs {
+            path: path.into(),
+            max_bytes: MAX_FILE_BYTES,
+        },
+        &CancellationToken::new(),
+    )
+}
+
+/// Validate a repository-relative name, including deleted Git paths.
+pub fn check_project_path(path: &str) -> Result<(), ToolError> {
+    files::check_relative(path)
+}
+
+/// Check existing path components before letting Git inspect a tracked file.
+/// Missing files are valid here because a deleted file still has a Git diff.
+pub fn check_project_file_path(root: &Path, path: &str) -> Result<(), ToolError> {
+    match files::resolve(root, path, false, false) {
+        Ok(_) => Ok(()),
+        Err(ToolError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn project_root(root: &Path) -> Result<PathBuf, ToolError> {
+    files::resolve(root, ".", true, false)
+}
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
