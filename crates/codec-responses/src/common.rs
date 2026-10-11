@@ -614,7 +614,8 @@ pub(crate) fn decode_content_part(part: &Value) -> Option<Part> {
                 .or_else(|| str_field(part, "url"));
             let mut media = if let Some(url) = url.filter(|u| !u.is_empty()) {
                 MediaPart::from_url(url)
-            } else if let Some(id) = non_empty(part, "file_id") {
+            } else {
+                let id = non_empty(part, "file_id")?;
                 MediaPart {
                     source: MediaSource::FileRef { id: id.to_string() },
                     media_type: None,
@@ -622,8 +623,6 @@ pub(crate) fn decode_content_part(part: &Value) -> Option<Part> {
                     detail: None,
                     cache_control: None,
                 }
-            } else {
-                return None;
             };
             media.detail = non_empty(part, "detail")
                 .or_else(|| part.get("image_url").and_then(|v| non_empty(v, "detail")))
@@ -653,7 +652,8 @@ pub(crate) fn decode_content_part(part: &Value) -> Option<Part> {
                     .and_then(media_type_for_filename)
                     .map(str::to_string);
                 media
-            } else if let Some(id) = non_empty(inner, "file_id") {
+            } else {
+                let id = non_empty(inner, "file_id")?;
                 MediaPart {
                     source: MediaSource::FileRef { id: id.to_string() },
                     media_type: None,
@@ -661,8 +661,6 @@ pub(crate) fn decode_content_part(part: &Value) -> Option<Part> {
                     detail: None,
                     cache_control: None,
                 }
-            } else {
-                return None;
             };
             media.filename = filename;
             with_cache_control(part, &mut media);

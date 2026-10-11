@@ -49,17 +49,23 @@ fn access_control_entries(path: &Path) -> Option<Vec<String>> {
     Some(entries)
 }
 
-/// Removes inherited entries and grants the current user full control: the
-/// file is now private to that user.
+/// Installs a fresh, protected ACL granting only the current user full control.
+/// CI temporary files can have explicit SYSTEM/Administrators entries, which
+/// `icacls /inheritance:r /grant:r` would leave in place.
 fn restrict_to_current_user(path: &Path) -> bool {
-    let Ok(user) = std::env::var("USERNAME") else {
-        return false;
-    };
-    Command::new("icacls")
-        .arg(path)
-        .arg("/inheritance:r")
-        .arg("/grant:r")
-        .arg(format!("{user}:(F)"))
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $env:SWITCHYARD_TEST_ACL_PATH -AclObject $acl
+"#;
+    Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("SWITCHYARD_TEST_ACL_PATH", path)
         .output()
         .is_ok_and(|output| output.status.success())
 }

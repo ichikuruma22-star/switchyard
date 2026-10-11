@@ -249,12 +249,15 @@ pub(crate) async fn run(
         }
     }
     drop(stdin);
-    let terminated = tree.terminate().is_ok();
+    let termination = tree.terminate();
     let _ = child.start_kill();
-    let reaped = matches!(
-        tokio::time::timeout(Duration::from_secs(5), child.wait()).await,
-        Ok(Ok(_))
-    );
+    let wait_result = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    #[cfg(test)]
+    if termination.is_err() || !matches!(&wait_result, Ok(Ok(_))) {
+        eprintln!("Fixture process cleanup: termination={termination:?}, wait={wait_result:?}");
+    }
+    let terminated = termination.is_ok();
+    let reaped = matches!(wait_result, Ok(Ok(_)));
     stdout_task.abort();
     stderr_task.abort();
     let _ = stdout_task.await;

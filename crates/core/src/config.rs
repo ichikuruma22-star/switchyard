@@ -1015,10 +1015,8 @@ impl Config {
                     "must be a single path segment without `/`",
                 );
             }
-            for (label, proxy) in [(format!("{path}.proxy"), p.proxy.as_str())] {
-                if let Err(msg) = validate_proxy(proxy) {
-                    issue(label, msg);
-                }
+            if let Err(msg) = validate_proxy(&p.proxy) {
+                issue(format!("{path}.proxy"), msg);
             }
             for (name, value) in &p.headers {
                 if !is_valid_header_name(name.trim()) {
