@@ -353,11 +353,23 @@ printf 'first change\n' > nested/hello.txt
         .unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         while !project.join("command-ready").exists() {
+            let events = h.engine.events(&h.session.id, 0, 500).unwrap();
+            if let Some(completed) = events.iter().find(|event| event.kind == "tool.completed") {
+                panic!(
+                    "approved command ended before reaching its barrier: {}",
+                    completed.payload
+                );
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .expect("approved command must reach its barrier");
+    .unwrap_or_else(|error| {
+        panic!(
+            "approved command must reach its barrier: {error}; session: {}",
+            serde_json::to_string(&h.engine.session(&h.session.id).unwrap()).unwrap()
+        )
+    });
 
     h.engine
         .submit_turn(&patch_session.id, "queued-patch", "Make the second change")
