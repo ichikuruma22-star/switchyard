@@ -260,10 +260,12 @@ Use the current `revision` from `sessions`; recovery never reruns an action.
 
 ## Existing agents and accounts
 
-**Existing agents** is a separate execution view. The implemented structured
-adapter runs an installed Codex CLI with that CLI's model, authentication and
-configuration. **Start new run** explicitly starts one task and may consume
-that account's usage. Review its exact approval requests in **Agent review**.
+**Existing agents** runs installed Codex or Claude Code CLIs with their own
+model, account and configuration. Select the agent and account, then choose
+**Start new conversation**. Starting a turn may consume that account's usage.
+Review its tool activity and exact permission requests in **Agent review**.
+Claude's in-app integration is available in current source and is newer than
+the published `preview.2` archive; it requires a managed Claude profile.
 
 Existing-agent conversations are saved on this computer and remain after
 Switchya restarts. They are separate from built-in Switchya sessions. Choose
@@ -272,37 +274,46 @@ it; it keeps the account that started it. Choose **New conversation** for
 separate work. Opening or refreshing a conversation never starts work.
 
 If Switchya stopped while a run was active, that run shows **Review the
-interrupted run**. Codex may already have applied an approved command or file
-change. Inspect the project, then choose **I reviewed the project** before
-continuing. Nothing is replayed. A conversation can be continued only after Codex
-confirmed at least one message in it, because Codex saves a conversation only
-then. Resuming a saved conversation has been checked against the installed
-Codex CLI without a sign-in; a signed-in continuation that produces a reply
-has not been verified yet.
+interrupted run**. The agent may already have run a command or changed a file.
+Inspect the project, then choose **I reviewed the project** before continuing.
+Nothing is replayed. Continuing requires at least one confirmed turn and the
+same project and account. Claude continuation has been checked with the real
+CLI against a local mock API after restarting Switchya. This does not establish
+live sign-in or model quality.
 
 Codex applies its own patch validation and
 permission rules. Switchya requests and checks Codex's read-only shell policy
 with network disabled, but does not wrap the external CLI or its integrations
 in an additional OS sandbox. Read the permission boundary shown for the run
 and for each decision. Unsupported or incomplete approval requests can be
-deny-only. See [the adapter contract](AGENT-ADAPTERS.md).
+deny-only.
 
-### Continue a Codex conversation from the terminal
+Claude starts in **default** permission mode. Existing Claude allow/deny rules,
+hooks and integrations still apply, so some tools can run without prompting.
+**Allow once** returns only the displayed tool input and does not save a
+permission rule. Write and Edit requests show their exact content; commands
+show the supplied command text. Structured questions and plan-mode changes
+are currently deny-only; ask Claude to continue in ordinary chat. Claude's
+tools run with your OS permissions. See [the adapter contract](AGENT-ADAPTERS.md).
+
+### Continue an agent conversation from the terminal
 
 Preview 2 provides `switchya agent` commands for the same saved Codex
 conversations shown in **Existing agents**. Update both the CLI and its host
 when moving from preview 1, which does not include these commands.
+Current source also supports `--agent claude`; omitting `--agent` selects Codex.
 
 ```powershell
 switchya agent accounts
 switchya agent run --project C:\work\my-project --profile system-codex --prompt 'Explain this project'
+switchya agent run --agent claude --project C:\work\my-project --profile CLAUDE_PROFILE_ID --prompt 'Explain this project'
 switchya agent sessions
 switchya agent show --run RUN_ID
 switchya agent continue --run RUN_ID --prompt 'Now fix the failing test'
 ```
 
 `continue` takes the latest finished run ID from `agent sessions` and preserves
-its project and account. It sends only the new prompt. A managed account must
+its agent, project and account. It sends only the new prompt. A managed account must
 already be signed in through the app; starting a run checks its status when
 needed. Listing accounts shows cached status and does not inspect credentials.
 
@@ -347,7 +358,7 @@ Install the relevant official CLI separately before using its account profile.
    return to Switchya and refresh the account. **Cancel sign-in** stops the
    pending login; it is not a logout action.
 4. Choose **Use as default** for future work, or choose an account in the
-   existing-agent run form. A running Codex task keeps its original profile.
+   existing-agent run form. A running task keeps its original profile.
 
 Managed profiles keep separate CLI homes and sign-ins. They do not copy or
 replace the existing CLI's authentication. The existing Codex CLI entry keeps
@@ -370,11 +381,10 @@ terminal. No Switchya usage status line is installed in that terminal. See
 [Accounts](ACCOUNTS.md) for account storage, supported operations and platform
 limitations.
 
-Claude Code and Oh My Pi are not structured Switchya execution adapters.
-Detecting an installed CLI or opening an external terminal does not add its
-conversation, approvals or results to a saved Switchya session. An uncertain
-external run must be inspected before explicitly starting another run; there
-is no automatic retry or resumption.
+Oh My Pi remains discovery-only. Opening a separate external terminal does
+not add its conversation, approvals or results to Switchya's saved runs.
+An uncertain run must be inspected before explicitly continuing; there is no
+automatic retry or resumption.
 
 ## Current boundaries
 

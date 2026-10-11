@@ -335,6 +335,66 @@ async fn continuation_uses_the_saved_project_and_account_despite_a_new_default()
 }
 
 #[tokio::test]
+async fn claude_starts_select_its_default_and_continuations_keep_its_original_account() {
+    let project = tempfile::tempdir().unwrap();
+    let mut data = Data::new(RunState::Completed);
+    data.run.adapter_id = "claude".into();
+    data.profiles["profiles"][0]["agent_id"] = json!("claude");
+    data.profiles["profiles"][0]["managed"] = json!(true);
+    data.profiles["profiles"][0]["account"]["auth_status"] = json!("signed_in");
+    data.profiles["defaults"]["claude"] = json!("claude-default");
+    data.profiles["profiles"].as_array_mut().unwrap().push(json!({"id":"claude-default","name":"Claude default","agent_id":"claude","managed":true,"refreshing":false,"account":{"auth_status":"signed_in"}}));
+    let fixture = Harness::new(data).await;
+    let message = MessageArgs {
+        prompt: "A new message".into(),
+        command_id: None,
+    };
+    let continued = prepare(
+        &fixture.remote,
+        Selection::Continue("runone".into()),
+        &message,
+    )
+    .await
+    .unwrap();
+    assert_eq!(continued["adapter_id"], "claude");
+    assert_eq!(continued["profile_id"], "original");
+    let started = prepare(
+        &fixture.remote,
+        Selection::New {
+            agent: "claude".into(),
+            project: Some(project.path().into()),
+            profile: None,
+        },
+        &message,
+    )
+    .await
+    .unwrap();
+    assert_eq!(started["adapter_id"], "claude");
+    assert_eq!(started["profile_id"], "claude-default");
+    let wrong = prepare(
+        &fixture.remote,
+        Selection::New {
+            agent: "claude".into(),
+            project: Some(project.path().into()),
+            profile: Some("newdefault".into()),
+        },
+        &message,
+    )
+    .await;
+    assert!(wrong.is_err());
+    assert!(
+        !fixture
+            .data
+            .lock()
+            .unwrap()
+            .mutations
+            .iter()
+            .any(|path| path.ends_with("/refresh"))
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn accepted_retry_keeps_its_original_managed_profile_without_an_auth_refresh() {
     let project = tempfile::tempdir().unwrap();
     let mut data = Data::new(RunState::Completed);
@@ -344,6 +404,7 @@ async fn accepted_retry_keeps_its_original_managed_profile_without_an_auth_refre
     let body = prepare(
         &fixture.remote,
         Selection::New {
+            agent: "codex".into(),
             project: Some(project.path().to_owned()),
             profile: None,
         },
@@ -491,6 +552,7 @@ async fn an_uncertain_start_is_not_resubmitted_and_retains_its_command_id() {
     let error = start(
         &fixture.remote,
         Selection::New {
+            agent: "codex".into(),
             project: Some(project.path().to_owned()),
             profile: None,
         },
@@ -524,6 +586,7 @@ async fn cancellation_during_submission_stops_the_accepted_run_without_replaying
     let operation = start(
         &fixture.remote,
         Selection::New {
+            agent: "codex".into(),
             project: Some(project.path().to_owned()),
             profile: None,
         },

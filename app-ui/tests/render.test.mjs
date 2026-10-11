@@ -44,7 +44,7 @@ test('workspace, review and adapter render with the shipped HTM/Preact runtime',
   tags=flatten(root).map(node=>node.localName);
   assert.ok(tags.includes('main'));assert.ok(tags.includes('aside'));assert.ok(tags.includes('textarea'));
   render(null,root);
-  const { CodexItem, ApprovalSummary }=await import('../adapters.js');
+  const { CodexItem, ClaudeItem, ApprovalSummary }=await import('../adapters.js');
   const textOf=()=>flatten(root).filter(node=>node.nodeType===3).map(node=>node.data).join('');
   const changes=[{path:'src/a.js',kind:{type:'update',move_path:null},diff:'@@ -1 +1 @@\n-a\n+b\n'},{path:'src/new.js',kind:{type:'add'},diff:'export const x=1;\n'}];
   render(html`<div><${CodexItem} entry=${{item:{id:'c',type:'commandExecution',command:'npm test',cwd:'/p',status:'completed',exitCode:1,aggregatedOutput:'1 failing'}}}/><${CodexItem} entry=${{item:{id:'f',type:'fileChange',status:'completed',changes}}}/><${ApprovalSummary} approval=${{method:'item/commandExecution/requestApproval',preview:{params:{command:'curl https://example.com',cwd:'/p',reason:'fetch docs',networkApprovalContext:{host:'example.com',protocol:'https'}},item:null}}}/><${ApprovalSummary} approval=${{method:'item/fileChange/requestApproval',preview:{params:{grantRoot:'/'},item:{id:'f',type:'fileChange',changes}}}}/></div>`,root);
@@ -52,6 +52,11 @@ test('workspace, review and adapter render with the shipped HTM/Preact runtime',
   assert.ok(tags.includes('pre'));assert.ok(tags.includes('details'));
   const shown=textOf();
   for(const expected of ['npm test','1 failing','src/a.js','src/new.js','New file','Allow network access to example.com?','curl https://example.com','fetch docs','Broader write access requested'])assert.ok(shown.includes(expected),expected);
+  render(null,root);
+  render(html`<div><${ClaudeItem} entry=${{item:{id:'claude-tool',type:'claudeTool',name:'Write',input:{file_path:'fixture.txt',content:'<script>literal</script>'},status:'completed',output:'File created'}}}/><${ApprovalSummary} approval=${{method:'claude/can_use_tool',can_allow_once:true,preview:{request:{tool_name:'Edit',description:'Update the fixture',input:{file_path:'fixture.txt',old_string:'old text',new_string:'new text'}}}}}/><${ApprovalSummary} approval=${{method:'claude/can_use_tool',can_allow_once:false,preview:{request:{tool_name:'AskUserQuestion',input:{questions:[]}}}}}/></div>`,root);
+  const claudeShown=textOf();
+  for(const expected of ['fixture.txt','<script>literal</script>','File created','Allow Claude Code to use Edit?','old text','new text','Exact tool input','ordinary chat'])assert.ok(claudeShown.includes(expected),expected);
+  assert.ok(!flatten(root).some(node=>node.localName==='script'),'tool content must remain text');
   render(null,root);
   const { AccountsDialog }=await import('../accounts.js');
   render(html`<${AccountsDialog} api=${{}} open=${false} onRefresh=${()=>{}} profiles=${[

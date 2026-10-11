@@ -22,7 +22,7 @@ pub struct StartRequest {
     pub prompt: String,
     /// Caller UUID: retries return the same run only for the same complete request.
     pub command_id: String,
-    /// Continue the saved Codex thread of this earlier run. It must be the latest
+    /// Continue the saved agent conversation of this earlier run. It must be the latest
     /// finished run of its conversation, in the same project and account.
     #[serde(default)]
     pub continue_run_id: Option<String>,
@@ -67,7 +67,7 @@ pub struct AdapterRun {
     pub id: String,
     pub adapter_id: String,
     pub command_id: String,
-    /// Shared by every run that continues the same Codex thread. Equal to the
+    /// Shared by every run that continues the same agent conversation. Equal to the
     /// first run's id.
     pub conversation_id: String,
     /// The earlier run whose saved thread this run resumed.
@@ -87,7 +87,7 @@ pub struct AdapterRun {
     pub last_seq: u64,
     pub first_retained_seq: u64,
     pub pending_approvals: Vec<AdapterApproval>,
-    /// True when neither Switchya nor Codex keeps this run after the host exits.
+    /// True when neither Switchya nor the agent keeps this run after the host exits.
     pub ephemeral: bool,
     /// Set when this host could not save part of the run's history.
     #[serde(default)]
@@ -155,6 +155,16 @@ impl AdapterError {
 pub type Result<T> = std::result::Result<T, AdapterError>;
 
 pub const PERMISSION_BOUNDARY: &str = "Codex uses its read-only shell sandbox with network disabled, on-request approvals and human review. Read-only operations may run without prompting; writes or elevation require CLI approval. Codex enforces that policy; Switchya does not add an OS security sandbox. Allow once may permit the displayed command or file change with your OS permissions. The selected profile stays bound to this run and to any continuation of its conversation; configured integrations may have separate permissions. Saved history is never replayed: continuing sends only your new message, and interrupted work requires review first.";
+
+pub const CLAUDE_PERMISSION_BOUNDARY: &str = "Claude Code uses default permission mode and the selected account's CLI settings. Read-only tools and tools allowed by existing permission rules may run without prompting. Switchya displays the permission requests Claude sends; Allow once approves only the displayed tool input and does not save a permission rule. Tools, hooks and integrations run with your OS permissions; Switchya does not add an OS security sandbox. The account and project remain bound to this conversation. Continuing sends only your new message, and uncertain work requires review first.";
+
+pub(crate) fn permission_boundary(agent: &str) -> &'static str {
+    if agent == "claude" {
+        CLAUDE_PERMISSION_BOUNDARY
+    } else {
+        PERMISSION_BOUNDARY
+    }
+}
 
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()

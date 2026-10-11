@@ -124,3 +124,26 @@ test('recorded decisions and turn outcomes become readable entries',()=>{
   const items=adapterTranscript([event(1,'approval_resolved',{approval_id:'a',decision:'deny'}),event(2,'turn_completed',{status:'completed'})]);
   assert.equal(items[0].type,'decision');assert.equal(items[0].decision,'deny');assert.equal(items[1].kind,'turn_completed');
 });
+
+test('Claude tool completions replace their started card and preserve exact input and output',()=>{
+  const started={id:'claude-tool',type:'claudeTool',name:'Write',input:{file_path:'a.txt',content:'<script>literal</script>'},status:'inProgress'};
+  const finished={...started,status:'completed',output:'Created a.txt'};
+  const items=adapterTranscript([event(1,'item_started',{item:started}),event(2,'item_completed',{item:finished})]);
+  assert.equal(items.length,1);assert.equal(items[0].type,'claude_item');
+  assert.deepEqual(items[0].item,finished);assert.equal(items[0].seq,1);
+});
+
+test('Claude permission summaries retain the exact tool input without inventing a command or diff',()=>{
+  const input={file_path:'src/a.js',old_string:'before',new_string:'after',replace_all:true};
+  const summary=approvalSummary({method:'claude/can_use_tool',preview:{request:{tool_name:'Edit',input,description:'Update this file'}}});
+  assert.equal(summary.kind,'claude');assert.equal(summary.title,'Allow Claude Code to use Edit?');
+  assert.deepEqual(summary.input,input);assert.equal(summary.reason,'Update this file');
+  assert.equal(summary.command,undefined);assert.equal(summary.changes,undefined);
+});
+
+test('Claude streaming text is visible before completion and is shown once after completion',()=>{
+  const fragments=[event(1,'assistant_delta',{item_id:'claude-root-msg-0',text:'Live '}),event(2,'assistant_delta',{item_id:'claude-root-msg-0',text:'reply'})];
+  assert.equal(adapterTranscript(fragments)[0].text,'Live reply');
+  const items=adapterTranscript([...fragments,event(3,'item_completed',{item:{type:'agentMessage',id:'claude-root-msg-0',text:'Live reply'}})]);
+  assert.equal(items.length,1);assert.equal(items[0].text,'Live reply');
+});

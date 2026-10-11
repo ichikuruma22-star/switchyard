@@ -31,7 +31,7 @@ succeed. After restarting the host, refresh managed profiles again.
 
 ## Concurrent work and switching
 
-The structured Codex adapter accepts up to four active runs across all
+The structured Codex and Claude Code adapters share a limit of four active runs across all
 profiles. Each accepted run pins its account identity and private CLI home.
 Changing the selected default affects later runs only. Retrying the same
 command keeps the original binding, including after a default change; changing
@@ -42,7 +42,12 @@ login. It also requires a confirmed signed-out snapshot and an additional
 official CLI status check before login starts. Already signed-in credentials
 are not replaced by the sign-in action.
 
-For Claude, **Open Claude Code** starts the official CLI in a separate native
+Choose **Claude Code** in **Existing agents** to keep its conversation, tool
+activity and approval requests inside Switchya. A signed-in managed Claude
+profile is required. Its default permission mode retains existing CLI allow
+and deny rules; Switchya forwards requests that require a decision.
+
+The optional **Open Claude Code** account action starts the official CLI in a separate native
 terminal for the currently opened project, using the selected managed profile.
 This is an external CLI session: its conversation, approvals, termination and
 results are not tracked by Switchya. Closing Switchya does not close it.

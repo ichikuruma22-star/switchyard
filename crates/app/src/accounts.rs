@@ -460,7 +460,7 @@ impl AccountManager {
             return adapters.start(request).map_err(AppError::from);
         }
         let binding = match request.continue_run_id.as_deref() {
-            // A conversation stays with the account that holds its Codex thread.
+            // A conversation stays with the account that holds its CLI history.
             Some(previous) => {
                 let original = adapters.run_profile(previous)?.ok_or_else(|| {
                     AppError::new(
@@ -1161,6 +1161,10 @@ pub(crate) async fn launch_terminal(
         ),
     ))
 }
+
+#[cfg(test)]
+#[path = "claude_workspace_fixture.rs"]
+mod claude_workspace_fixture;
 
 #[cfg(test)]
 mod tests {

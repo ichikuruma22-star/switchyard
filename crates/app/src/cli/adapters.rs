@@ -1,4 +1,4 @@
-//! Terminal access to the app's existing Codex adapter API. No second execution
+//! Terminal access to the app's existing agent adapter API. No second execution
 //! backend: account binding, continuation, recovery and decisions stay in the host.
 use super::{
     Cli, Input, ProjectResponse, Remote, interactive_input, line, options, segment, terminal_text,
@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Subcommand)]
 pub(super) enum AgentCommand {
-    /// List saved Codex runs, conversation IDs and their bound accounts.
+    /// List saved agent runs, conversation IDs and their bound accounts.
     #[command(alias = "runs")]
     Sessions,
     /// Read one saved run and its retained activity without starting work.
@@ -29,10 +29,12 @@ pub(super) enum AgentCommand {
         #[arg(long)]
         run: String,
     },
-    /// List cached Codex profile IDs; listing does not inspect account credentials.
+    /// List cached account profile IDs; listing does not inspect credentials.
     Accounts,
-    /// Start a new Codex conversation using its installed CLI configuration.
+    /// Start a Codex or Claude Code conversation using its installed CLI.
     Run {
+        #[arg(long, default_value = "codex", value_parser = ["codex", "claude"])]
+        agent: String,
         #[arg(long)]
         project: Option<PathBuf>,
         #[arg(long)]
@@ -100,6 +102,17 @@ struct Profiles {
 #[derive(Deserialize)]
 struct ProfileDefaults {
     codex: Option<String>,
+    claude: Option<String>,
+}
+
+impl ProfileDefaults {
+    fn selected(&self, agent: &str) -> Option<&str> {
+        match agent {
+            "codex" => self.codex.as_deref(),
+            "claude" => self.claude.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -119,6 +132,7 @@ struct AccountState {
 
 enum Selection {
     New {
+        agent: String,
         project: Option<PathBuf>,
         profile: Option<String>,
     },
@@ -190,22 +204,26 @@ async fn dispatch(
                 .request(Method::GET, "account-profiles", None)
                 .await?;
             let views: Vec<_> = profiles.profiles.into_iter()
-                .filter(|profile| profile.agent_id == "codex")
                 .map(|profile| json!({
-                    "id":profile.id,"name":profile.name,"managed":profile.managed,
-                    "selected":profiles.defaults.codex.as_deref() == Some(profile.id.as_str()),
+                    "id":profile.id,"name":profile.name,"agent_id":profile.agent_id,"managed":profile.managed,
+                    "selected":profiles.defaults.selected(&profile.agent_id) == Some(profile.id.as_str()),
                     "cached_auth_status":profile.account.auth_status,"refreshing":profile.refreshing
                 })).collect();
             print_json(&views)
         }
         AgentCommand::Run {
+            agent,
             project,
             profile,
             message,
         } => {
             start(
                 remote,
-                Selection::New { project, profile },
+                Selection::New {
+                    agent,
+                    project,
+                    profile,
+                },
                 message,
                 cancelled,
             )
@@ -296,8 +314,12 @@ async fn prepare(remote: &Remote, selection: Selection, message: &MessageArgs) -
             "Prompt must contain text and be at most 64 KiB without NUL characters.",
         ));
     }
-    let (project, requested_profile, previous) = match selection {
-        Selection::New { project, profile } => {
+    let (agent, project, requested_profile, previous) = match selection {
+        Selection::New {
+            agent,
+            project,
+            profile,
+        } => {
             let path = project
                 .map_or_else(std::env::current_dir, Ok)
                 .map_err(|_| AppError::local("Could not determine the project directory."))?
@@ -309,7 +331,7 @@ async fn prepare(remote: &Remote, selection: Selection, message: &MessageArgs) -
             let project: ProjectResponse = remote
                 .request(Method::POST, "projects", Some(json!({"path":path})))
                 .await?;
-            (project.project, profile, None)
+            (agent, project.project, profile, None)
         }
         Selection::Continue(id) => {
             let previous = read_run(remote, &id).await?;
@@ -326,7 +348,7 @@ async fn prepare(remote: &Remote, selection: Selection, message: &MessageArgs) -
             let profile = previous.profile_id.ok_or_else(|| {
                 AppError::invalid("This conversation has no saved account binding.")
             })?;
-            (project, Some(profile), Some(id))
+            (previous.adapter_id, project, Some(profile), Some(id))
         }
     };
     let profiles: Profiles = remote
@@ -340,17 +362,19 @@ async fn prepare(remote: &Remote, selection: Selection, message: &MessageArgs) -
     let accepted = runs.runs.iter().find(|run| run.command_id == command_id);
     let profile_id = requested_profile
         .or_else(|| accepted.and_then(|run| run.profile_id.clone()))
-        .or(profiles.defaults.codex)
+        .or_else(|| profiles.defaults.selected(&agent).map(str::to_owned))
         .ok_or_else(|| {
             AppError::invalid(
-                "Select a Codex account with --profile, or choose a default in the app.",
+                "Select an account for this agent with --profile, or choose its default in the app.",
             )
         })?;
     let profile = profiles
         .profiles
         .iter()
-        .find(|p| p.id == profile_id && p.agent_id == "codex")
-        .ok_or_else(|| AppError::invalid("The selected Codex account profile is not available."))?;
+        .find(|p| p.id == profile_id && p.agent_id == agent)
+        .ok_or_else(|| {
+            AppError::invalid("The selected account profile is not available for this agent.")
+        })?;
     // The host performs the authoritative complete-request idempotency check.
     // An accepted retry must not be made dependent on a new auth inspection.
     if profile.managed && profile.account.auth_status != "signed_in" && accepted.is_none() {
@@ -376,7 +400,7 @@ async fn prepare(remote: &Remote, selection: Selection, message: &MessageArgs) -
         }).await.map_err(|_| AppError::local("The account status check did not finish; no run was submitted."))??;
     }
     Ok(
-        json!({"adapter_id":"codex","project_id":project.id,"profile_id":profile_id,
+        json!({"adapter_id":agent,"project_id":project.id,"profile_id":profile_id,
         "prompt":message.prompt,"command_id":command_id,"continue_run_id":previous}),
     )
 }
@@ -671,7 +695,7 @@ async fn interrupt_and_confirm(remote: &Remote, id: &str) -> Result<AdapterRun> 
             }
         }
         if view.state == RunState::RecoveryRequired {
-            return Err(AppError::new(StatusCode::CONFLICT, "recovery_required", "Codex did not confirm the outcome. Review the project and acknowledge recovery explicitly."));
+            return Err(AppError::new(StatusCode::CONFLICT, "recovery_required", "The agent did not confirm the outcome. Review the project and acknowledge recovery explicitly."));
         }
         Ok(view)
     }).await.map_err(|_| AppError::new(StatusCode::CONFLICT, "interrupt_unconfirmed", "The host has not confirmed interruption."))?

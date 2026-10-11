@@ -39,7 +39,7 @@ After inspecting the affected files or command results, a user can acknowledge r
 
 ## Existing-agent runs
 
-These routes drive the separate Codex adapter described in [the adapter contract](AGENT-ADAPTERS.md). They use the same authentication, Origin and JSON body rules.
+These routes drive the Codex and Claude Code adapters described in [the adapter contract](AGENT-ADAPTERS.md). They use the same authentication, Origin and JSON body rules. `adapter_id` is `codex` or `claude`; Claude requires a managed profile for that agent.
 
 | Method and path | Input | Response |
 |---|---|---|
@@ -52,7 +52,7 @@ These routes drive the separate Codex adapter described in [the adapter contract
 | `POST /api/adapter-runs/:id/interrupt` | `{}` | `{ok: true}` |
 | `POST /api/adapter-runs/:id/recovery` | `{}` | `{run: AdapterRun}` |
 
-Runs are saved by the host and survive restarts. `continue_run_id` continues the saved Codex conversation of that run with only the new prompt; it must name the conversation's latest run that has a Codex thread, and the run keeps that conversation's account profile. A different `profile_id` is a conflict, and `profile_changed` means the original profile is no longer available unchanged. A run that was active when a host stopped is `recovery_required` and cannot be continued until `/recovery` records the human review; acknowledgement never replays or certifies the uncertain work. Each `AdapterRun` reports `conversation_id`, `continued_from`, `title`, `ephemeral` and, when saved history cannot be read or written, `history_error`.
+Runs are saved by the host and survive restarts. `continue_run_id` continues the saved agent conversation of that run with only the new prompt; it must name the conversation's latest run that attached to its CLI session, and the run keeps that conversation's agent and account profile. A different `profile_id` is a conflict, and `profile_changed` means the original profile is no longer available unchanged. A run that was active when a host stopped is `recovery_required` if its input might have been sent; it cannot be continued until `/recovery` records the human review. Acknowledgement never replays or certifies the uncertain work. Each `AdapterRun` reports `conversation_id`, `continued_from`, `title`, `ephemeral` and, when saved history cannot be read or written, `history_error`.
 
 ## Workspace inspection and handoffs (current source)
 

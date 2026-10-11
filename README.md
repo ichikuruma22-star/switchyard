@@ -8,6 +8,8 @@ independent API gateway for other tools and applications.
 
 The current source also includes a persistent project workbench with file
 previews, Git diffs, a real terminal, and [shared agent context over MCP](docs/MCP.md).
+Codex and Claude Code can both run inside the conversation view with saved
+history, streamed output, tool activity and their own approval policies.
 These additions are newer than the published `preview.2` archive.
 
 | Start here | Purpose | Availability |

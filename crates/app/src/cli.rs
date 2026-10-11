@@ -42,7 +42,7 @@ enum Command {
     },
     /// Open the local browser workspace (also the default command).
     Serve(ServeArgs),
-    /// Use saved Codex conversations through the same host as the app.
+    /// Use saved Codex or Claude Code conversations through the app's host.
     Agent {
         #[command(subcommand)]
         command: adapters::AgentCommand,

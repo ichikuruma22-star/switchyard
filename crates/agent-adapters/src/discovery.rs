@@ -1,7 +1,7 @@
 use crate::{
     AdapterStatus,
     process_tree::{self, ProcessTree},
-    types::PERMISSION_BOUNDARY,
+    types::permission_boundary,
 };
 use std::{
     path::{Path, PathBuf},
@@ -128,7 +128,7 @@ pub(crate) async fn discover() -> Vec<AdapterStatus> {
             Some(path) => version(path).await,
             None => None,
         };
-        let supported = id == "codex";
+        let supported = matches!(id, "codex" | "claude");
         let status = if !installed {
             "not_installed"
         } else if !supported {
@@ -147,7 +147,7 @@ pub(crate) async fn discover() -> Vec<AdapterStatus> {
             executable: executable.map(|p| p.to_string_lossy().into_owned()),
             status: status.into(),
             permission_boundary: if supported {
-                PERMISSION_BOUNDARY.into()
+                permission_boundary(id).into()
             } else {
                 "Discovery only. Starting runs is not supported yet.".into()
             },
