@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.0.0" },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "preview": "node preview.mjs",
     "check": "node --check public/site.js && node check.mjs",
@@ -11,6 +13,6 @@
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
-    "wrangler": "4.147.0"
+    "wrangler": "4.149.0"
   }
 }

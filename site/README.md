@@ -2,9 +2,9 @@
 
 Static product website for `https://switchya.com`, with no build step, framework, remote fonts, analytics beacon, or form backend. The live site links to the Windows x64 portable preview `0.1.0-preview.1`, containing the native desktop shell and CLI. Existing Gateway downloads still link to the separate public Gateway release.
 
-The current deployment at [switchya.com](https://switchya.com/) and [www.switchya.com](https://www.switchya.com/) is version `8fa04428-9edc-4219-a54b-70d44439eb5c`, published on 3 October 2026 and confirmed through the Cloudflare deployment API on 11 October. Its preview release and download asset are public. See [VERIFICATION.md](./VERIFICATION.md) for the published evidence.
+The current deployment at [switchya.com](https://switchya.com/) and [www.switchya.com](https://www.switchya.com/) is version `21fb9ead-338a-47fb-bca3-144da84cf3df`, published on 11 October 2026. Repository and download links now point to `ichikuruma22-star/switchyard`. The transferred releases and assets were verified, including redirects from the original URLs. See [deployment-readback-20261011.json](./deployment-readback-20261011.json) for the current asset and endpoint checks; [VERIFICATION.md](./VERIFICATION.md) retains the original preview publication evidence.
 
-The design refinement was approved after desktop and phone visual review and published. The preview update kept that design and changed availability copy and links. See [DESIGN-REVIEW.md](./DESIGN-REVIEW.md) for the original review. `asset-manifest.json` describes the published public files; `deployment-readback.json` records their read-back.
+The design refinement was approved after desktop and phone visual review and published. The preview update kept that design and changed availability copy and links. See [DESIGN-REVIEW.md](./DESIGN-REVIEW.md) for the original review. `asset-manifest.json` describes the published public files; `deployment-readback-20261011.json` records the current read-back; `deployment-readback.json` preserves the original publication record.
 
 The portable preview targets Windows 10/11 x64 and requires the [Microsoft Visual C++ v14 x64 runtime](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170). Its desktop shell also requires Microsoft Edge WebView2 Runtime. These prerequisites are installed separately; the archive has no installer or bundled runtime DLLs. The download row states these requirements and points readers to the linked release notes for setup.
 
@@ -27,7 +27,7 @@ For Cloudflare's local static-asset behavior, install the pinned development dep
 
 `wrangler.jsonc` uses Workers Static Assets with `public/` as the asset directory and `404-page` handling. Custom-domain routes attach switchya.com and www.switchya.com; workers_dev is disabled. No Worker code, account ID in source, storage binding, or backend is configured. `public/_headers` supplies the security policy. Static files and fonts are served from the same origin.
 
-Wrangler is pinned to **4.147.0**, verified against the npm registry and Cloudflare's release on 3 October 2026. Its declared Node requirement is `>=22.0.0`. The compatibility date is `2026-10-03`.
+Wrangler is pinned to **4.149.0**, verified against the npm registry on 11 October 2026. Its Miniflare dependency uses patched `sharp 0.35.5`, addressing [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) in the development tooling. Its declared Node requirement is `>=22.0.0`. The compatibility date is `2026-10-03`.
 
 For an authorized update after visual review, verify the account with `npx wrangler whoami`, run the checks and a deployment dry run, then use `npm run deploy`. Read back both domains, assets, custom 404, HTTPS redirects, and headers afterward. Regenerate asset-manifest.json when public files change. The global cache policy includes no-transform; at the last deployment read-back, live HTML matched its deployed source byte for byte, with no injected analytics beacon. The font rule replaces the global Cache-Control value with a 30-day cache policy.
 
@@ -36,7 +36,7 @@ Official configuration references checked for this implementation:
 - [Static asset configuration](https://developers.cloudflare.com/workers/static-assets/binding/)
 - [Custom 404 handling](https://developers.cloudflare.com/workers/static-assets/routing/static-site-generation/)
 - [Static response headers](https://developers.cloudflare.com/workers/static-assets/headers/)
-- [Wrangler 4.147.0 release](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.147.0)
+- [Wrangler 4.149.0 release](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.149.0)
 
 ## Content and assets
 
