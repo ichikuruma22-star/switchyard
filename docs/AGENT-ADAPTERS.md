@@ -39,6 +39,17 @@ A fresh, empty managed Codex home was used for a real initialize/thread-start ch
 
 Executable, shell arguments, config overrides, model IDs and provider tokens are not HTTP input. Discovery resolves a fixed CLI name to an absolute path, skips relative/empty PATH entries and excludes Windows `.cmd`/`.bat` shims. `Command` launches the native executable directly. Prompt text travels as JSON over stdin; it is never interpolated into a shell command. The selected Codex model comes from the CLI configuration and is reported only after thread creation. Discovery does not test authentication, available models, subscription eligibility or provider billing. Starting a real turn uses that installation's authentication and may consume provider usage.
 
+## Terminal access
+
+The `switchya agent` CLI uses these same authenticated host routes for listing
+and showing runs, starting or continuing a conversation, reviewing recovery,
+and interrupting work. `--launch-info` attaches it to an existing app host;
+otherwise it starts and shuts down an owned host with the same durable stores.
+See [terminal examples](SWITCHYA.md#continue-a-codex-conversation-from-the-terminal).
+An uncertain start is reported with its command UUID and is never automatically
+resubmitted. Interactive decisions require the exact approval ID and current
+preview hash. Noninteractive runs cannot approve requests.
+
 ## Permissions and approvals
 
 The process launch and thread creation both request `sandbox=read-only`, `approvalPolicy=on-request`, and `approvalsReviewer=user`. Before `turn/start`, Switchya checks the returned effective policy is `readOnly`, shell network access is false/default false, the approval policy is `on-request`, and the reviewer is `user`. It fails closed if that read-back differs. The turn also supplies an explicit read-only sandbox with network disabled and the same approval settings. Read-only operations can run without a prompt; writes/elevation need a supported CLI approval. There is no auto-approve flag, automatic risk reviewer, session-wide acceptance, persistent rule amendment or permission escalation API.

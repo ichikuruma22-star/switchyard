@@ -251,6 +251,48 @@ in an additional OS sandbox. Read the permission boundary shown for the run
 and for each decision. Unsupported or incomplete approval requests can be
 deny-only. See [the adapter contract](AGENT-ADAPTERS.md).
 
+### Continue a Codex conversation from the terminal
+
+The source build now provides `switchya agent` commands for the same saved
+Codex conversations shown in **Existing agents**. These commands are not in
+the published `0.1.0-preview.1` archive.
+
+```powershell
+switchya agent accounts
+switchya agent run --project C:\work\my-project --profile system-codex --prompt 'Explain this project'
+switchya agent sessions
+switchya agent show --run RUN_ID
+switchya agent continue --run RUN_ID --prompt 'Now fix the failing test'
+```
+
+`continue` takes the latest finished run ID from `agent sessions` and preserves
+its project and account. It sends only the new prompt. A managed account must
+already be signed in through the app; starting a run checks its status when
+needed. Listing accounts shows cached status and does not inspect credentials.
+
+While the app stays open, put `--launch-info PATH_TO_PRIVATE_LAUNCH_FILE` before
+`agent` to connect to its host. Without that option the CLI owns a temporary
+host using the same configured data directory, and shuts it down on exit. Close
+the app first if it owns that directory. Reading saved runs never starts a
+model turn.
+
+Interactive approval requires typing `allow_once APPROVAL_ID` or
+`deny APPROVAL_ID` for the exact displayed request. Deny-only requests cannot
+be approved. Without an interactive terminal, approval-required work stops
+without approval. Ctrl-C requests interruption; the CLI reads back the outcome
+and reports when it is still uncertain.
+
+For an uncertain run, inspect `agent show` and the project before explicitly
+using `switchya agent recover --run RUN_ID --reviewed`. Recovery does not replay
+work or establish whether an earlier command completed. To stop an active run
+from another terminal, use `switchya agent interrupt --run RUN_ID` with the
+active host's `--launch-info` file.
+
+Every start prints a command UUID. If submission cannot be confirmed, inspect
+`agent sessions` before trying again. `--command-id UUID` can reconcile the
+exact same start request; changing its prompt, project, profile or continued
+run is rejected. Starts and approval decisions are never automatically retried.
+
 ### Manage CLI sign-ins
 
 Codex and Claude CLI account profiles belong to external-agent workflows.
