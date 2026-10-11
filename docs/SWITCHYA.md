@@ -35,7 +35,7 @@ The release notes bundled with the ZIP record checks of the published binaries.
 | Browser workflow | Earlier controlled-provider checks exercised file reads, patch and command approvals, denial without file changes, saved-session reload and CLI handoff. Current automated tests cover saved Codex conversations and activity summaries. These checks do not establish live-model coding quality. |
 | Native Windows shell | The published ZIP's release notes record its startup and host checks. Native webview interaction is a separate boundary from browser and host tests. |
 | Portable release package | The release includes a SHA-256 file and a manifest of every packaged file. Verify the downloaded archive against those files. |
-| Accounts and model quality | Actual account sign-ins and live AI coding quality remain unverified. Account tests use controlled fixtures. Claude subscription quota remains unavailable because its documented status command does not expose it. |
+| Accounts and model quality | On 4 October, six small live tasks used one existing Codex CLI account; coding, denial and interruption checks passed, while the restart check exposed the history loss addressed by this release. Current release checks use controlled fixtures. New sign-in flows, cross-account switching and live Claude operation remain unverified. Claude subscription quota is unavailable because its documented status command does not expose it. |
 | Other platforms | Native workspace CI passed on Linux x64/ARM64 and both macOS architectures. Linux and macOS desktop downloads are not included; see the platform report for the separate desktop build/runtime limits. |
 
 See [Accounts](ACCOUNTS.md) for the current sign-in, usage and native-terminal
@@ -255,9 +255,9 @@ deny-only. See [the adapter contract](AGENT-ADAPTERS.md).
 
 ### Continue a Codex conversation from the terminal
 
-The source build now provides `switchya agent` commands for the same saved
-Codex conversations shown in **Existing agents**. These commands are not in
-the published `0.1.0-preview.1` archive.
+Preview 2 provides `switchya agent` commands for the same saved Codex
+conversations shown in **Existing agents**. Update both the CLI and its host
+when moving from preview 1, which does not include these commands.
 
 ```powershell
 switchya agent accounts
