@@ -192,7 +192,9 @@ pub(super) fn directory(root: &Path, relative: &str) -> Result<Value, ToolError>
     let mut omitted = 0;
     let mut truncated = false;
     #[cfg(unix)]
-    let names = rustix::fs::Dir::read_from(&directory)?;
+    let names = rustix::fs::Dir::read_from(&directory)
+        .map_err(std::io::Error::from)?
+        .map(|entry| entry.map_err(std::io::Error::from));
     #[cfg(windows)]
     let names = fs::read_dir(&_path)?;
     for (index, entry) in names.enumerate() {
