@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/krutftw/switchyard"
+repository = "https://github.com/ichikuruma22-star/switchyard"
 authors = ["Switchyard contributors"]
 
 [workspace.dependencies]
