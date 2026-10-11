@@ -409,9 +409,26 @@ async fn real_terminal_input_is_ordered_idempotent_resizable_and_stopped_with_th
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{result}");
-    let (_, snapshot) = fixture
-        .request(Method::GET, &format!("/terminals/{id}?after_seq=0"), None)
-        .await;
+    // A fast shell can write the fixture files before the terminal reader's
+    // bounded output batch has been published (notably on macOS).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let snapshot = loop {
+        let (_, snapshot) = fixture
+            .request(Method::GET, &format!("/terminals/{id}?after_seq=0"), None)
+            .await;
+        if !snapshot["terminal"]["chunks"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+        {
+            break snapshot;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Terminal output was not published: {snapshot}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
     assert_eq!(snapshot["terminal"]["cols"], 132);
     assert_eq!(snapshot["terminal"]["input_sequence"], sequence + 1);
     assert!(
