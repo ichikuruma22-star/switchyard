@@ -59,6 +59,15 @@ async fn wait_until(
         loop {
             let run = manager.run(id).unwrap();
             if predicate(&run) {
+                if run.state == RunState::RecoveryRequired {
+                    let errors: Vec<_> = manager
+                        .events(id, 0, 200)
+                        .unwrap()
+                        .into_iter()
+                        .filter(|event| event.kind == "adapter_error")
+                        .collect();
+                    eprintln!("Fixture recovery diagnostics: {errors:?}");
+                }
                 return run;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

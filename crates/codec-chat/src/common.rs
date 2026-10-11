@@ -945,7 +945,8 @@ fn file_from_wire(item: &Value) -> Option<Part> {
             detail: None,
             cache_control,
         }
-    } else if let Some(url) = str_of(spec, "file_url") {
+    } else {
+        let url = str_of(spec, "file_url")?;
         MediaPart {
             source: MediaSource::Url {
                 url: url.to_string(),
@@ -958,8 +959,6 @@ fn file_from_wire(item: &Value) -> Option<Part> {
             detail: None,
             cache_control,
         }
-    } else {
-        return None;
     };
     Some(media_part(media))
 }

@@ -44,6 +44,10 @@ impl Drop for GaugeGuard {
     fn drop(&mut self) {
         let counter = self.inner.counter(self.kind);
         // Saturating: a gauge must never wrap, whatever happens.
+        #[allow(
+            deprecated,
+            reason = "AtomicU64::try_update requires a newer compiler than the Rust 1.88 MSRV"
+        )]
         let _ = counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
             Some(v.saturating_sub(1))
         });
