@@ -547,7 +547,7 @@ async fn watch(
 fn viewer_guidance(id: &str) -> String {
     let id = terminal_text(id);
     format!(
-        "\nDetaching does not interrupt the run or undo earlier decisions. Inspect this run with `switchya agent show --run {id}`, attach again with `switchya agent watch --run {id}`, or stop it explicitly with `switchya agent interrupt --run {id}`.\n"
+        "\nDetaching does not interrupt the run or undo earlier decisions. Reuse the same private --launch-info file to reach this host. In the commands below, replace PATH with the --launch-info path used for this viewer:\n  Inspect: switchya --launch-info PATH agent show --run {id}\n  Reattach: switchya --launch-info PATH agent watch --run {id}\n  Stop explicitly: switchya --launch-info PATH agent interrupt --run {id}\n"
     )
 }
 
