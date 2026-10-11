@@ -1,0 +1,145 @@
+{
+  "checkedAt": "2026-10-11T06:34:55.046Z",
+  "results": [
+    {
+      "url": "https://switchya.com/assets/fonts/archivo-latin-var.woff2",
+      "status": 200,
+      "bytes": 90104,
+      "sha256": "e3a28eade21a900c7155a247757f4b2834c07bb7ef07ad7efa55cebaac1e8f5e"
+    },
+    {
+      "url": "https://switchya.com/assets/fonts/Archivo-OFL.txt",
+      "status": 200,
+      "bytes": 4503,
+      "sha256": "c3c8402eec0e31dc9a76851235b1c02a0bb821488b2db8e35bcc2ab60ca8fc2b"
+    },
+    {
+      "url": "https://switchya.com/assets/fonts/jetbrains-mono-latin-var.woff2",
+      "status": 200,
+      "bytes": 40404,
+      "sha256": "18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e"
+    },
+    {
+      "url": "https://switchya.com/assets/fonts/JetBrainsMono-OFL.txt",
+      "status": 200,
+      "bytes": 4524,
+      "sha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b"
+    },
+    {
+      "url": "https://switchya.com/assets/switchya-mark.svg",
+      "status": 200,
+      "bytes": 495,
+      "sha256": "5295d8ae25239f81ebec6ffa85ac49d7e56e3cc21693660208dabdc62bcfb7c9"
+    },
+    {
+      "url": "https://switchya.com/",
+      "status": 200,
+      "bytes": 15773,
+      "sha256": "31747cf8da332bc0e70608ea05cef7970adef97ab745b9b4c35636c5e9ba85f0"
+    },
+    {
+      "url": "https://switchya.com/robots.txt",
+      "status": 200,
+      "bytes": 66,
+      "sha256": "999c1936523f17f23ef0a3b81084dba3887c062146771eaaed6365df067e4126"
+    },
+    {
+      "url": "https://switchya.com/site.css",
+      "status": 200,
+      "bytes": 27834,
+      "sha256": "20bf686ed9390fe3915bcb5aa61b6456b5e09a31f7072fe7109d5246f5bca489"
+    },
+    {
+      "url": "https://switchya.com/site.js",
+      "status": 200,
+      "bytes": 1719,
+      "sha256": "cc15a4c69b7770ab863771e1d1adc8c80ffa498f6cbdddda00d95eaf2b2e7619"
+    },
+    {
+      "url": "https://switchya.com/sitemap.xml",
+      "status": 200,
+      "bytes": 156,
+      "sha256": "f47b32784befac24598c5c7f92e2f4eed8eae909926f75cb3e10ab19d0e69efe"
+    },
+    {
+      "url": "https://switchya.com/release-preview2-check-20261011-missing",
+      "status": 404,
+      "custom404Matches": true
+    },
+    {
+      "url": "http://switchya.com",
+      "status": 301,
+      "location": "https://switchya.com/"
+    },
+    {
+      "url": "https://www.switchya.com/assets/fonts/archivo-latin-var.woff2",
+      "status": 200,
+      "bytes": 90104,
+      "sha256": "e3a28eade21a900c7155a247757f4b2834c07bb7ef07ad7efa55cebaac1e8f5e"
+    },
+    {
+      "url": "https://www.switchya.com/assets/fonts/Archivo-OFL.txt",
+      "status": 200,
+      "bytes": 4503,
+      "sha256": "c3c8402eec0e31dc9a76851235b1c02a0bb821488b2db8e35bcc2ab60ca8fc2b"
+    },
+    {
+      "url": "https://www.switchya.com/assets/fonts/jetbrains-mono-latin-var.woff2",
+      "status": 200,
+      "bytes": 40404,
+      "sha256": "18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e"
+    },
+    {
+      "url": "https://www.switchya.com/assets/fonts/JetBrainsMono-OFL.txt",
+      "status": 200,
+      "bytes": 4524,
+      "sha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b"
+    },
+    {
+      "url": "https://www.switchya.com/assets/switchya-mark.svg",
+      "status": 200,
+      "bytes": 495,
+      "sha256": "5295d8ae25239f81ebec6ffa85ac49d7e56e3cc21693660208dabdc62bcfb7c9"
+    },
+    {
+      "url": "https://www.switchya.com/",
+      "status": 200,
+      "bytes": 15773,
+      "sha256": "31747cf8da332bc0e70608ea05cef7970adef97ab745b9b4c35636c5e9ba85f0"
+    },
+    {
+      "url": "https://www.switchya.com/robots.txt",
+      "status": 200,
+      "bytes": 66,
+      "sha256": "999c1936523f17f23ef0a3b81084dba3887c062146771eaaed6365df067e4126"
+    },
+    {
+      "url": "https://www.switchya.com/site.css",
+      "status": 200,
+      "bytes": 27834,
+      "sha256": "20bf686ed9390fe3915bcb5aa61b6456b5e09a31f7072fe7109d5246f5bca489"
+    },
+    {
+      "url": "https://www.switchya.com/site.js",
+      "status": 200,
+      "bytes": 1719,
+      "sha256": "cc15a4c69b7770ab863771e1d1adc8c80ffa498f6cbdddda00d95eaf2b2e7619"
+    },
+    {
+      "url": "https://www.switchya.com/sitemap.xml",
+      "status": 200,
+      "bytes": 156,
+      "sha256": "f47b32784befac24598c5c7f92e2f4eed8eae909926f75cb3e10ab19d0e69efe"
+    },
+    {
+      "url": "https://www.switchya.com/release-preview2-check-20261011-missing",
+      "status": 404,
+      "custom404Matches": true
+    },
+    {
+      "url": "http://www.switchya.com",
+      "status": 301,
+      "location": "https://www.switchya.com/"
+    }
+  ]
+}
