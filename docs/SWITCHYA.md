@@ -5,7 +5,7 @@ desktop shell use the same built-in agent and saved project sessions. The
 independently installable [Switchyard Gateway](../README.md#switchyard-gateway)
 provides model access and routing.
 
-The [**Windows x64 portable preview**](https://github.com/krutftw/switchyard/releases/tag/switchya-v0.1.0-preview.1)
+The [**Windows x64 portable preview**](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.1)
 is tagged `switchya-v0.1.0-preview.1`. Its archive contains the native desktop
 shell and `switchya` CLI, targeting Windows 10/11 x64. It is unsigned and has
 no installer or bundled runtime DLLs. Install the

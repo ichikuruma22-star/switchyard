@@ -14,7 +14,7 @@ The product has three related surfaces:
 - **Switchya App:** project and task workspace, live work, approvals, terminal, diff review, recovery, and completion evidence.
 - **Switchya CLI:** the same task runtime and stored task state for terminal and scripted use. App/CLI handoff should not create unrelated conversations or replay completed changes.
 
-These are the product boundaries. The app and task runtime are under development on the feature/agent-workspace branch; the acceptance benchmarks below remain unproven until their recorded checks pass. The public gateway currently documents four client protocols, streaming, WebSockets, routing/failover, and usage/cost visibility. It uses provider API keys or service accounts; consumer-subscription login is not an existing gateway capability. [Switchyard Gateway README](https://github.com/krutftw/switchyard)
+These are the product boundaries. The app and task runtime are under development on the feature/agent-workspace branch; the acceptance benchmarks below remain unproven until their recorded checks pass. The public gateway currently documents four client protocols, streaming, WebSockets, routing/failover, and usage/cost visibility. It uses provider API keys or service accounts; consumer-subscription login is not an existing gateway capability. [Switchyard Gateway README](https://github.com/ichikuruma22-star/switchyard)
 
 ## Current competitor capabilities
 

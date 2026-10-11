@@ -166,7 +166,7 @@ in an external terminal and that terminal session is not tracked by Switchya.
 
 ## Switchyard Gateway
 
-The separately released [Switchyard Gateway](https://github.com/krutftw/switchyard)
+The separately released [Switchyard Gateway](https://github.com/ichikuruma22-star/switchyard)
 is a different product. Its release status does not establish Switchya platform
 support. This ZIP contains Switchya only, with its embedded local gateway runtime.
 
