@@ -716,9 +716,16 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let binding = binding(&dir, "codex");
             // Fresh executable paths reproduced Windows teardown exceeding the
-            // old 500 ms wait. Keep the immediate exit assertion after stop.
-            let executable = dir.path().join(compiled.file_name().unwrap());
-            std::fs::copy(&compiled, &executable).unwrap();
+            // old 500 ms wait. Other platforms only need fresh processes, not
+            // another executable written while parallel fixtures are spawning.
+            #[cfg(windows)]
+            let executable = {
+                let path = dir.path().join(compiled.file_name().unwrap());
+                std::fs::copy(&compiled, &path).unwrap();
+                path
+            };
+            #[cfg(not(windows))]
+            let executable = compiled.clone();
             let mut process =
                 AccountProcess::spawn(executable, &["inspect"], &binding, false).unwrap();
             tokio::time::timeout(
