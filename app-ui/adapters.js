@@ -197,7 +197,7 @@ export function AdapterWorkspace({api,project,hostId,storage,onBusyChange,onOpen
   const selectedAdapter=adapters.find(adapter=>adapter.id===adapterId);
   useEffect(()=>{setRuns([]);setRun(null);setEvents([]);eventsRef.current=[];setSelectedId('');setHistory({});historyCache.current=new Map();setDecisionError('');},[project?.id]);
   useEffect(()=>{onConversationsChange?.(groupConversations(runs));},[runs]);
-  useEffect(()=>{if(reference?.path&&reference.project_id===project?.id){setPrompt(old=>`${old}${old?'\n\n':''}\`${reference.path}\``);onReferenceHandled?.();}},[reference?.id]);
+  useEffect(()=>{if((reference?.path||reference?.text)&&reference.project_id===project?.id){const text=reference.text||`\`${reference.path}\``;setPrompt(old=>`${old}${old?'\n\n':''}${text}`);onReferenceHandled?.();}},[reference?.id]);
   useEffect(()=>{
     const abort=new AbortController();let stopped=false,timer;
     async function poll(){

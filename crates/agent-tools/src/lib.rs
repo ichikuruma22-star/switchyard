@@ -26,6 +26,29 @@ pub fn project_file(root: &Path, path: &str) -> ToolResult {
     )
 }
 
+pub fn project_search(
+    root: &Path,
+    query: &str,
+    path: &str,
+    limit: usize,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, ToolError> {
+    if query.is_empty() || query.len() > 512 || !(1..=100).contains(&limit) {
+        return Err(ToolError::Invalid(
+            "Search text must contain 1..=512 bytes and limit must be 1..=100.".into(),
+        ));
+    }
+    Ok(files::search(
+        root,
+        &SearchArgs {
+            query: query.into(),
+            path: path.into(),
+            max_results: limit,
+        },
+        cancel,
+    ))
+}
+
 /// Validate a repository-relative name, including deleted Git paths.
 pub fn check_project_path(path: &str) -> Result<(), ToolError> {
     files::check_relative(path)

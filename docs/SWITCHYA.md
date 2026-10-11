@@ -131,6 +131,40 @@ Saved built-in sessions persist locally across app restarts. Keep the session
 data directory on local storage. Only one host may own it at a time; connect
 the CLI to that host for concurrent app/terminal access, as described below.
 
+## Project workbench (current source)
+
+These additions are newer than the published `preview.2` archive. Build the
+current source to use them.
+
+The top bar keeps **Conversation**, **Files**, **Changes** and **Handoffs** in
+one project workspace. Your selected project, conversation, view and appearance
+are restored when the host restarts, including when it uses a different port.
+
+- **Files** browses project folders and previews UTF-8 source with line numbers.
+  Enter a known relative path or use Ctrl+P. **Use in task** adds its path to
+  the current draft. Previews are read-only and bounded; protected files and
+  generated folders are omitted.
+- **Changes** shows Git's current staged, unstaged and untracked paths. Select
+  a tracked file to inspect either diff, or an untracked file for a preview.
+  This view does not stage or commit. Git hooks, external diff programs,
+  text converters, filesystem monitors and configured content filters are
+  disabled for these reads.
+- **Terminal** opens a real PowerShell or Bash shell in the project. Ctrl+
+  backtick toggles the panel. Hiding it keeps the shell running; **Stop** ends
+  it. Commands you type execute directly with your OS permissions. They do
+  not pass through agent approval, and the project directory is not a sandbox.
+  Terminals stop with the host and are not replayed on restart. Deliberately
+  detached Unix processes can outlive their terminal.
+- **Handoffs** keeps immutable project notes: current state, reported checks,
+  next steps and open questions. Save a note yourself or let a connected MCP
+  client save one. **Use in task** adds the note to a draft for your review;
+  it does not send a task. Saved source labels and verification are reports
+  from the author, not authenticated identity or independently proven results.
+
+**Handoffs → Connect agent** provides MCP JSON and Codex TOML for this project.
+Keep Switchya open while using that configuration. See the [MCP guide](MCP.md)
+for the tools, limits, standalone operation and connection lifecycle.
+
 ## Review edits, commands and results
 
 For an edit, review the proposed diff and file paths. **Exact request details**

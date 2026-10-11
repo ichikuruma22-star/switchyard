@@ -21,6 +21,7 @@ pub(crate) struct AppState {
     pub(crate) engine: AppEngine,
     pub(crate) gateway: switchyard_gateway::Gateway,
     pub(crate) config_path: PathBuf,
+    pub(crate) data_dir: PathBuf,
     pub(crate) adapters: AdapterManager,
     pub(crate) accounts: crate::accounts::AccountManager,
     pub(crate) workspace_reads: Arc<tokio::sync::Semaphore>,
@@ -51,6 +52,27 @@ pub(crate) fn router(
         )
         .route("/api/projects/{id}/files", get(crate::workspace::directory))
         .route("/api/projects/{id}/file", get(crate::workspace::file))
+        .route("/api/projects/{id}/search", get(crate::handoffs::search))
+        .route(
+            "/api/projects/{id}/mcp-config",
+            get(crate::handoffs::mcp_config),
+        )
+        .route(
+            "/api/projects/{id}/checkpoints",
+            get(crate::handoffs::list).post(crate::handoffs::save),
+        )
+        .route(
+            "/api/projects/{id}/checkpoints/{note}",
+            get(crate::handoffs::read),
+        )
+        .route(
+            "/api/projects/{id}/conversations",
+            get(crate::handoffs::conversations),
+        )
+        .route(
+            "/api/projects/{id}/conversations/{kind}/{conversation}",
+            get(crate::handoffs::conversation),
+        )
         .route(
             "/api/projects/{id}/changes",
             get(crate::git_review::changes),
@@ -227,7 +249,7 @@ pub(crate) fn query(uri: &Uri, allowed: &[&str]) -> Result<BTreeMap<String, Stri
     Ok(output)
 }
 
-fn event_cursor(uri: &Uri, max_limit: usize) -> Result<(u64, usize)> {
+pub(crate) fn event_cursor(uri: &Uri, max_limit: usize) -> Result<(u64, usize)> {
     let values = query(uri, &["after_seq", "limit"])?;
     let integer = |name: &str, default: u64| -> Result<u64> {
         values.get(name).map_or(Ok(default), |value| {
@@ -242,7 +264,7 @@ fn event_cursor(uri: &Uri, max_limit: usize) -> Result<(u64, usize)> {
         })
     };
     let after_seq = integer("after_seq", 0)?;
-    let limit = integer("limit", 200)?;
+    let limit = integer("limit", 200.min(max_limit) as u64)?;
     if limit == 0 || limit > max_limit as u64 {
         return Err(AppError::invalid(format!(
             "Event limit must be between 1 and {max_limit}."
@@ -604,6 +626,7 @@ mod tests {
                 engine: runtime.engine.clone(),
                 gateway: runtime.gateway.clone(),
                 config_path: runtime.config_path.clone(),
+                data_dir: options.data_dir.clone(),
                 adapters: AdapterManager::new(),
                 accounts: crate::accounts::AccountManager::open(&options.data_dir).unwrap(),
                 workspace_reads: Arc::new(tokio::sync::Semaphore::new(4)),

@@ -53,7 +53,7 @@ pub(crate) async fn save_selection(
     if !matches!(selection.mode.as_str(), "native" | "external")
         || !matches!(
             selection.tool.as_str(),
-            "conversation" | "files" | "changes"
+            "conversation" | "files" | "changes" | "handoffs"
         )
         || !matches!(selection.theme.as_str(), "system" | "light" | "dark")
         || [

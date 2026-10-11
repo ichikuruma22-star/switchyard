@@ -1,5 +1,6 @@
 //! Terminal entry point for the shared local workspace engine.
 mod adapters;
+mod mcp;
 
 use crate::{
     AppError, AppOptions, LaunchInfo, Result, default_paths, start_host, startup::AppRuntime,
@@ -33,6 +34,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Share one project's context and handoffs with an MCP client over stdio.
+    Mcp {
+        /// Only this project is accessible to the connected agent.
+        #[arg(long)]
+        project: PathBuf,
+    },
     /// Open the local browser workspace (also the default command).
     Serve(ServeArgs),
     /// Use saved Codex conversations through the same host as the app.
@@ -156,6 +163,9 @@ async fn execute(mut cli: Cli, cancelled: &CancellationToken) -> Result<()> {
     if let Command::Agent { command } = command {
         return adapters::execute(&cli, command, cancelled).await;
     }
+    if let Command::Mcp { project } = command {
+        return mcp::execute(&cli, project, cancelled).await;
+    }
     if let Command::Serve(args) = command {
         if cli.launch_info.is_some() {
             return Err(AppError::invalid(
@@ -199,7 +209,7 @@ async fn execute(mut cli: Cli, cancelled: &CancellationToken) -> Result<()> {
             let mut input = interactive_input();
             turn(&backend, &view.session.id, &prompt, &mut input, cancelled).await
         }.await,
-        Command::Serve(_) | Command::Agent { .. } => unreachable!(),
+        Command::Serve(_) | Command::Agent { .. } | Command::Mcp { .. } => unreachable!(),
     };
     let shutdown = backend.shutdown().await;
     result.and(shutdown)

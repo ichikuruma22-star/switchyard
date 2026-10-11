@@ -6,6 +6,10 @@ send a task, and review proposed edits and commands alongside their results.
 The app and CLI share saved sessions. **Switchyard Gateway** remains an
 independent API gateway for other tools and applications.
 
+The current source also includes a persistent project workbench with file
+previews, Git diffs, a real terminal, and [shared agent context over MCP](docs/MCP.md).
+These additions are newer than the published `preview.2` archive.
+
 | Start here | Purpose | Availability |
 |---|---|---|
 | [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.2) |

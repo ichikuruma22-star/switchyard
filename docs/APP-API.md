@@ -1,6 +1,6 @@
-# Local workspace API, first milestone
+# Local workspace API
 
-This document defines the first app/CLI milestone, not the full product roadmap. The gateway remains independently installable. The app uses its own agent engine; existing-agent adapters are a separate integration boundary.
+This document describes the current app/CLI source. The gateway remains independently installable. The app uses its own agent engine; existing-agent adapters are a separate integration boundary.
 
 The app host binds only to `127.0.0.1` on an allocated port. Every `/api/` request requires `Authorization: Bearer <random host-session token>`. The launch URL supplies this token in a fragment, which the UI removes before navigation and retains in session storage for reloads. Tokens expire when the host exits. Host and browser Origin checks restrict requests to the exact loopback origin. No remote origin receives CORS access. Tokens and provider keys never appear in logs, event data, or URL query parameters.
 
@@ -53,6 +53,56 @@ These routes drive the separate Codex adapter described in [the adapter contract
 | `POST /api/adapter-runs/:id/recovery` | `{}` | `{run: AdapterRun}` |
 
 Runs are saved by the host and survive restarts. `continue_run_id` continues the saved Codex conversation of that run with only the new prompt; it must name the conversation's latest run that has a Codex thread, and the run keeps that conversation's account profile. A different `profile_id` is a conflict, and `profile_changed` means the original profile is no longer available unchanged. A run that was active when a host stopped is `recovery_required` and cannot be continued until `/recovery` records the human review; acknowledgement never replays or certifies the uncertain work. Each `AdapterRun` reports `conversation_id`, `continued_from`, `title`, `ephemeral` and, when saved history cannot be read or written, `history_error`.
+
+## Workspace inspection and handoffs (current source)
+
+These routes share the same host authentication, Origin and strict JSON/query
+rules. None starts a model or approves an agent operation.
+
+| Method and path | Input | Response |
+|---|---|---|
+| `GET /api/workspace` | — | `{selection}` from durable local navigation state |
+| `POST /api/workspace` | `{project_id, session_id, conversation_id, mode, tool, theme}` | `{selection}` after project membership validation |
+| `GET /api/projects/:id/files?path=.` | Relative folder | Bounded entries, omissions and truncation |
+| `GET /api/projects/:id/file?path=...` | Relative file | Content, hash and truncation |
+| `GET /api/projects/:id/search?query=...&path=.&limit=30` | Literal query, optional folder/count | Bounded matches and scan statistics |
+| `GET /api/projects/:id/changes` | — | Current Git branch and file states |
+| `GET /api/projects/:id/diff?path=...&scope=unstaged` | Exact relative tracked path; staged or unstaged | Bounded diff |
+| `GET /api/projects/:id/checkpoints?limit=20&before=...` | Optional prior page's cursor | `{checkpoints, next_before}` |
+| `POST /api/projects/:id/checkpoints` | `{id, title, summary, source, verification?, next_steps?, risks?}` | `{checkpoint}`; exact UUID retries are idempotent, conflicts never overwrite |
+| `GET /api/projects/:id/checkpoints/:note` | Note UUID | `{checkpoint}` only within this project |
+| `GET /api/projects/:id/conversations?limit=20&before=...` | Optional prior page's cursor | `{conversations, next_before}` |
+| `GET /api/projects/:id/conversations/:kind/:conversation?after_seq=0&limit=20` | Native session or adapter run; bounded sequence cursor | Project-validated metadata, events, next cursor, has_more and history_gap |
+| `GET /api/projects/:id/mcp-config` | — | MCP JSON, Codex TOML and host-lifetime requirement; no bearer token |
+
+The workspace `tool` values are `conversation`, `files`, `changes` and
+`handoffs`. Checkpoints are immutable author-reported context. They are not
+approval records or independent verification evidence. Conversation context
+pages cap payloads and report truncation explicitly. See [MCP](MCP.md).
+
+## Interactive terminals (current source)
+
+These authenticated routes control a user-operated shell with the current
+OS account's permissions. Opening a workspace view does not start a shell.
+Terminals are separate from agent tools and their approval records.
+
+| Method and path | Input | Response |
+|---|---|---|
+| `GET /api/terminals?project_id=...` | Optional exact project ID | `{terminals}` with metadata and output cursors |
+| `POST /api/terminals` | `{id, project_id, cols, rows}`; stable client UUID | `{terminal}`; retrying the same ID in the project reuses its terminal |
+| `GET /api/terminals/:id?after_seq=0` | Output sequence cursor | `{terminal}` including up to 32 base64 output chunks |
+| `POST /api/terminals/:id/input` | `{sequence, data}`; UTF-8 input of 1–8,192 bytes | `{sequence}`; an exact retry never delivers the input twice |
+| `POST /api/terminals/:id/resize` | `{cols, rows}` | Updated dimensions |
+| `POST /api/terminals/:id/close` | — | `{terminal}` after requesting shutdown |
+
+Each terminal retains up to 1 MiB of output. Compare the requested cursor
+with `first_seq` to detect trimmed history, and keep reading through
+`last_seq`; `output_done` identifies a finished output stream. There are at
+most eight active terminals and 64 retained terminal entries per host.
+Dimensions are 2–500 columns and 1–300 rows. Input is ordered; after an
+uncertain or partial write, the shell is stopped and that input is never
+replayed. Terminals do not survive a host restart. Deliberately detached
+programs are outside the Unix shell-job cleanup guarantee.
 
 ## Product and platform boundaries
 
