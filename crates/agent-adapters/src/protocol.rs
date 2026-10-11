@@ -264,17 +264,17 @@ pub(crate) async fn run(
     let termination = tree.terminate();
     let _ = child.start_kill();
     let wait_result = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    let reaped = matches!(&wait_result, Ok(Ok(_)));
+    let cleaned_up = tree.cleanup_confirmed(&termination, reaped);
     #[cfg(test)]
-    if termination.is_err() || !matches!(&wait_result, Ok(Ok(_))) {
+    if !cleaned_up {
         eprintln!("Fixture process cleanup: termination={termination:?}, wait={wait_result:?}");
     }
-    let terminated = termination.is_ok();
-    let reaped = matches!(wait_result, Ok(Ok(_)));
     stdout_task.abort();
     stderr_task.abort();
     let _ = stdout_task.await;
     let _ = stderr_task.await;
-    if !terminated || !reaped {
+    if !cleaned_up {
         fail(
             &state,
             "Process cleanup could not be confirmed. Inspect Codex processes before starting another run.",

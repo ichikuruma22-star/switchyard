@@ -10,6 +10,31 @@ pub(crate) fn configure(command: &mut Command) {
     );
     command.kill_on_drop(true);
 }
+
+impl ProcessTree {
+    pub(crate) fn cleanup_confirmed(&self, termination: &io::Result<()>, reaped: bool) -> bool {
+        if !reaped {
+            return false;
+        }
+        if termination.is_ok() {
+            return true;
+        }
+        #[cfg(target_os = "macos")]
+        if termination
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(libc::EPERM))
+        {
+            // Darwin's killpg excludes zombies and can return EPERM for an
+            // already-exited leader. After reaping it, accept that error only
+            // when the entire group is absent. Signal 0 cannot kill a reused PID.
+            // SAFETY: pgid is positive; signal 0 only probes the process group.
+            return unsafe { libc::kill(-self.pgid, 0) } != 0
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        }
+        false
+    }
+}
+
 #[cfg(unix)]
 pub(crate) struct ProcessTree {
     pgid: i32,
@@ -50,6 +75,33 @@ impl ProcessTree {
 impl Drop for ProcessTree {
     fn drop(&mut self) {
         let _ = self.terminate();
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn permission_error_requires_reaping_and_an_absent_group() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30");
+        configure(&mut command);
+        let mut child = command.spawn().unwrap();
+        let mut tree = ProcessTree::attach(&child).unwrap();
+        let denied = Err(io::Error::from_raw_os_error(libc::EPERM));
+
+        assert!(!tree.cleanup_confirmed(&denied, false));
+        assert!(!tree.cleanup_confirmed(&denied, true));
+        tree.terminate().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!tree.cleanup_confirmed(&denied, false));
+        assert!(tree.cleanup_confirmed(&denied, true));
+        assert!(!tree.cleanup_confirmed(&Err(io::Error::from_raw_os_error(libc::EIO)), true));
     }
 }
 
