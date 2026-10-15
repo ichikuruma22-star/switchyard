@@ -1,0 +1,49 @@
+{
+  "checkedAt": "2026-10-15T05:22:48.775Z",
+  "versionId": "3206b649-2467-4cde-90ea-b8c40a8ed1f7",
+  "change": "Downloads updated to Switchya 0.1.0-preview.3 (release switchya-v0.1.0-preview.3, asset sha256 5b32faced261321728b04d2b14d1e481cf1725f2c7dc8a1832cbd42a73fff503, anonymous download verified byte-for-byte).",
+  "results": [
+    {
+      "url": "https://switchya.com/",
+      "status": 200,
+      "bytes": 16196,
+      "sha256": "5d195596c7e2632afd2243ee174b90b3758d9039e52f4beff8242f9667f6cb25"
+    },
+    {
+      "url": "https://www.switchya.com/",
+      "status": 200,
+      "bytes": 16196,
+      "sha256": "5d195596c7e2632afd2243ee174b90b3758d9039e52f4beff8242f9667f6cb25"
+    },
+    {
+      "url": "https://switchya.com/site.css",
+      "status": 200,
+      "bytes": 27834,
+      "sha256": "20bf686ed9390fe3915bcb5aa61b6456b5e09a31f7072fe7109d5246f5bca489"
+    },
+    {
+      "url": "https://switchya.com/site.js",
+      "status": 200,
+      "bytes": 1719,
+      "sha256": "cc15a4c69b7770ab863771e1d1adc8c80ffa498f6cbdddda00d95eaf2b2e7619"
+    },
+    {
+      "url": "https://switchya.com/404.html",
+      "status": 200,
+      "bytes": 877,
+      "sha256": "31096a3ff88e7a3e9b4206147c237df15261c9d51644c86cb4a79d227a3dd664"
+    },
+    {
+      "url": "https://switchya.com/sitemap.xml",
+      "status": 200,
+      "bytes": 156,
+      "sha256": "f47b32784befac24598c5c7f92e2f4eed8eae909926f75cb3e10ab19d0e69efe"
+    },
+    {
+      "url": "https://switchya.com/assets/switchya-mark.svg",
+      "status": 200,
+      "bytes": 495,
+      "sha256": "5295d8ae25239f81ebec6ffa85ac49d7e56e3cc21693660208dabdc62bcfb7c9"
+    }
+  ]
+}

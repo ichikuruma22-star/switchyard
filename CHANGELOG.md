@@ -1,5 +1,29 @@
 # Changelog
 
+## Switchya 0.1.0-preview.3 (2026-10-15)
+
+- Managed Codex and Claude Code profiles can be removed from **Accounts**.
+  Removal deletes the profile's private CLI home (its stored sign-in), returns
+  a removed default to the Existing CLI entry, and is refused while the
+  profile has an active run, refresh, sign-in or terminal launch.
+  Conversations that used a removed profile can no longer continue.
+- The built-in agent's "Connect a coding model" notice also offers the
+  existing Codex or Claude Code setup, opening Accounts in Existing agents
+  mode.
+- Sign-in methods: Codex profiles can sign in with a browser or a device
+  code; Claude profiles can use a Claude subscription, Anthropic Console or
+  SSO. The CLI gained `switchya agent login --profile ID [--method …]` and
+  `switchya agent use --profile ID` for terminal-first account switching.
+- Antigravity (`agy`) is a third existing agent: named profiles, terminal
+  sign-in, and read-only plan-mode conversations in the workspace and CLI
+  (`switchya agent run --agent antigravity`). Its CLI has no account-status
+  command, so status stays unknown and runs surface the CLI's own sign-in
+  failures. Gemini CLI is not supported: Google has ended Gemini Code Assist
+  for individuals and directs users to Antigravity.
+- Website: corrected the model-access section — Codex and Claude Code
+  conversations run inside the workspace; opening Claude in its official
+  terminal is optional for managed profiles.
+
 ## 0.1.0
 
 First release.

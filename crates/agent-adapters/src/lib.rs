@@ -6,6 +6,7 @@
 //! conversation resumes the saved agent session with only the new message.
 mod account_process;
 mod accounts;
+mod antigravity;
 mod claude;
 mod discovery;
 mod process_tree;
@@ -184,17 +185,22 @@ impl AdapterManager {
                 "The adapter host is shutting down.".into(),
             ));
         }
-        if !matches!(request.adapter_id.as_str(), "codex" | "claude") {
+        if !matches!(
+            request.adapter_id.as_str(),
+            "codex" | "claude" | "antigravity"
+        ) {
             return Err(AdapterError::Invalid(
-                "Choose Codex or Claude Code to start an agent conversation.".into(),
+                "Choose Codex, Claude Code or Antigravity to start an agent conversation.".into(),
             ));
         }
         if let Some(profile) = &request.profile {
             profile::validate(profile, &request.adapter_id)?;
         }
-        if request.adapter_id == "claude" && !request.profile.as_ref().is_some_and(|p| p.managed) {
+        if matches!(request.adapter_id.as_str(), "claude" | "antigravity")
+            && request.profile.is_none()
+        {
             return Err(AdapterError::Invalid(
-                "Select a managed Claude Code account in Switchya before starting a conversation."
+                "Select an account for this agent in Switchya before starting a conversation."
                     .into(),
             ));
         }
@@ -333,7 +339,17 @@ impl AdapterManager {
         let task_state = state.clone();
         let shutdown = self.inner.shutdown.child_token();
         let task = tokio::spawn(async move {
-            if adapter_id == "claude" {
+            if adapter_id == "antigravity" {
+                antigravity::run(
+                    executable,
+                    prefix_args,
+                    input,
+                    task_state,
+                    receiver,
+                    shutdown,
+                )
+                .await;
+            } else if adapter_id == "claude" {
                 claude::run(
                     executable,
                     prefix_args,

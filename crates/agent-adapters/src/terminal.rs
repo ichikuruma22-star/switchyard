@@ -4,7 +4,7 @@ use std::path::Path;
 /// An explicit user action starts the official CLI in its own interactive
 /// terminal. This external session is not tracked or stopped by Switchya.
 pub fn launch_profile_terminal(binding: &ProfileBinding, project: &Path) -> Result<()> {
-    crate::profile::validate(binding, "claude")?;
+    crate::profile::validate(binding, &binding.agent_id)?;
     if !binding.managed {
         return Err(AdapterError::Invalid(
             "Only managed Claude profiles can open an external terminal.".into(),
@@ -15,8 +15,8 @@ pub fn launch_profile_terminal(binding: &ProfileBinding, project: &Path) -> Resu
             "Open a project directory before starting Claude Code.".into(),
         ));
     }
-    let executable = crate::discovery::find_cli("claude").ok_or_else(|| {
-        AdapterError::Unavailable("Claude Code native executable was not found.".into())
+    let executable = crate::discovery::find_cli(&binding.agent_id).ok_or_else(|| {
+        AdapterError::Unavailable("The agent's native executable was not found.".into())
     })?;
     launch(&executable, binding, project)
 }

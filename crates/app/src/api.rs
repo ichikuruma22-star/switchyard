@@ -121,6 +121,10 @@ pub(crate) fn router(
             post(crate::accounts::select),
         )
         .route(
+            "/api/account-profiles/{id}/remove",
+            post(crate::accounts::remove),
+        )
+        .route(
             "/api/account-profiles/{id}/terminal",
             post(crate::accounts::launch_terminal),
         )
@@ -782,10 +786,37 @@ mod tests {
         let harness = Harness::new().await;
         let (status, initial) = harness.request("GET", "/api/account-profiles", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(initial["profiles"].as_array().unwrap().len(), 1);
+        assert_eq!(initial["profiles"].as_array().unwrap().len(), 3);
         assert_eq!(initial["profiles"][0]["id"], "system-codex");
         assert_eq!(initial["profiles"][0]["read_only"], true);
         assert_eq!(initial["profiles"][0]["refreshing"], false);
+        assert_eq!(initial["profiles"][1]["id"], "system-claude");
+        assert_eq!(initial["profiles"][1]["name"], "Existing Claude CLI");
+        assert_eq!(initial["profiles"][1]["agent_id"], "claude");
+        assert_eq!(initial["profiles"][1]["managed"], false);
+        assert_eq!(initial["profiles"][1]["read_only"], true);
+        assert_eq!(initial["profiles"][1]["account"]["auth_status"], "unknown");
+        for (id, agent) in [("system-codex", "codex"), ("system-claude", "claude")] {
+            let (status, selected) = harness
+                .request(
+                    "POST",
+                    &format!("/api/account-profiles/{id}/select"),
+                    Some(json!({})),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(selected["defaults"][agent], id);
+            assert_eq!(selected["profile"]["selected"], true);
+            let (status, rejected) = harness
+                .request(
+                    "POST",
+                    &format!("/api/account-profiles/{id}/login"),
+                    Some(json!({})),
+                )
+                .await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(rejected["error"]["code"], "system_profile_read_only");
+        }
         let (status, created) = harness
             .request(
                 "POST",
@@ -804,6 +835,23 @@ mod tests {
             .await;
         assert_eq!(status, StatusCode::OK);
         assert!(login["login"].is_null());
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/login"),
+                Some(json!({"method":"console"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], "invalid_login_method");
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/login"),
+                Some(json!({"method":"device","extra":true})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
         let (status, selected) = harness
             .request(
                 "POST",
@@ -834,6 +882,37 @@ mod tests {
         assert_eq!(rejected["error"]["code"], "profile_not_signed_in");
         let (_, runs) = harness.request("GET", "/api/adapter-runs", None).await;
         assert!(runs["runs"].as_array().unwrap().is_empty());
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                "/api/account-profiles/system-codex/remove",
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(rejected["error"]["code"], "system_profile_read_only");
+        let (status, removed) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/remove"),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{removed}");
+        assert_eq!(removed["removed"], id);
+        assert_eq!(removed["defaults"]["codex"], "system-codex");
+        let (status, after) = harness.request("GET", "/api/account-profiles", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after["profiles"].as_array().unwrap().len(), 3);
+        let (status, missing) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/remove"),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["error"]["code"], "profile_not_found");
         harness.runtime.shutdown().await.unwrap();
     }
 

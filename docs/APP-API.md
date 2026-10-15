@@ -39,7 +39,7 @@ After inspecting the affected files or command results, a user can acknowledge r
 
 ## Existing-agent runs
 
-These routes drive the Codex and Claude Code adapters described in [the adapter contract](AGENT-ADAPTERS.md). They use the same authentication, Origin and JSON body rules. `adapter_id` is `codex` or `claude`; Claude requires a managed profile for that agent.
+These routes drive the Codex and Claude Code adapters described in [the adapter contract](AGENT-ADAPTERS.md). They use the same authentication, Origin and JSON body rules. `adapter_id` is `codex` or `claude`; Claude requires a selected profile for that agent: built-in `system-claude` (Existing Claude CLI) or a managed profile with a confirmed sign-in. The built-in `system-codex` and `system-claude` accounts are selectable and inspectable, but reject login actions.
 
 | Method and path | Input | Response |
 |---|---|---|

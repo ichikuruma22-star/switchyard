@@ -14,8 +14,18 @@ export function mergeAdapterEvents(previous,incoming,runId) {
   const bySeq=new Map();for(const event of [...previous,...incoming])if(event.run_id===runId&&Number.isSafeInteger(event.seq))bySeq.set(event.seq,event);
   return [...bySeq.values()].sort((a,b)=>a.seq-b.seq).slice(-600);
 }
+const LIFECYCLE_FIELDS=['id','type','status'];
+const emptyValue=value=>value===null||value===undefined||value===''||(Array.isArray(value)&&!value.length)||(typeof value==='object'&&!Array.isArray(value)&&!Object.keys(value).length);
+/** True when an item event only announces an item's existence: nothing to read.
+ * A reported failure or decline is an outcome, so it is never hidden. */
+export function lifecycleOnlyItem(item) {
+  if(!item||typeof item!=='object')return false;
+  if(item.status&&!['inProgress','completed'].includes(item.status))return false;
+  return Object.entries(item).every(([key,value])=>LIFECYCLE_FIELDS.includes(key)||emptyValue(value));
+}
 export function adapterTranscript(events) {
   const items=[],streams=new Map(),codexItems=new Map();
+  const itemEvent=event=>event.kind==='item_started'||event.kind==='item_completed';
   for(const event of events){
     const p=event.payload||{};
     if(event.kind==='user_task')items.push({...event,type:'user',text:typeof p.text==='string'?p.text:''});
@@ -23,18 +33,27 @@ export function adapterTranscript(events) {
       const key=p.item_id||'assistant';let item=streams.get(key);
       if(!item){item={...event,type:'assistant',text:''};streams.set(key,item);items.push(item);}
       item.text+=typeof p.text==='string'?p.text:'';
-    }else if(event.kind==='item_completed'&&p.item?.type==='agentMessage'){
-      const key=p.item.id||'assistant';const stream=streams.get(key);
-      if(stream)stream.text=typeof p.item.text==='string'?p.item.text:stream.text;
-      else items.push({...event,type:'assistant',text:p.item.text||''});
-      streams.delete(key);
-    }else if((event.kind==='item_started'||event.kind==='item_completed')&&['commandExecution','fileChange','claudeTool'].includes(p.item?.type)){
+    }else if(itemEvent(event)&&p.item?.type==='agentMessage'){
+      // One bubble per message: its deltas, started announcement and completion all
+      // carry the same item ID. A completion's nonempty text is the final message, even
+      // when it corrects streamed text to something shorter; an empty text is lifecycle
+      // only and never erases text. A started announcement only adds text the deltas
+      // have not delivered yet.
+      const id=typeof p.item.id==='string'?p.item.id:'',key=id||'assistant';
+      const stream=streams.get(key),text=typeof p.item.text==='string'?p.item.text:'';
+      if(stream){if(text&&(event.kind==='item_completed'||text.length>stream.text.length))stream.text=text;}
+      else if(text){const started={...event,type:'assistant',text};streams.set(key,started);items.push(started);}
+      // A real ID keeps its bubble, so a repeated completion updates it in place.
+      if(event.kind==='item_completed'&&!id)streams.delete(key);
+    }else if(itemEvent(event)&&['commandExecution','fileChange','claudeTool'].includes(p.item?.type)){
       // One entry per tool: its completion replaces the started view in place.
       const key=typeof p.item.id==='string'?p.item.id:'';const known=key&&codexItems.get(key);
       if(known)Object.assign(known,{kind:event.kind,item:p.item,last_seq:event.seq});
       else{const entry={...event,type:p.item.type==='claudeTool'?'claude_item':'codex_item',item:p.item};items.push(entry);if(key)codexItems.set(key,entry);}
     }else if(event.kind==='approval_resolved')items.push({...event,type:'decision',decision:p.decision});
-    else items.push({...event,type:'activity'});
+    // Started/completed pairs that report only an ID and type (for example an
+    // empty reasoning step) are duplicate lifecycle noise around real activity.
+    else if(!(itemEvent(event)&&lifecycleOnlyItem(p.item)))items.push({...event,type:'activity'});
   }
   return items;
 }
@@ -135,9 +154,11 @@ export function CodexItem({entry}) {
   return html`<details class="operation-history codex-item"><summary><${Icon} name=${s.kind==='files'?'edit':'command'}/><span><strong>${s.title}</strong> <code class="codex-item-headline">${headline||'Not reported'}</code></span><span class="status-label" data-tone=${s.tone}>${s.statusLabel}</span></summary>${s.kind==='command'?html`<${CommandBlock} command=${s.command} cwd=${s.cwd}/>${s.exitCode!==null?html`<p class="exit-status">Exit code <code>${s.exitCode}</code></p>`:s.status&&s.status!=='inProgress'&&html`<p class="exit-status field-hint">Exit code not reported.</p>`}${s.output?html`<${RawValue} value=${s.output} label="Command output reported by Codex"/>`:html`<p class="field-hint">${s.output===null?'Codex did not report output.':'No output was reported.'}</p>`}`:html`<${FileChanges} changes=${s.changes} verb="Recorded"/>`}<details class="operation-details result-details"><summary>Details (exact Codex item)</summary><${RawValue} value=${entry.item} label="Exact Codex item"/></details></details>`;
 }
 
+// Claude Code runs shell work through Bash or PowerShell depending on the host.
+const SHELL_TOOLS=['Bash','PowerShell'];
 function ClaudeToolInput({name,input}) {
   const path=text(input.file_path)||text(input.notebook_path);
-  return html`<div class="command-review">${path&&html`<dl class="command-location"><dt>File</dt><dd><code>${path}</code></dd></dl>`}${name==='Bash'&&text(input.command)&&html`<${RawValue} value=${input.command} label="Exact Claude Code command"/><${CopyButton} text=${input.command} label="Copy command"/>`}${name==='Write'&&typeof input.content==='string'&&html`<${RawValue} value=${input.content} label="Proposed file contents"/>`}${name==='Edit'&&html`${typeof input.old_string==='string'&&html`<p class="field-hint">Replace this exact text</p><${RawValue} value=${input.old_string} label="Text to replace"/>`}${typeof input.new_string==='string'&&html`<p class="field-hint">With this text</p><${RawValue} value=${input.new_string} label="Replacement text"/>`}`}<details class="operation-details"><summary>Exact tool input</summary><${RawValue} value=${input} label="Exact Claude Code tool input"/></details></div>`;
+  return html`<div class="command-review">${path&&html`<dl class="command-location"><dt>File</dt><dd><code>${path}</code></dd></dl>`}${SHELL_TOOLS.includes(name)&&text(input.command)&&html`<${RawValue} value=${input.command} label=${`Exact Claude Code ${name} command`}/><${CopyButton} text=${input.command} label="Copy command"/>`}${name==='Write'&&typeof input.content==='string'&&html`<${RawValue} value=${input.content} label="Proposed file contents"/>`}${name==='Edit'&&html`${typeof input.old_string==='string'&&html`<p class="field-hint">Replace this exact text</p><${RawValue} value=${input.old_string} label="Text to replace"/>`}${typeof input.new_string==='string'&&html`<p class="field-hint">With this text</p><${RawValue} value=${input.new_string} label="Replacement text"/>`}`}<details class="operation-details"><summary>Exact tool input</summary><${RawValue} value=${input} label="Exact Claude Code tool input"/></details></div>`;
 }
 
 export function ClaudeItem({entry}) {
@@ -150,6 +171,8 @@ function AdapterReview({run,onDecision,busy,error,connected}) {
   const approvals=run?.pending_approvals||[],agent=agentName(run?.adapter_id)||'Agent';
   const scope=run?.adapter_id==='claude'
     ?"Allow once approves only the tool input shown. Existing CLI permission rules still apply. Tools run with your OS permissions."
+    :run?.adapter_id==='antigravity'
+    ?"Antigravity runs in plan mode: it inspects and answers but cannot apply edits, so there are no approval requests. Tools run with your OS permissions."
     :"Allow once permits the displayed command or file change with your OS permissions. The CLI enforces its own sandbox.";
   return html`<header class="review-header"><h2>Agent review</h2><span class="field-hint">${approvals.length?`${approvals.length} pending`:'No pending decisions'}</span></header><div class="review-content">
     ${error&&html`<${Notice} title="Decision could not be confirmed" tone="stop">${error}<//>`}

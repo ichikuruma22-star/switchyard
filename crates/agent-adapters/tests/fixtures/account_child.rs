@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 fn main() {
     let scenario = std::env::args().nth(1).unwrap_or_default();
     if scenario == "claude_status" {
+        assert_eq!(std::env::args().skip(2).collect::<Vec<_>>(), ["auth", "status", "--json"]);
         println!(r#"{{"loggedIn":false,"secret":"fixture-do-not-forward"}}"#);
         return;
     }
@@ -52,13 +53,24 @@ fn main() {
             );
         } else if line.contains("account/login/start") {
             assert!(scenario.starts_with("login_"));
-            println!(
-                r#"{{"id":3,"result":{{"type":"chatgpt","loginId":"fixture-login","authUrl":"https://auth.openai.com/oauth/authorize?state=fixture"}}}}"#
-            );
-            if scenario == "login_success" {
+            if scenario == "login_device" {
+                assert!(line.contains(r#""type":"chatgptDeviceCode""#), "device sign-in must request the device-code flow: {line}");
+                println!(
+                    r#"{{"id":3,"result":{{"type":"chatgptDeviceCode","loginId":"fixture-login","userCode":"ABCD-1234","verificationUrl":"https://auth.openai.com/deviceauth?state=fixture"}}}}"#
+                );
                 println!(
                     r#"{{"method":"account/login/completed","params":{{"loginId":"fixture-login","success":true}}}}"#
                 );
+            } else {
+                assert!(line.contains(r#""type":"chatgpt""#), "browser sign-in must request the browser flow: {line}");
+                println!(
+                    r#"{{"id":3,"result":{{"type":"chatgpt","loginId":"fixture-login","authUrl":"https://auth.openai.com/oauth/authorize?state=fixture"}}}}"#
+                );
+                if scenario == "login_success" {
+                    println!(
+                        r#"{{"method":"account/login/completed","params":{{"loginId":"fixture-login","success":true}}}}"#
+                    );
+                }
             }
         } else if line.contains("account/login/cancel") {
             println!(r#"{{"id":4,"result":{{"status":"canceled"}}}}"#);

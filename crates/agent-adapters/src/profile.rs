@@ -3,7 +3,7 @@ use serde_json::Value;
 use tokio::process::Command;
 
 pub(crate) fn validate(profile: &ProfileBinding, agent: &str) -> Result<()> {
-    if profile.agent_id != agent || !matches!(agent, "codex" | "claude") {
+    if profile.agent_id != agent || !matches!(agent, "codex" | "claude" | "antigravity") {
         return Err(AdapterError::Invalid(
             "Account profile does not match the selected agent.".into(),
         ));
@@ -13,7 +13,14 @@ pub(crate) fn validate(profile: &ProfileBinding, agent: &str) -> Result<()> {
             "Managed account directory is unavailable.".into(),
         ));
     }
-    if !profile.managed && (profile.id != "system-codex" || agent != "codex") {
+    if !profile.managed
+        && !matches!(
+            (profile.id.as_str(), agent),
+            ("system-codex", "codex")
+                | ("system-claude", "claude")
+                | ("system-antigravity", "antigravity")
+        )
+    {
         return Err(AdapterError::Invalid(
             "Unknown existing CLI profile.".into(),
         ));
@@ -35,6 +42,8 @@ pub(crate) fn configure(command: &mut Command, profile: Option<&ProfileBinding>)
                 "CHATGPT_",
                 "AZURE_OPENAI_",
                 "ANTHROPIC_",
+                "ANTIGRAVITY_",
+                "GEMINI_",
                 "CLAUDE_",
                 "AWS_",
                 "GOOGLE_",
@@ -53,16 +62,21 @@ pub(crate) fn configure(command: &mut Command, profile: Option<&ProfileBinding>)
         }
     }
     if let Some(profile) = profile.filter(|p| p.managed) {
-        command.env(
-            if profile.agent_id == "codex" {
-                "CODEX_HOME"
-            } else {
-                "CLAUDE_CONFIG_DIR"
-            },
-            &profile.home,
-        );
-        if profile.agent_id == "codex" {
-            command.args(["-c", "cli_auth_credentials_store=\"file\""]);
+        match profile.agent_id.as_str() {
+            "codex" => {
+                command.env("CODEX_HOME", &profile.home);
+                command.args(["-c", "cli_auth_credentials_store=\"file\""]);
+            }
+            "antigravity" => {
+                // The CLI keeps its state under ~/.gemini/antigravity-cli;
+                // redirecting the child home scopes that state (including
+                // saved conversations) to this profile.
+                command.env("HOME", &profile.home);
+                command.env("USERPROFILE", &profile.home);
+            }
+            _ => {
+                command.env("CLAUDE_CONFIG_DIR", &profile.home);
+            }
         }
     }
 }
@@ -111,6 +125,68 @@ mod tests {
             &json!({"codexHome":"/wrong-profile"}),
             Some(&profile)
         ));
+    }
+
+    #[test]
+    fn existing_profiles_preserve_cli_configuration_and_reject_unknown_identities() {
+        for (id, agent) in [("system-codex", "codex"), ("system-claude", "claude")] {
+            let profile = ProfileBinding {
+                id: id.into(),
+                name: "Existing CLI".into(),
+                agent_id: agent.into(),
+                home: std::path::PathBuf::new(),
+                managed: false,
+            };
+            validate(&profile, agent).unwrap();
+            let mut command = Command::new("fixture");
+            configure(&mut command, Some(&profile));
+            assert_eq!(command.as_std().get_args().count(), 0);
+            assert!(command.as_std().get_current_dir().is_none());
+            // An existing profile inherits auth, endpoints, configuration and
+            // runtime options. Only parent Codex routing can be removed.
+            for (key, value) in command.as_std().get_envs() {
+                let key = key.to_string_lossy().to_ascii_uppercase();
+                assert!(key.starts_with("CODEX_INTERNAL_") || key.starts_with("CODEX_APP_SERVER_"));
+                assert!(value.is_none());
+            }
+            let mut invalid = profile.clone();
+            invalid.id = "unregistered".into();
+            assert!(validate(&invalid, agent).is_err());
+            invalid.id = if agent == "codex" {
+                "system-claude"
+            } else {
+                "system-codex"
+            }
+            .into();
+            assert!(validate(&invalid, agent).is_err());
+            assert!(validate(&profile, if agent == "codex" { "claude" } else { "codex" }).is_err());
+        }
+    }
+
+    #[test]
+    fn managed_claude_still_uses_its_private_config_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut profile = ProfileBinding {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            agent_id: "claude".into(),
+            home: dir.path().canonicalize().unwrap(),
+            managed: true,
+        };
+        validate(&profile, "claude").unwrap();
+        let mut command = Command::new("fixture");
+        configure(&mut command, Some(&profile));
+        assert_eq!(
+            command
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "CLAUDE_CONFIG_DIR")
+                .and_then(|(_, value)| value),
+            Some(profile.home.as_os_str())
+        );
+        assert_eq!(command.as_std().get_args().count(), 0);
+        profile.home = dir.path().join("missing");
+        assert!(validate(&profile, "claude").is_err());
     }
 
     #[test]

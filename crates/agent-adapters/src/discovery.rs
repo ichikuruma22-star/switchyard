@@ -13,10 +13,11 @@ use tokio::{io::AsyncReadExt, process::Command};
 /// Resolve only native executable names. Windows .cmd/.bat shims are deliberately
 /// excluded: a shell must never interpret a discovered path or the user prompt.
 pub(crate) fn find_cli(id: &str) -> Option<PathBuf> {
+    let binary = if id == "antigravity" { "agy" } else { id };
     let name = if cfg!(windows) {
-        format!("{id}.exe")
+        format!("{binary}.exe")
     } else {
-        id.to_owned()
+        binary.to_owned()
     };
     let mut candidates = Vec::new();
     if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
@@ -34,7 +35,12 @@ pub(crate) fn find_cli(id: &str) -> Option<PathBuf> {
                 candidates.push(home.join(".cargo/bin").join(&name));
             }
             "claude" => candidates.push(home.join(".local/bin").join(&name)),
-            "omp" => candidates.push(home.join(".bun/bin").join(&name)),
+            "antigravity" => {
+                if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                    candidates.push(PathBuf::from(local).join("agy/bin").join(&name));
+                }
+                candidates.push(home.join(".local/bin").join(&name));
+            }
             _ => return None,
         }
     }
@@ -120,6 +126,7 @@ pub(crate) async fn discover() -> Vec<AdapterStatus> {
     for (id, name) in [
         ("codex", "Codex"),
         ("claude", "Claude Code"),
+        ("antigravity", "Antigravity"),
         ("omp", "Oh My Pi"),
     ] {
         let executable = find_cli(id);
@@ -128,7 +135,7 @@ pub(crate) async fn discover() -> Vec<AdapterStatus> {
             Some(path) => version(path).await,
             None => None,
         };
-        let supported = matches!(id, "codex" | "claude");
+        let supported = matches!(id, "codex" | "claude" | "antigravity");
         let status = if !installed {
             "not_installed"
         } else if !supported {
