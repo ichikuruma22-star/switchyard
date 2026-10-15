@@ -124,9 +124,13 @@ pub(crate) fn upstream_ctx(lease: &Lease) -> UpstreamCtx<'_> {
 /// The field of a Responses request that continues state stored at the
 /// vendor, if it has one. Only a Responses upstream can look that state up:
 /// translated for another, the request would be answered without the
-/// history it names, and the reply would still echo the field.
+/// history it names, and the reply would still echo the field. Other
+/// protocols define no such fields: a stray `conversation` in their `extra`
+/// is foreign and ignored like any other.
 fn stored_state(request: &Request) -> Option<&'static str> {
-    if request.previous_response_id.is_some() {
+    if request.source != Protocol::OpenaiResponses {
+        None
+    } else if request.previous_response_id.is_some() {
         Some("previous_response_id")
     } else if request.extra.contains_key("conversation") {
         Some("conversation")

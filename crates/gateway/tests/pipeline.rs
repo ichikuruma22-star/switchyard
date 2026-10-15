@@ -188,6 +188,23 @@ async fn stored_responses_are_continued_only_by_a_responses_upstream() {
         .await;
     assert_eq!(output.status, 200);
     assert_eq!(harness.fake.last().wire, Some(Wire::Anthropic));
+
+    // Other protocols define no stored state: a stray `conversation` in their
+    // body is a foreign extra, ignored as ever.
+    let output = harness
+        .ask_with(
+            Protocol::OpenaiChat,
+            json!({
+                "model": "m-anthropic",
+                "messages": [{"role": "user", "content": "hi"}],
+                "conversation": null,
+            }),
+            "m-anthropic",
+            false,
+        )
+        .await;
+    assert_eq!(output.status, 200, "{}", output.json());
+    assert_eq!(harness.fake.last().wire, Some(Wire::Anthropic));
 }
 
 // ---------------------------------------------------------------------------
