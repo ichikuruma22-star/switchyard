@@ -1141,18 +1141,63 @@ fn encode_json_object_mode_becomes_a_system_instruction() {
 }
 
 #[test]
-fn encode_json_schema_and_effort_share_output_config() {
+fn encode_json_schema_with_a_map_becomes_a_system_instruction() {
+    // What pydantic emits for `Dict[str, int]`. Closed, as the dialect
+    // demands, the map could only ever be `{}`.
+    let schema = json!({"type": "object",
+                        "properties": {"scores": {"type": "object",
+                                                  "additionalProperties": {"type": "integer"}}},
+                        "required": ["scores"]});
     let mut req = request(vec![Message::user_text("hi")]);
+    req.response_format = Some(ResponseFormat::JsonSchema {
+        name: Some("scores".into()),
+        description: None,
+        schema: schema.clone(),
+        strict: Some(false),
+    });
+    let body = encode_request(&req);
+    assert!(body.get("output_config").is_none());
+    assert_eq!(
+        body["system"],
+        json!([{"type": "text", "text": format!(
+            "Respond with a single valid JSON value that conforms to the JSON Schema below and \
+             nothing else: no explanations and no markdown code fences.\nSchema name: scores\n\
+             JSON Schema:\n{schema}"
+        )}])
+    );
+    // Any object at all is described the same way.
     req.response_format = Some(ResponseFormat::JsonSchema {
         name: None,
         description: None,
         schema: json!({"type": "object"}),
         strict: None,
     });
+    let body = encode_request(&req);
+    assert!(body.get("output_config").is_none());
+    assert_eq!(
+        body["system"],
+        json!([{"type": "text", "text":
+            "Respond with a single valid JSON value that conforms to the JSON Schema below and \
+             nothing else: no explanations and no markdown code fences.\nJSON Schema:\n\
+             {\"type\":\"object\"}"}])
+    );
+}
+
+#[test]
+fn encode_json_schema_and_effort_share_output_config() {
+    let mut req = request(vec![Message::user_text("hi")]);
+    let schema = json!({"type": "object", "properties": {"answer": {"type": "string"}}});
+    req.response_format = Some(ResponseFormat::JsonSchema {
+        name: None,
+        description: None,
+        schema: schema.clone(),
+        strict: None,
+    });
     req.reasoning = Some(ReasoningConfig::with_depth(Depth::Level(Effort::Low)));
     // The schema was written for another protocol, so it is fitted to the
     // dialect `output_config.format` takes: objects are closed.
-    let fitted = json!({"type": "object", "additionalProperties": false});
+    let fitted = json!({"type": "object", "properties": {"answer": {"type": "string"}},
+                        "additionalProperties": false});
     assert_eq!(
         encode_request(&req)["output_config"],
         json!({"format": {"type": "json_schema", "schema": fitted}, "effort": "low"})
@@ -1167,7 +1212,7 @@ fn encode_json_schema_and_effort_share_output_config() {
     req.source = Protocol::Anthropic;
     assert_eq!(
         encode_request(&req)["output_config"],
-        json!({"format": {"type": "json_schema", "schema": {"type": "object"}}})
+        json!({"format": {"type": "json_schema", "schema": schema}})
     );
 }
 
