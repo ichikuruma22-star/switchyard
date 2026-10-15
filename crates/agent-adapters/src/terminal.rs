@@ -7,12 +7,12 @@ pub fn launch_profile_terminal(binding: &ProfileBinding, project: &Path) -> Resu
     crate::profile::validate(binding, &binding.agent_id)?;
     if !binding.managed {
         return Err(AdapterError::Invalid(
-            "Only managed Claude profiles can open an external terminal.".into(),
+            "Only managed profiles can open an external terminal.".into(),
         ));
     }
     if !project.is_absolute() || !project.is_dir() {
         return Err(AdapterError::Invalid(
-            "Open a project directory before starting Claude Code.".into(),
+            "Open a project directory before starting the agent's terminal.".into(),
         ));
     }
     let executable = crate::discovery::find_cli(&binding.agent_id).ok_or_else(|| {
@@ -106,7 +106,7 @@ fn launch(executable: &Path, binding: &ProfileBinding, project: &Path) -> Result
     };
     if ok == 0 {
         return Err(AdapterError::Unavailable(
-            "Windows could not open Claude Code in a new terminal.".into(),
+            "Windows could not open the agent in a new terminal.".into(),
         ));
     }
     // SAFETY: successful CreateProcessW returns these two owned handles. The

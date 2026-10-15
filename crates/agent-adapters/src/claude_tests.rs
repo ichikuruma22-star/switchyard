@@ -242,6 +242,29 @@ async fn claude_partial_text_uses_the_shared_transcript_contract_before_completi
 }
 
 #[tokio::test]
+async fn claude_text_after_thinking_replaces_its_streamed_fragments() {
+    let manager = AdapterManager::new();
+    let (_directory, run) = start(&manager, "thinking");
+    let finished = wait(&manager, &run.id, |run| !run.state.is_active()).await;
+    assert_eq!(finished.state, RunState::Completed);
+    let events = manager.events(&run.id, 0, 200).unwrap();
+    assert!(!events.iter().any(|event| event.kind == "assistant_delta"));
+    let messages: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event.payload.pointer("/item/type").and_then(Value::as_str) == Some("agentMessage")
+        })
+        .collect();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages[0].payload["item"]["id"],
+        "claude-root-msg-fixture-1"
+    );
+    assert_eq!(messages[0].payload["item"]["text"], "Fixture text");
+    manager.shutdown().await;
+}
+
+#[tokio::test]
 async fn claude_protocol_faults_and_exit_without_idle_require_review() {
     for scenario in [
         "wrong_session",

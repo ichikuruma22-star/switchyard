@@ -13,7 +13,7 @@ use crate::{
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     path::PathBuf,
     process::Stdio,
     sync::Arc,
@@ -486,6 +486,10 @@ fn resolve(
 #[derive(Default)]
 struct Transcript {
     streams: BTreeMap<String, String>,
+    /// Stream indices of started text blocks not yet completed, per parent and
+    /// message. Claude Code sends each finished block as its own assistant
+    /// message, so a block's position there is not its stream index.
+    texts: BTreeMap<String, (String, VecDeque<u64>)>,
     tools: BTreeMap<String, Value>,
     has_text: bool,
 }
@@ -512,6 +516,24 @@ impl Transcript {
                                 ));
                             }
                             self.streams.insert(parent.into(), id.into());
+                        }
+                    }
+                    Some("content_block_start")
+                        if event.pointer("/content_block/type").and_then(Value::as_str)
+                            == Some("text") =>
+                    {
+                        if let (Some(id), Some(index)) = (
+                            self.streams.get(parent),
+                            event.get("index").and_then(Value::as_u64),
+                        ) && (self.texts.len() < 64 || self.texts.contains_key(parent))
+                        {
+                            let started = self.texts.entry(parent.into()).or_default();
+                            if started.0 != *id {
+                                *started = (id.clone(), VecDeque::new());
+                            }
+                            if started.1.len() < 256 {
+                                started.1.push_back(index);
+                            }
                         }
                     }
                     Some("content_block_delta")
@@ -544,10 +566,14 @@ impl Transcript {
                     .pointer("/message/content")
                     .and_then(Value::as_array)
                 {
-                    for (index, block) in blocks.iter().enumerate() {
+                    for (position, block) in blocks.iter().enumerate() {
                         if block["type"] == "text"
                             && let Some(text) = block.get("text").and_then(Value::as_str)
                         {
+                            // Use the streamed block's index so the completed item
+                            // replaces its fragments. Without a recorded start, the
+                            // message holds its whole content in stream order.
+                            let index = self.completed_text(parent, id).unwrap_or(position as u64);
                             self.has_text |= !text.is_empty();
                             state.lock().event("item_completed", json!({"item":{"type":"agentMessage","id":format!("claude-{parent}-{id}-{index}"),"text":text}}));
                         } else if block["type"] == "tool_use"
@@ -598,6 +624,19 @@ impl Transcript {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The stream index of this message's next started text block, if any.
+    fn completed_text(&mut self, parent: &str, id: &str) -> Option<u64> {
+        let (message, started) = self.texts.get_mut(parent)?;
+        if message != id {
+            return None;
+        }
+        let index = started.pop_front();
+        if started.is_empty() {
+            self.texts.remove(parent);
+        }
+        index
     }
 }
 
