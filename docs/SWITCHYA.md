@@ -309,6 +309,10 @@ Current source also supports `--agent claude`; omitting `--agent` selects Codex.
 
 ```powershell
 switchya agent accounts
+switchya agent add --agent codex --name "Work"
+switchya agent login --profile PROFILE_ID --method device
+switchya agent use --profile PROFILE_ID
+switchya agent remove --profile PROFILE_ID
 switchya agent run --project C:\work\my-project --profile system-codex --prompt 'Explain this project'
 switchya agent run --agent claude --project C:\work\my-project --profile system-claude --prompt 'Explain this project'
 switchya agent sessions
@@ -319,8 +323,8 @@ switchya agent watch --run RUN_ID
 
 `continue` takes the latest finished run ID from `agent sessions` and preserves
 its agent, project and account. It sends only the new prompt. A managed account must
-already be signed in through the app; starting a run checks its status when
-needed. Listing accounts shows cached status and does not inspect credentials.
+already be signed in — in the app, or with `agent login` above; starting a run checks
+its status when needed. Listing accounts shows cached status and does not inspect credentials.
 
 While the app stays open, put `--launch-info PATH_TO_PRIVATE_LAUNCH_FILE` before
 `agent` to connect to its host. Without that option the CLI owns a temporary

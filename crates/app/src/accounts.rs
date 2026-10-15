@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use switchyard_agent_adapters::{
     AccountRuntime, AccountSnapshot, AccountUsage, AdapterManager, AdapterRun, LoginJob,
-    ProfileBinding, StartRequest, launch_profile_terminal, official_auth_url,
+    ProfileBinding, StartRequest, default_login_method, launch_profile_terminal, official_auth_url,
+    valid_login_method,
 };
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -671,6 +672,7 @@ impl AccountManager {
         &self,
         id: &str,
         adapters: &AdapterManager,
+        method: Option<&str>,
     ) -> Result<LoginJob> {
         self.ensure_running()?;
         let binding = {
@@ -681,6 +683,16 @@ impl AccountManager {
                     StatusCode::CONFLICT,
                     "system_profile_read_only",
                     "Existing CLI accounts are read-only here. Create a managed profile to sign in.",
+                ));
+            }
+            let method = method
+                .map(str::to_owned)
+                .unwrap_or_else(|| default_login_method(&binding.agent_id).to_owned());
+            if !valid_login_method(&binding.agent_id, &method) {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_login_method",
+                    "Choose a supported sign-in method for this account.",
                 ));
             }
             let cached = state
@@ -706,10 +718,16 @@ impl AccountManager {
                 ));
             }
             cached.login_busy = true;
-            binding
+            (binding, method)
         };
+        let (binding, method) = binding;
         // AccountRuntime registers and returns synchronously on its first poll.
-        let job = match self.inner.runtime.start_login(binding.clone()).await {
+        let job = match self
+            .inner
+            .runtime
+            .start_login(binding.clone(), &method)
+            .await
+        {
             Ok(job) => job,
             Err(error) => {
                 if let Some(cached) = lock(&self.inner.state).cache.get_mut(id) {
@@ -1132,6 +1150,12 @@ struct OpenTerminal {
     project_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartLogin {
+    method: Option<String>,
+}
+
 pub(crate) async fn list(
     State(state): State<Arc<AppState>>,
     request: Request,
@@ -1167,8 +1191,11 @@ pub(crate) async fn start_login(
     RoutePath(id): RoutePath<String>,
     request: Request,
 ) -> Result<impl IntoResponse> {
-    let _: Empty = body(request).await?;
-    let login = state.accounts.begin_login(&id, &state.adapters).await?;
+    let input: StartLogin = body(request).await?;
+    let login = state
+        .accounts
+        .begin_login(&id, &state.adapters, input.method.as_deref())
+        .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({"login":login}))))
 }
 
@@ -1453,11 +1480,16 @@ mod tests {
         let profile = manager.create_profile("codex", "Work").unwrap();
         let adapters = AdapterManager::new();
         for id in [SYSTEM_CODEX, SYSTEM_CLAUDE] {
-            let error = manager.begin_login(id, &adapters).await.unwrap_err();
+            let error = manager.begin_login(id, &adapters, None).await.unwrap_err();
             assert_eq!(error.code, "system_profile_read_only");
             assert!(manager.cached_login(id).unwrap().is_none());
         }
-        assert!(manager.begin_login(&profile.id, &adapters).await.is_err());
+        assert!(
+            manager
+                .begin_login(&profile.id, &adapters, None)
+                .await
+                .is_err()
+        );
         let request = || StartRequest {
             adapter_id: "codex".into(),
             project_path: temp.path().to_owned(),
@@ -1480,13 +1512,23 @@ mod tests {
             .start_run(&adapters, request(), Some(&profile.id))
             .unwrap_err();
         assert_eq!(error.code, "profile_busy");
-        assert!(manager.begin_login(&profile.id, &adapters).await.is_err());
+        assert!(
+            manager
+                .begin_login(&profile.id, &adapters, None)
+                .await
+                .is_err()
+        );
         lock(&manager.inner.state)
             .cache
             .get_mut(&profile.id)
             .unwrap()
             .login_busy = false;
-        assert!(manager.begin_login(&profile.id, &adapters).await.is_err());
+        assert!(
+            manager
+                .begin_login(&profile.id, &adapters, Some("console"))
+                .await
+                .is_err()
+        );
         assert!(adapters.list_runs().is_empty());
         assert!(manager.cached_login(&profile.id).unwrap().is_none());
         manager.shutdown().await;

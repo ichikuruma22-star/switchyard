@@ -835,6 +835,23 @@ mod tests {
             .await;
         assert_eq!(status, StatusCode::OK);
         assert!(login["login"].is_null());
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/login"),
+                Some(json!({"method":"console"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], "invalid_login_method");
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/login"),
+                Some(json!({"method":"device","extra":true})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
         let (status, selected) = harness
             .request(
                 "POST",

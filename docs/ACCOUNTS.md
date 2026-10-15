@@ -25,6 +25,18 @@ To keep another sign-in in an isolated managed profile:
 4. Select **Use as default** for future runs, or choose a profile in the
    existing-agent run form. Running tasks retain their original account.
 
+Managed profiles offer more than one official sign-in method. Codex profiles
+can use **Browser sign-in** (ChatGPT OAuth, the default) or **Device code**:
+Switchya shows a verification URL and a one-time code to enter on any device,
+which suits machines where opening a browser is awkward. Claude profiles can
+use **Claude subscription** (`--claudeai`, the default), **Anthropic Console**
+(`--console`, API usage billing) or **Single sign-on (SSO)** (`--sso`). Choose
+the method next to **Sign in** in Accounts, or from the CLI:
+`switchya agent login --profile PROFILE_ID [--method device]`.
+`switchya agent use --profile PROFILE_ID` makes a profile the default from
+the terminal. API keys remain a gateway/provider concern; none of these
+methods asks for one.
+
 **Cancel sign-in** stops the pending login. It does not log out an account or
 erase credentials. To add another identity, create another profile.
 
@@ -138,7 +150,7 @@ parameters cannot select an arbitrary credential directory.
 | GET | `/api/account-profiles` | Cached profiles and selected defaults |
 | POST | `/api/account-profiles` | `{ "agent_id": "codex", "name": "Work" }`; `claude` also supported |
 | POST | `/api/account-profiles/{id}/refresh` | `{}`; queues a status check, returns 202 |
-| POST | `/api/account-profiles/{id}/login` | `{}`; queues sign-in, returns 202 |
+| POST | `/api/account-profiles/{id}/login` | `{}` or `{ "method": "device" }`; queues sign-in, returns 202 |
 | GET | `/api/account-profiles/{id}/login` | Cached login state; does not start a process |
 | POST | `/api/account-profiles/{id}/login/cancel` | `{}`; cancels the pending login |
 | POST | `/api/account-profiles/{id}/login/open` | `{}`; opens its recorded official login URL |

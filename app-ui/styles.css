@@ -35,3 +35,4 @@ html[data-theme=dark]{color-scheme:dark;--sheet:#121b25;--paper:#17212d;--ink:#e
 .account-remove-confirm{margin-top:14px;padding:14px;border:1px solid var(--stop);border-radius:7px;background:var(--stop-bg)}
 .account-remove-confirm p{font-size:12px;line-height:1.6}
 .account-remove-confirm .account-actions{margin-top:10px}
+.signin-method{display:inline-flex}.signin-method select{min-height:44px;max-width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font-size:12px}

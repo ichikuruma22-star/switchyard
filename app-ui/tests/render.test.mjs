@@ -71,6 +71,7 @@ test('workspace, review and adapter render with the shipped HTM/Preact runtime',
   ]}/>`,root);
   tags=flatten(root).map(node=>node.localName);assert.equal(tags.filter(tag=>tag==='meter').length,1);assert.ok(tags.includes('dialog'));assert.ok(tags.includes('input'));
   assert.ok(textOf().includes('Remove profile'),'managed profiles offer removal');
+  assert.ok(textOf().includes('Anthropic Console'),'signed-out profiles offer sign-in methods');
   render(null,root);
   for(const [agent,name,label] of [['codex','Existing Codex CLI','Codex'],['claude','Existing Claude CLI','Claude Code']]){
     render(html`<${AccountsDialog} api=${{}} open=${false} onRefresh=${()=>{}} profiles=${[

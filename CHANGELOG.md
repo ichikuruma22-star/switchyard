@@ -12,6 +12,10 @@
 - The built-in agent's "Connect a coding model" notice also offers the
   existing Codex or Claude Code setup, opening Accounts in Existing agents
   mode.
+- Sign-in methods: Codex profiles can sign in with a browser or a device
+  code; Claude profiles can use a Claude subscription, Anthropic Console or
+  SSO. The CLI gained `switchya agent login --profile ID [--method …]` and
+  `switchya agent use --profile ID` for terminal-first account switching.
 - Website: corrected the model-access section — Codex and Claude Code
   conversations run inside the workspace; opening Claude in its official
   terminal is optional for managed profiles.

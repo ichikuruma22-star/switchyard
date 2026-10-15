@@ -21,6 +21,24 @@ const CODEX_ARGS: &[&str] = &[
 const PROBE_TIMEOUT: Duration = Duration::from_millis(7500);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
+/// Official sign-in methods per agent, beyond any API-key flow. Codex:
+/// `browser` (ChatGPT OAuth) and `device` (ChatGPT device code). Claude:
+/// `claudeai` (subscription), `console` (Anthropic Console) and `sso`.
+pub fn valid_login_method(agent_id: &str, method: &str) -> bool {
+    match agent_id {
+        "codex" => matches!(method, "browser" | "device"),
+        "claude" => matches!(method, "claudeai" | "console" | "sso"),
+        _ => false,
+    }
+}
+
+pub fn default_login_method(agent_id: &str) -> &'static str {
+    match agent_id {
+        "claude" => "claudeai",
+        _ => "browser",
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct AccountSnapshot {
     pub auth_status: String,
@@ -143,11 +161,16 @@ impl AccountRuntime {
 
     /// Registers and spawns synchronously: dropping the returned future before it
     /// is polled cannot create a hidden login. There is no await before the job is returned.
-    pub async fn start_login(&self, binding: ProfileBinding) -> Result<LoginJob> {
+    pub async fn start_login(&self, binding: ProfileBinding, method: &str) -> Result<LoginJob> {
         crate::profile::validate(&binding, &binding.agent_id)?;
         if !binding.managed {
             return Err(AdapterError::Invalid(
                 "Existing CLI profiles are read-only. Create a managed profile to sign in.".into(),
+            ));
+        }
+        if !valid_login_method(&binding.agent_id, method) {
+            return Err(AdapterError::Invalid(
+                "Choose a supported sign-in method for this agent.".into(),
             ));
         }
         if self.inner.shutdown.is_cancelled() {
@@ -194,9 +217,10 @@ impl AccountRuntime {
         let cancel = self.inner.shutdown.child_token();
         let task_state = state.clone();
         let task_cancel = cancel.clone();
+        let method = method.to_owned();
         let task = tokio::spawn(async move {
             let _slot = slot;
-            run_login(executable, binding, task_state, task_cancel).await;
+            run_login(executable, binding, &method, task_state, task_cancel).await;
         });
         jobs.insert(
             view.id.clone(),
@@ -421,6 +445,7 @@ fn codex_usage(value: &Value) -> AccountUsage {
 async fn run_login(
     executable: std::path::PathBuf,
     binding: ProfileBinding,
+    method: &str,
     state: Arc<Mutex<LoginJob>>,
     cancel: CancellationToken,
 ) {
@@ -472,7 +497,11 @@ async fn run_login(
         if binding.agent_id == "codex" {
             CODEX_ARGS
         } else {
-            &["auth", "login", "--claudeai"]
+            match method {
+                "console" => &["auth", "login", "--console"],
+                "sso" => &["auth", "login", "--sso"],
+                _ => &["auth", "login", "--claudeai"],
+            }
         },
         &binding,
         binding.agent_id == "claude",
@@ -490,7 +519,7 @@ async fn run_login(
     let mut remote_login_id = None;
     let result = tokio::select! {
         _ = cancel.cancelled() => None,
-        outcome = tokio::time::timeout(LOGIN_TIMEOUT, login_process(&mut process,&binding,&state,&mut remote_login_id)) => Some(outcome.unwrap_or_else(|_| Err(AdapterError::Unavailable("Sign-in timed out after ten minutes. Start a new sign-in to try again.".into())))),
+        outcome = tokio::time::timeout(LOGIN_TIMEOUT, login_process(&mut process,&binding,method,&state,&mut remote_login_id)) => Some(outcome.unwrap_or_else(|_| Err(AdapterError::Unavailable("Sign-in timed out after ten minutes. Start a new sign-in to try again.".into())))),
     };
     if result.is_none()
         && binding.agent_id == "codex"
@@ -520,6 +549,7 @@ async fn run_login(
 async fn login_process(
     process: &mut AccountProcess,
     binding: &ProfileBinding,
+    method: &str,
     state: &Arc<Mutex<LoginJob>>,
     remote_login_id: &mut Option<String>,
 ) -> Result<()> {
@@ -558,26 +588,58 @@ async fn login_process(
     if codex_snapshot(&account).auth_status != "signed_out" {
         return Err(AdapterError::Conflict("Sign-in requires a confirmed signed-out profile. Existing credentials will not be replaced.".into()));
     }
+    let device = method == "device";
     let response = process
-        .rpc(3, "account/login/start", json!({"type":"chatgpt"}))
+        .rpc(
+            3,
+            "account/login/start",
+            if device {
+                json!({"type":"chatgptDeviceCode"})
+            } else {
+                json!({"type":"chatgpt"})
+            },
+        )
         .await?;
     let login_id = safe_text(response.get("loginId"), 200)
         .ok_or_else(|| AdapterError::Protocol("Codex returned no sign-in identifier.".into()))?;
     *remote_login_id = Some(login_id.clone());
-    let url = response
-        .get("authUrl")
-        .and_then(Value::as_str)
-        .and_then(|s| official_auth_url("codex", s))
-        .ok_or_else(|| {
-            AdapterError::Protocol(
-                "Codex returned an unrecognized sign-in URL. Use the official CLI to sign in."
-                    .into(),
-            )
-        })?;
+    let (url, user_code, message) = if device {
+        let url = response
+            .get("verificationUrl")
+            .and_then(Value::as_str)
+            .and_then(|s| official_auth_url("codex", s))
+            .ok_or_else(|| {
+                AdapterError::Protocol(
+                    "Codex returned an unrecognized verification URL. Use the official CLI to sign in."
+                        .into(),
+                )
+            })?;
+        let code = safe_text(response.get("userCode"), 64)
+            .ok_or_else(|| AdapterError::Protocol("Codex returned no device code.".into()))?;
+        (
+            url,
+            Some(code),
+            Some("Open the verification page, sign in, and enter the device code."),
+        )
+    } else {
+        let url = response
+            .get("authUrl")
+            .and_then(Value::as_str)
+            .and_then(|s| official_auth_url("codex", s))
+            .ok_or_else(|| {
+                AdapterError::Protocol(
+                    "Codex returned an unrecognized sign-in URL. Use the official CLI to sign in."
+                        .into(),
+                )
+            })?;
+        (url, None, None)
+    };
     {
         let mut job = state.lock();
         job.status = "awaiting_user".into();
         job.auth_url = Some(url);
+        job.user_code = user_code;
+        job.message = message.map(str::to_owned);
         job.updated_at_ms = now_ms();
     }
     loop {
@@ -784,7 +846,7 @@ mod tests {
             let mut remote = None;
             let outcome = tokio::time::timeout(
                 Duration::from_secs(5),
-                login_process(&mut process, &binding, &state, &mut remote),
+                login_process(&mut process, &binding, "browser", &state, &mut remote),
             )
             .await
             .unwrap();
@@ -795,6 +857,67 @@ mod tests {
             }
             process.stop().await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn device_code_login_surfaces_code_and_verification_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let binding = binding(&dir, "codex");
+        let mut process =
+            AccountProcess::spawn(fixture(), &["login_device"], &binding, false).unwrap();
+        let state = Arc::new(Mutex::new(LoginJob {
+            id: "fixture".into(),
+            profile_id: binding.id.clone(),
+            status: "starting".into(),
+            auth_url: None,
+            user_code: None,
+            message: None,
+            updated_at_ms: 0,
+        }));
+        let mut remote = None;
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            login_process(&mut process, &binding, "device", &state, &mut remote),
+        )
+        .await
+        .unwrap();
+        assert!(outcome.is_ok());
+        assert_eq!(remote.as_deref(), Some("fixture-login"));
+        {
+            let job = state.lock();
+            assert_eq!(job.status, "awaiting_user");
+            assert_eq!(job.user_code.as_deref(), Some("ABCD-1234"));
+            assert_eq!(
+                job.auth_url.as_deref(),
+                Some("https://auth.openai.com/deviceauth?state=fixture")
+            );
+        }
+        process.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_login_methods_are_rejected_before_discovery() {
+        assert!(valid_login_method("codex", "browser"));
+        assert!(valid_login_method("codex", "device"));
+        assert!(!valid_login_method("codex", "console"));
+        assert!(valid_login_method("claude", "claudeai"));
+        assert!(valid_login_method("claude", "console"));
+        assert!(valid_login_method("claude", "sso"));
+        assert!(!valid_login_method("claude", "device"));
+        let runtime = AccountRuntime::new();
+        let dir = tempfile::tempdir().unwrap();
+        for (agent, method) in [("codex", "console"), ("claude", "device"), ("codex", "")] {
+            let error = runtime
+                .start_login(binding(&dir, agent), method)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, AdapterError::Invalid(message) if message.contains("sign-in method")),
+                "{agent} {method}: {error}"
+            );
+        }
+        assert!(runtime.inner.jobs.lock().is_empty());
+        runtime.shutdown().await;
     }
 
     #[tokio::test]
@@ -816,7 +939,7 @@ mod tests {
         assert!(
             tokio::time::timeout(
                 Duration::from_millis(250),
-                login_process(&mut process, &binding, &state, &mut remote)
+                login_process(&mut process, &binding, "browser", &state, &mut remote)
             )
             .await
             .is_err()
@@ -842,7 +965,7 @@ mod tests {
                 home: PathBuf::new(),
                 managed: false,
             };
-            let error = runtime.start_login(binding).await.unwrap_err();
+            let error = runtime.start_login(binding, "browser").await.unwrap_err();
             assert!(
                 matches!(error, AdapterError::Invalid(ref message) if message.contains("read-only"))
             );

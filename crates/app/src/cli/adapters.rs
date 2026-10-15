@@ -31,6 +31,31 @@ pub(super) enum AgentCommand {
     },
     /// List cached account profile IDs; listing does not inspect credentials.
     Accounts,
+    /// Create a managed account profile for Codex or Claude Code.
+    Add {
+        #[arg(long, default_value = "codex", value_parser = ["codex", "claude"])]
+        agent: String,
+        #[arg(long)]
+        name: String,
+    },
+    /// Remove a managed account profile and delete its local sign-in data.
+    Remove {
+        #[arg(long)]
+        profile: String,
+    },
+    /// Set an account profile as the default for its agent's future runs.
+    Use {
+        #[arg(long)]
+        profile: String,
+    },
+    /// Sign in to a managed account profile through its official CLI flow.
+    Login {
+        #[arg(long)]
+        profile: String,
+        /// Codex: browser or device. Claude: claudeai, console or sso.
+        #[arg(long, value_parser = ["browser", "device", "claudeai", "console", "sso"])]
+        method: Option<String>,
+    },
     /// Start a Codex or Claude Code conversation using its installed CLI.
     Run {
         #[arg(long, default_value = "codex", value_parser = ["codex", "claude"])]
@@ -226,6 +251,39 @@ async fn dispatch(
                 })).collect();
             print_json(&views)
         }
+        AgentCommand::Add { agent, name } => {
+            let result: Value = remote
+                .request(
+                    Method::POST,
+                    "account-profiles",
+                    Some(json!({ "agent_id": agent, "name": name })),
+                )
+                .await?;
+            print_json(&result)
+        }
+        AgentCommand::Remove { profile } => {
+            let result: Value = remote
+                .request(
+                    Method::POST,
+                    &format!("account-profiles/{}/remove", segment(&profile)),
+                    Some(json!({})),
+                )
+                .await?;
+            print_json(&result)
+        }
+        AgentCommand::Use { profile } => {
+            let result: Value = remote
+                .request(
+                    Method::POST,
+                    &format!("account-profiles/{}/select", segment(&profile)),
+                    Some(json!({})),
+                )
+                .await?;
+            print_json(&result)
+        }
+        AgentCommand::Login { profile, method } => {
+            login(remote, &profile, method.as_deref(), cancelled).await
+        }
         AgentCommand::Run {
             agent,
             project,
@@ -359,6 +417,82 @@ async fn read_events(remote: &Remote, id: &str, after: u64) -> Result<Vec<Adapte
             .events)
     })
     .await
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct LoginView {
+    status: String,
+    auth_url: Option<String>,
+    user_code: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LoginResponse {
+    login: Option<LoginView>,
+}
+
+/// Starts one official sign-in and follows its cached state. The URL and
+/// device code are printed as soon as the CLI provides them; cancelling this
+/// command detaches from polling without cancelling the sign-in itself.
+async fn login(
+    remote: &Remote,
+    profile: &str,
+    method: Option<&str>,
+    cancelled: &CancellationToken,
+) -> Result<()> {
+    let body = match method {
+        Some(method) => json!({ "method": method }),
+        None => json!({}),
+    };
+    let started: LoginResponse = remote
+        .request(
+            Method::POST,
+            &format!("account-profiles/{}/login", segment(profile)),
+            Some(body),
+        )
+        .await?;
+    let mut announced = false;
+    let mut current = started.login;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(11 * 60);
+    loop {
+        let Some(job) = &current else {
+            return Err(AppError::local("The host returned no sign-in state."));
+        };
+        if !announced && (job.auth_url.is_some() || job.user_code.is_some()) {
+            announced = true;
+            if let Some(url) = &job.auth_url {
+                write_stdout(&format!("Sign in at: {url}\n"))?;
+            }
+            if let Some(code) = &job.user_code {
+                write_stdout(&format!("Device code: {code}\n"))?;
+            }
+        }
+        if !matches!(job.status.as_str(), "starting" | "awaiting_user") {
+            return print_json(&job);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AppError::local(
+                "Sign-in is still pending. Check its status in the app's Accounts view.",
+            ));
+        }
+        tokio::select! {
+            () = cancelled.cancelled() => {
+                return Err(AppError::local(
+                    "Stopped watching this sign-in. It continues in the host; check Accounts in the app.",
+                ));
+            }
+            () = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
+        let next: LoginResponse = remote
+            .request(
+                Method::GET,
+                &format!("account-profiles/{}/login", segment(profile)),
+                None,
+            )
+            .await?;
+        current = next.login;
+    }
 }
 
 async fn prepare(remote: &Remote, selection: Selection, message: &MessageArgs) -> Result<Value> {
