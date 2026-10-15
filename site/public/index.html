@@ -107,13 +107,13 @@
 
     <section class="architecture-section section-space" id="architecture" aria-labelledby="architecture-title">
       <div class="wrap architecture-layout">
-        <div class="architecture-copy"><h2 id="architecture-title">Use your providers.<br>Or your Codex setup.</h2><p>The native engine uses Switchyard Gateway for model access. The Codex integration connects to your own installation.</p><p class="architecture-note">Named profiles keep Codex and Claude defaults separate. Claude opens in its official terminal, outside the workspace conversation.</p></div>
+        <div class="architecture-copy"><h2 id="architecture-title">Use your providers.<br>Or your own agent setup.</h2><p>The native engine uses Switchyard Gateway for model access. The Codex and Claude Code integrations connect to your own installations.</p><p class="architecture-note">Named profiles keep Codex and Claude defaults separate. Both agents run conversations inside the workspace; a managed Claude profile can also open in its official terminal.</p></div>
         <div class="architecture-diagram" aria-label="Preview product architecture">
           <div class="architecture-entry"><img src="/assets/switchya-mark.svg" width="34" height="34" alt=""><strong>Switchya</strong><span>App + CLI</span></div>
           <div class="architecture-shared">Your project workspace</div>
           <div class="architecture-lanes">
             <div class="architecture-lane"><div class="architecture-node"><strong>Native engine</strong><span>Windows preview</span></div><div class="architecture-line" aria-hidden="true"></div><div class="architecture-node gateway-node"><strong>Switchyard Gateway</strong><span>Routing &amp; API translation</span></div><div class="architecture-line" aria-hidden="true"></div><div class="architecture-destination">Your API providers</div></div>
-            <div class="architecture-lane"><div class="architecture-node"><strong>Codex integration</strong><span>Preview integration</span></div><div class="architecture-line" aria-hidden="true"></div><div class="architecture-node"><strong>Your Codex setup</strong><span>Installed and authenticated by you</span></div><div class="architecture-detail">An independent engine connection.</div></div>
+            <div class="architecture-lane"><div class="architecture-node"><strong>Codex &amp; Claude Code</strong><span>Preview integrations</span></div><div class="architecture-line" aria-hidden="true"></div><div class="architecture-node"><strong>Your CLI setups</strong><span>Installed and authenticated by you</span></div><div class="architecture-detail">Independent engine connections.</div></div>
           </div>
         </div>
       </div>

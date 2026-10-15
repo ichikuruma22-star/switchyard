@@ -70,6 +70,7 @@ test('workspace, review and adapter render with the shipped HTM/Preact runtime',
     {id:'a',name:'Claude profile',agent_id:'claude',managed:true,account:{auth_status:'signed_out',checked_at_ms:1234,usage:{status:'unavailable'}}},
   ]}/>`,root);
   tags=flatten(root).map(node=>node.localName);assert.equal(tags.filter(tag=>tag==='meter').length,1);assert.ok(tags.includes('dialog'));assert.ok(tags.includes('input'));
+  assert.ok(textOf().includes('Remove profile'),'managed profiles offer removal');
   render(null,root);
   for(const [agent,name,label] of [['codex','Existing Codex CLI','Codex'],['claude','Existing Claude CLI','Claude Code']]){
     render(html`<${AccountsDialog} api=${{}} open=${false} onRefresh=${()=>{}} profiles=${[
@@ -82,6 +83,7 @@ test('workspace, review and adapter render with the shipped HTM/Preact runtime',
     assert.ok(buttons.includes('Use as default'));
     assert.ok(!buttons.includes('Sign in'));
     assert.ok(!buttons.includes('Open Claude Code'));
+    assert.ok(!buttons.includes('Remove profile'));
     render(null,root);
   }
   assert.throws(()=>render(html`<><span>Unsupported fragment</span></>`,root),{name:'InvalidCharacterError'});

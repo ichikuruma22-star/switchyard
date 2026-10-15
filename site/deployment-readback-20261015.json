@@ -1,0 +1,49 @@
+{
+  "checkedAt": "2026-10-15T04:24:25.499Z",
+  "versionId": "f516d8ee-279d-47c6-b330-446fb82a4ab3",
+  "change": "Model-access section: Claude Code runs inside the workspace; official-terminal opening is optional for managed profiles.",
+  "results": [
+    {
+      "url": "https://switchya.com/",
+      "status": 200,
+      "bytes": 15840,
+      "sha256": "1e93be367eaaaaef52bf9d1c8710d9f9bd03b8032caa4a81af680251f1d37f67"
+    },
+    {
+      "url": "https://www.switchya.com/",
+      "status": 200,
+      "bytes": 15840,
+      "sha256": "1e93be367eaaaaef52bf9d1c8710d9f9bd03b8032caa4a81af680251f1d37f67"
+    },
+    {
+      "url": "https://switchya.com/site.css",
+      "status": 200,
+      "bytes": 27834,
+      "sha256": "20bf686ed9390fe3915bcb5aa61b6456b5e09a31f7072fe7109d5246f5bca489"
+    },
+    {
+      "url": "https://switchya.com/site.js",
+      "status": 200,
+      "bytes": 1719,
+      "sha256": "cc15a4c69b7770ab863771e1d1adc8c80ffa498f6cbdddda00d95eaf2b2e7619"
+    },
+    {
+      "url": "https://switchya.com/404.html",
+      "status": 200,
+      "bytes": 877,
+      "sha256": "31096a3ff88e7a3e9b4206147c237df15261c9d51644c86cb4a79d227a3dd664"
+    },
+    {
+      "url": "https://switchya.com/sitemap.xml",
+      "status": 200,
+      "bytes": 156,
+      "sha256": "f47b32784befac24598c5c7f92e2f4eed8eae909926f75cb3e10ab19d0e69efe"
+    },
+    {
+      "url": "https://switchya.com/assets/switchya-mark.svg",
+      "status": 200,
+      "bytes": 495,
+      "sha256": "5295d8ae25239f81ebec6ffa85ac49d7e56e3cc21693660208dabdc62bcfb7c9"
+    }
+  ]
+}

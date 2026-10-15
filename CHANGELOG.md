@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Switchya app
+
+- Managed Codex and Claude Code profiles can be removed from **Accounts**.
+  Removal deletes the profile's private CLI home (its stored sign-in), returns
+  a removed default to the Existing CLI entry, and is refused while the
+  profile has an active run, refresh, sign-in or terminal launch.
+  Conversations that used a removed profile can no longer continue.
+- The built-in agent's "Connect a coding model" notice also offers the
+  existing Codex or Claude Code setup, opening Accounts in Existing agents
+  mode.
+- Website: corrected the model-access section — Codex and Claude Code
+  conversations run inside the workspace; opening Claude in its official
+  terminal is optional for managed profiles.
+
 ## 0.1.0
 
 First release.

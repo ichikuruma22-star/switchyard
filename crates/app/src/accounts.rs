@@ -37,7 +37,7 @@ fn system_profile(id: &str) -> Option<(&'static str, &'static str)> {
 const MAX_PROFILES: usize = 32;
 const MAX_MANIFEST: u64 = 128 * 1024;
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Defaults {
     codex: Option<String>,
@@ -534,6 +534,74 @@ impl AccountManager {
         }
         self.persist(&mut state, manifest)?;
         Ok((Self::view(&state, id)?, state.manifest.defaults.clone()))
+    }
+    /// Removes a managed profile and deletes its private CLI home, which is
+    /// where the official CLI kept that profile's credentials. Conversations
+    /// pinned to the profile keep their binding and can no longer continue;
+    /// `start_run` already reports that as `profile_changed`.
+    pub(crate) fn remove_profile(&self, id: &str, adapters: &AdapterManager) -> Result<Defaults> {
+        self.ensure_running()?;
+        let mut state = lock(&self.inner.state);
+        let binding = self.binding(&state, id)?;
+        if !binding.managed {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "system_profile_read_only",
+                "Existing CLI accounts cannot be removed here. Manage that sign-in in its official CLI.",
+            ));
+        }
+        let cached = state
+            .cache
+            .get(id)
+            .ok_or_else(|| AppError::local("Account cache is unavailable."))?;
+        if cached.refreshing
+            || cached.login_busy
+            || cached.terminal_busy
+            || cached.login.as_ref().is_some_and(active_login)
+        {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "profile_busy",
+                "Finish or cancel this profile's sign-in, refresh or terminal launch before removing it.",
+            ));
+        }
+        if adapters.profile_has_active_runs(id) {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "profile_busy",
+                "This profile has an active run. Finish it before removing the profile.",
+            ));
+        }
+        // Delete the credential home first: if metadata persistence then
+        // fails, the profile is still listed and a refresh shows it signed
+        // out, rather than credentials lingering in an orphaned directory
+        // no profile points at.
+        match std::fs::remove_dir_all(&binding.home) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(AppError::local(
+                    "Could not delete this profile's local account data. It was not removed.",
+                ));
+            }
+        }
+        let mut manifest = state.manifest.clone();
+        manifest.profiles.retain(|profile| profile.id != id);
+        let system_default = match binding.agent_id.as_str() {
+            "codex" => SYSTEM_CODEX,
+            "claude" => SYSTEM_CLAUDE,
+            _ => return Err(AppError::invalid("Unknown profile agent.")),
+        };
+        let defaults = match binding.agent_id.as_str() {
+            "codex" => &mut manifest.defaults.codex,
+            _ => &mut manifest.defaults.claude,
+        };
+        if defaults.as_deref() == Some(id) {
+            *defaults = Some(system_default.into());
+        }
+        self.persist(&mut state, manifest)?;
+        state.cache.remove(id);
+        Ok(state.manifest.defaults.clone())
     }
 
     fn spawn(&self, task: impl std::future::Future<Output = ()> + Send + 'static) {
@@ -1144,6 +1212,16 @@ pub(crate) async fn select(
     Ok(Json(json!({"profile":profile,"defaults":defaults})))
 }
 
+pub(crate) async fn remove(
+    State(state): State<Arc<AppState>>,
+    RoutePath(id): RoutePath<String>,
+    request: Request,
+) -> Result<Json<Value>> {
+    let _: Empty = body(request).await?;
+    let defaults = state.accounts.remove_profile(&id, &state.adapters)?;
+    Ok(Json(json!({"removed":id,"defaults":defaults})))
+}
+
 pub(crate) async fn launch_terminal(
     State(state): State<Arc<AppState>>,
     RoutePath(id): RoutePath<String>,
@@ -1412,6 +1490,45 @@ mod tests {
         assert!(adapters.list_runs().is_empty());
         assert!(manager.cached_login(&profile.id).unwrap().is_none());
         manager.shutdown().await;
+        adapters.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn removing_a_managed_profile_deletes_its_home_and_restores_the_system_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let adapters = AdapterManager::new();
+        let error = manager.remove_profile(SYSTEM_CODEX, &adapters).unwrap_err();
+        assert_eq!(error.code, "system_profile_read_only");
+        let profile = manager.create_profile("codex", "Work").unwrap();
+        manager.select_profile(&profile.id).unwrap();
+        let home = manager.inner.homes.join(&profile.id);
+        std::fs::write(home.join("credentials.fixture"), b"not a real credential").unwrap();
+        {
+            let mut state = lock(&manager.inner.state);
+            state.cache.get_mut(&profile.id).unwrap().login_busy = true;
+        }
+        let error = manager.remove_profile(&profile.id, &adapters).unwrap_err();
+        assert_eq!(error.code, "profile_busy");
+        assert!(home.join("credentials.fixture").exists());
+        lock(&manager.inner.state)
+            .cache
+            .get_mut(&profile.id)
+            .unwrap()
+            .login_busy = false;
+        let defaults = manager.remove_profile(&profile.id, &adapters).unwrap();
+        assert_eq!(defaults.codex.as_deref(), Some(SYSTEM_CODEX));
+        assert!(!home.exists());
+        let (profiles, _) = manager.cached();
+        assert_eq!(profiles.len(), 2);
+        assert!(profiles.iter().all(|item| item.id != profile.id));
+        let error = manager.remove_profile(&profile.id, &adapters).unwrap_err();
+        assert_eq!(error.code, "profile_not_found");
+        drop(manager);
+        let reopened = AccountManager::open(temp.path()).unwrap();
+        assert_eq!(reopened.cached().0.len(), 2);
+        assert_eq!(reopened.cached().1.codex.as_deref(), Some(SYSTEM_CODEX));
+        reopened.shutdown().await;
         adapters.shutdown().await;
     }
 

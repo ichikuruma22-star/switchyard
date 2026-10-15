@@ -398,9 +398,14 @@ Managed profiles keep separate CLI homes and sign-ins. They do not copy or
 replace the existing CLI's authentication. The existing Codex and Claude CLI
 entries inherit their current environment and configuration; Switchya can
 inspect and select them, but cannot replace their sign-ins through the account
-controls. Conversations retain their original profile across host restarts. To add another identity, create
-another managed profile. This version has no managed-profile logout, removal
-or credential-replacement controls.
+controls. Conversations retain their original profile across host restarts. To
+add another identity, create another managed profile. A managed profile can
+be removed from **Accounts**: choose **Remove profile** and confirm to delete
+the profile and the sign-in stored in its private CLI home. If it was the
+default, the default returns to the Existing CLI entry, and conversations
+that used it cannot continue. Removal is refused while that profile has work
+in flight. Switchya still has no in-place credential replacement; remove and
+recreate a profile instead.
 
 Codex usage windows and reset times come from its documented account API when
 available. Missing limits mean **unavailable**, never zero usage or unlimited

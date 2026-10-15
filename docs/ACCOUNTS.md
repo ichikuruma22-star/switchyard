@@ -26,8 +26,18 @@ To keep another sign-in in an isolated managed profile:
    existing-agent run form. Running tasks retain their original account.
 
 **Cancel sign-in** stops the pending login. It does not log out an account or
-erase credentials. To add another identity, create another profile. This
-version has no logout, profile removal or credential replacement controls.
+erase credentials. To add another identity, create another profile.
+
+To remove a managed profile, choose **Remove profile** on its card and
+confirm. Removal deletes the profile and its private CLI home — the stored
+sign-in goes with it — and cannot be undone. If the profile was the default
+for its agent, the default returns to the **Existing … CLI** entry.
+Conversations that used the removed profile keep their binding and cannot
+continue; start a new conversation. Removal is refused while the profile has
+an active run, refresh, sign-in or terminal launch. The built-in Existing CLI
+entries cannot be removed or signed out here; manage those sign-ins through
+the official CLIs. There is still no in-place credential replacement: remove
+the profile and create a new one to start over.
 
 The **Existing Codex CLI** (`system-codex`) and **Existing Claude CLI**
 (`system-claude`) entries use the installed CLIs' environment and configuration
@@ -133,6 +143,7 @@ parameters cannot select an arbitrary credential directory.
 | POST | `/api/account-profiles/{id}/login/cancel` | `{}`; cancels the pending login |
 | POST | `/api/account-profiles/{id}/login/open` | `{}`; opens its recorded official login URL |
 | POST | `/api/account-profiles/{id}/select` | `{}`; saves the default for that agent |
+| POST | `/api/account-profiles/{id}/remove` | `{}`; removes a managed profile, deletes its private CLI home and returns the updated defaults |
 | POST | `/api/account-profiles/{id}/terminal` | `{ "project_id": "opened-project-id" }`; managed Claude only |
 
 At most 32 managed profiles are supported. Names contain 1–64 characters after

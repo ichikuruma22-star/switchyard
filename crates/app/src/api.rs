@@ -121,6 +121,10 @@ pub(crate) fn router(
             post(crate::accounts::select),
         )
         .route(
+            "/api/account-profiles/{id}/remove",
+            post(crate::accounts::remove),
+        )
+        .route(
             "/api/account-profiles/{id}/terminal",
             post(crate::accounts::launch_terminal),
         )
@@ -861,6 +865,37 @@ mod tests {
         assert_eq!(rejected["error"]["code"], "profile_not_signed_in");
         let (_, runs) = harness.request("GET", "/api/adapter-runs", None).await;
         assert!(runs["runs"].as_array().unwrap().is_empty());
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                "/api/account-profiles/system-codex/remove",
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(rejected["error"]["code"], "system_profile_read_only");
+        let (status, removed) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/remove"),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{removed}");
+        assert_eq!(removed["removed"], id);
+        assert_eq!(removed["defaults"]["codex"], "system-codex");
+        let (status, after) = harness.request("GET", "/api/account-profiles", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after["profiles"].as_array().unwrap().len(), 2);
+        let (status, missing) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/remove"),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["error"]["code"], "profile_not_found");
         harness.runtime.shutdown().await.unwrap();
     }
 
