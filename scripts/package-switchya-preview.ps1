@@ -113,8 +113,8 @@ try {
     # environment files, launch-info files, or credential directories.
     foreach ($relative in @(
         'LICENSE', 'NOTICE',
-        'docs/SWITCHYA.md', 'docs/ACCOUNTS.md', 'docs/AGENT-ADAPTERS.md',
-        'docs/APP-API.md', 'docs/APP-ROADMAP.md', 'docs/PLATFORM-VERIFICATION.md', 'desktop/README.md',
+        'docs/SWITCHYA.md', 'docs/ACCOUNTS.md', 'docs/AGENT-ADAPTERS.md', 'docs/APP-API.md',
+        'docs/APP-ROADMAP.md', 'docs/MCP.md', 'docs/PLATFORM-VERIFICATION.md', 'desktop/README.md',
         'app-ui/vendor/LICENSES.txt', 'app-ui/fonts/Archivo-OFL.txt', 'app-ui/fonts/JetBrainsMono-OFL.txt',
         'ui/vendor/LICENSES.txt', 'ui/fonts/Archivo-OFL.txt', 'ui/fonts/JetBrainsMono-OFL.txt'
     )) {
@@ -143,8 +143,8 @@ Switchya creates its initial configuration and session storage under
 `%LOCALAPPDATA%\Switchya`. This portable archive does not make user data portable:
 configuration, saved sessions and account homes stay in the application-data
 directory unless explicit paths are supplied. No API keys or account sign-ins
-are included. Use provider setup for the built-in agent; install official Codex
-or Claude CLIs separately for their account workflows.
+are included. Use provider setup for the built-in agent; install the official
+Codex, Claude Code or Antigravity CLIs separately for their account workflows.
 
 For terminal work, close the desktop/browser host first, or connect to its
 explicitly exported private launch-info file as explained in the user guide:
@@ -162,11 +162,14 @@ Review output and actual checks before treating a completed task as verified.
 
 Read [RELEASE-NOTES.md](RELEASE-NOTES.md) for this preview's verification limits,
 and [the user guide](docs/SWITCHYA.md) for browser/CLI handoff, providers, accounts,
-interruptions and recovery. Codex supports structured app runs; Claude launches
-in an external terminal and that terminal session is not tracked by Switchya.
-Saved Codex conversations can be inspected with `agent show`, continued with
-`agent continue`, and reviewed after an uncertain interruption with
-`agent recover --reviewed`. Run `agent --help` for the required arguments.
+interruptions and recovery. **Existing agents** runs installed Codex, Claude Code
+or Antigravity CLIs inside the workspace and saves their conversations; Antigravity
+runs in plan mode and cannot apply edits. A saved conversation of any of these
+agents can be inspected with `agent show`, continued with `agent continue`, and
+reviewed after an uncertain interruption with `agent recover --reviewed`. Run
+`agent --help` for the required arguments. Opening Claude Code in its own
+terminal from a managed account is optional. That terminal, like the one
+**Open Antigravity** starts for sign-in, is not tracked by Switchya.
 
 ## Switchyard Gateway
 

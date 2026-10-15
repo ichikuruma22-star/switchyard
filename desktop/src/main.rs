@@ -29,7 +29,10 @@ struct Options {
 }
 
 fn run() -> Result<i32> {
-    let args = Options::parse();
+    let args = match Options::try_parse() {
+        Ok(args) => args,
+        Err(error) => return Ok(report_arguments(&error)),
+    };
     let (config, data_dir) = match (args.config, args.data_dir) {
         (Some(config), Some(data)) => (config, data),
         (config, data) => {
@@ -175,21 +178,106 @@ fn main() {
     }
 }
 
+/// Reports help, version or a usage error instead of letting clap print and
+/// exit: a release Windows build has no console, so that text would vanish.
+/// Returns the exit code clap would have used.
+fn report_arguments(error: &clap::Error) -> i32 {
+    if let Some(message) = usage_failure(error) {
+        report_error(&message);
+    } else {
+        let _ = error.print();
+        // Shortcuts and interactive terminals give a windowed build no
+        // stdout. Captured output, such as a scripted version check, is not
+        // interrupted by a dialog.
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            if std::io::stdout().as_raw_handle().is_null() {
+                show_message(
+                    &error.to_string(),
+                    windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONINFORMATION,
+                );
+            }
+        }
+    }
+    error.exit_code()
+}
+
+/// The error dialog text for a command line that cannot start the workspace;
+/// `None` for help and version requests.
+fn usage_failure(error: &clap::Error) -> Option<String> {
+    error.use_stderr().then(|| {
+        format!(
+            "Switchya could not start: the command line is invalid.\n\n{}",
+            error.render()
+        )
+    })
+}
+
 fn report_error(message: &str) {
     eprintln!("{message}");
     #[cfg(windows)]
-    {
-        let title: Vec<u16> = "Switchya\0".encode_utf16().collect();
-        let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
-        // Both zero-terminated buffers stay alive for the modal call.
-        unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
-                std::ptr::null_mut(),
-                message.as_ptr(),
-                title.as_ptr(),
-                windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
-                    | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
-            );
+    show_message(
+        message,
+        windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+    );
+}
+
+#[cfg(windows)]
+fn show_message(
+    message: &str,
+    icon: windows_sys::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE,
+) {
+    let title: Vec<u16> = "Switchya\0".encode_utf16().collect();
+    let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+    // Both zero-terminated buffers stay alive for the modal call.
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK | icon,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rejected(args: &[&str]) -> clap::Error {
+        Options::try_parse_from(args)
+            .err()
+            .expect("the command line must not start the workspace")
+    }
+
+    #[test]
+    fn usage_errors_reach_the_error_dialog() {
+        for (args, argument) in [
+            (
+                &["switchya-desktop", "--write-launch-info"][..],
+                "--write-launch-info",
+            ),
+            (&["switchya-desktop", "--datadir", "x"][..], "--datadir"),
+            (
+                &["switchya-desktop", "--launch-info", "x"][..],
+                "--launch-info",
+            ),
+        ] {
+            let error = rejected(args);
+            let message = usage_failure(&error).expect("usage errors are reported");
+            assert!(message.contains(argument), "{message}");
+            assert_eq!(error.exit_code(), 2);
+        }
+    }
+
+    #[test]
+    fn help_and_version_are_not_errors() {
+        for flag in ["--help", "--version"] {
+            let error = rejected(&["switchya-desktop", flag]);
+            assert!(usage_failure(&error).is_none());
+            assert_eq!(error.exit_code(), 0);
+            assert!(error.to_string().contains("switchya-desktop"));
         }
     }
 }
