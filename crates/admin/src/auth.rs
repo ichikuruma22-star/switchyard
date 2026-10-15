@@ -458,7 +458,7 @@ fn addressed_by_own_name(
             .to_str()
             .ok()
             .and_then(|origin| origin.trim().parse::<Uri>().ok())
-            .is_some_and(|origin| origin.host().is_some_and(&own))
+            .is_some_and(|origin| origin.host().is_some_and(own))
     })
 }
 
