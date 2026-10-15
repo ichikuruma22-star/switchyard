@@ -263,6 +263,41 @@ fn duplicate_labels_fall_back_to_the_position() {
     );
 }
 
+/// A labelled credential turned into an `api_keys` shorthand, beside other
+/// labelled credentials whose keys have the same mask. The shorthand field
+/// used to be filled first, with the first stored credential key of that
+/// mask — one a credential sent back under its label still owned — and that
+/// credential then got the moved key: the two keys swapped places without a
+/// word, and the one the operator had switched off was back in rotation.
+#[test]
+fn a_credential_moved_to_the_shorthand_does_not_take_a_labelled_ones_key() {
+    // Keys of up to 11 characters all mask alike.
+    let keys = ["key-aaaa", "key-bbbb", "key-cccc"];
+    for shorthand in [None, Some("key-dddd")] {
+        for moved in 0..keys.len() {
+            let mut stored: Vec<CredentialConfig> = keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| labelled(key, &format!("label-{i}")))
+                .collect();
+            stored[0].disabled = true;
+            let mut current = compat(stored);
+            current.providers[0].api_keys = shorthand.iter().map(|k| k.to_string()).collect();
+
+            let mut expected = current.clone();
+            let gone = expected.providers[0].credentials.remove(moved);
+            expected.providers[0].api_keys.push(gone.api_key);
+            let mut update = mask_config(&current);
+            let gone = update.providers[0].credentials.remove(moved);
+            update.providers[0].api_keys.push(gone.api_key);
+
+            let case = format!("credential {moved} moved, shorthand {shorthand:?}");
+            assert_eq!(unmask_into(&mut update, &current), Ok(()), "{case}");
+            assert_eq!(update, expected, "{case}");
+        }
+    }
+}
+
 /// The key of "a" is rotated (a new literal is typed) and a new keyless entry
 /// "c" is added in front. The old key of "a" sits at position 0 and is no
 /// longer claimed by anything — but it is recognisably a's, and must not be

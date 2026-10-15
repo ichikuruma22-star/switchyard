@@ -294,35 +294,56 @@ fn only(count: usize, matches: impl Fn(usize) -> bool) -> Option<usize> {
     }
 }
 
+/// What a secret field of the incoming configuration still asks for.
+#[derive(Clone, Copy, PartialEq)]
+enum Need {
+    Nothing,
+    Empty,
+    Masked,
+}
+
 /// Fills the slots that ask for "the current value" (empty or masked) from
-/// `own`, the list the slots correspond to, and — for masked values only —
-/// from `other`, a second list in which the same secret may now live.
+/// `own`, the list the slots correspond to. `claimed` (one flag per entry of
+/// `own`) says which stored secrets are already taken.
 ///
 /// Masked fields are resolved before empty ones. A mask is evidence of which
 /// stored secret is meant, so it wins over an empty field that merely happens
 /// to sit where that secret used to be; otherwise deleting or moving an entry
 /// would hand its secret to a neighbour that never had one.
 ///
-/// `claimed` (one flag per entry of `own`) and `other_claimed` (one per entry
-/// of `other`) say which stored secrets are already taken. They are shared
-/// with the restore of the sibling list, so that a secret one list took —
-/// kept in place, or moved over from the sibling — is never handed out a
-/// second time by the other.
+/// Two lists a secret may move between (a provider's `api_keys` and
+/// `credentials`) go through the phases of a restore together, each phase
+/// for both lists before the next: [`restore_own`], [`restore_moved`], then
+/// [`restore_empty`]. They share their `claimed` flags, so that a secret one
+/// list took — kept in place, or moved over from the sibling — is never
+/// handed out a second time by the other. And a list only takes a secret
+/// from its sibling once the sibling has kept its own — the order in which
+/// [`ambiguous`] settles them — so a shorthand key never takes the secret a
+/// labelled credential names.
 ///
 /// Returns the indices of masked slots that matched nothing.
-fn restore(
-    slots: &mut [Slot<'_>],
+fn restore(slots: &mut [Slot<'_>], own: &[Candidate<'_>], claimed: &mut [bool]) -> Vec<usize> {
+    let mut needs = restore_own(slots, own, claimed);
+    restore_empty(slots, &mut needs, own, claimed)
+}
+
+/// Gives `slot` the stored secret `c` of `own`.
+fn assign(
+    slot: &mut Slot<'_>,
+    need: &mut Need,
     own: &[Candidate<'_>],
+    c: usize,
     claimed: &mut [bool],
-    other: &[&str],
-    other_claimed: &mut [bool],
-) -> Vec<usize> {
-    #[derive(Clone, Copy, PartialEq)]
-    enum Need {
-        Nothing,
-        Empty,
-        Masked,
-    }
+) {
+    *slot.value = own[c].secret.to_string();
+    *need = Need::Nothing;
+    claimed[c] = true;
+}
+
+/// The first phase of [`restore`]: secrets that came back in full, and masked
+/// fields whose secret is in their own list. Returns what each slot still
+/// asks for.
+fn restore_own(slots: &mut [Slot<'_>], own: &[Candidate<'_>], claimed: &mut [bool]) -> Vec<Need> {
     let masks: Vec<String> = own.iter().map(|c| mask_value(c.secret)).collect();
 
     // A secret that came back in full keeps its own entry, so that an empty
@@ -345,12 +366,6 @@ fn restore(
         needs.push(need);
     }
 
-    let assign = |slot: &mut Slot<'_>, need: &mut Need, c: usize, claimed: &mut [bool]| {
-        *slot.value = own[c].secret.to_string();
-        *need = Need::Nothing;
-        claimed[c] = true;
-    };
-
     // -- masked fields -----------------------------------------------------
 
     // 1. Same label and mask: survives reordering and deletion of others.
@@ -362,14 +377,14 @@ fn restore(
             !claimed[c] && same(own[c].name, slot.name) && masks[c] == slot.value.trim()
         });
         if let Some(c) = found {
-            assign(slot, need, c, claimed);
+            assign(slot, need, own, c, claimed);
         }
     }
 
     // 2. Same position and mask.
     for (i, (slot, need)) in slots.iter_mut().zip(needs.iter_mut()).enumerate() {
         if *need == Need::Masked && i < own.len() && !claimed[i] && masks[i] == slot.value.trim() {
-            assign(slot, need, i, claimed);
+            assign(slot, need, own, i, claimed);
         }
     }
 
@@ -379,10 +394,22 @@ fn restore(
             continue;
         }
         if let Some(c) = (0..own.len()).find(|&c| !claimed[c] && masks[c] == slot.value.trim()) {
-            assign(slot, need, c, claimed);
+            assign(slot, need, own, c, claimed);
         }
     }
 
+    needs
+}
+
+/// The second phase of a [`restore`] of two lists: masked fields still open
+/// take a secret of `other`, the sibling list, that `other_claimed` (one flag
+/// per entry of `other`) does not say is taken.
+fn restore_moved(
+    slots: &mut [Slot<'_>],
+    needs: &mut [Need],
+    other: &[&str],
+    other_claimed: &mut [bool],
+) {
     // 4. Same mask in the sibling list: the entry changed its form
     //    (`api_keys` shorthand <-> `credentials` entry).
     for (slot, need) in slots.iter_mut().zip(needs.iter_mut()) {
@@ -397,7 +424,17 @@ fn restore(
             other_claimed[c] = true;
         }
     }
+}
 
+/// The last phase of [`restore`]: empty fields, which only take what the
+/// masked ones left. Returns the indices of masked slots that matched
+/// nothing.
+fn restore_empty(
+    slots: &mut [Slot<'_>],
+    needs: &mut [Need],
+    own: &[Candidate<'_>],
+    claimed: &mut [bool],
+) -> Vec<usize> {
     // -- empty fields ------------------------------------------------------
     //
     // An empty field carries no evidence of its own. What it keeps is the
@@ -439,7 +476,7 @@ fn restore(
             && !claimed[c]
             && same(own[c].anchor, slot.anchor)
         {
-            assign(slot, need, c, claimed);
+            assign(slot, need, own, c, claimed);
         }
     }
 
@@ -452,7 +489,7 @@ fn restore(
         }
         let spoken_for = (0..slots.len()).any(|j| j != i && partners[j] == Some(i));
         if same(own[i].anchor, slots[i].anchor) && !spoken_for {
-            assign(&mut slots[i], &mut needs[i], i, claimed);
+            assign(&mut slots[i], &mut needs[i], own, i, claimed);
         }
     }
 
@@ -524,9 +561,10 @@ fn stored_credential<'a>(
 /// * `api_keys[]` and `credentials[].api_key` within a provider. **Masked**
 ///   values are resolved first: the entry at the same position if its mask
 ///   matches (credentials: preferring the same `label`), otherwise any entry
-///   of the list with that mask, and finally an entry of the provider's other
-///   list — so reordering entries, deleting some, or turning an `api_keys`
-///   entry into a `credentials` entry never attaches the wrong key. **Empty**
+///   of the list with that mask, and finally — once both lists have kept
+///   their own — an entry of the provider's other list; so reordering
+///   entries, deleting some, or turning an `api_keys` entry into a
+///   `credentials` entry or back never attaches the wrong key. **Empty**
 ///   values come second and only take what the masked ones left: a credential
 ///   is the stored credential with the same `service_account_file`, else the
 ///   same `label`, and keeps *that* credential's key (possibly none); without
@@ -612,7 +650,7 @@ pub fn unmask_into(update: &mut Config, current: &Config) -> Result<(), Vec<Conf
             ambiguous_paths.push(format!("auth.keys[{i}].key"));
         }
         let mut claimed = vec![false; own.len()];
-        for i in restore(&mut slots, &own, &mut claimed, &[], &mut []) {
+        for i in restore(&mut slots, &own, &mut claimed) {
             issue(format!("auth.keys[{i}].key"));
         }
     }
@@ -680,10 +718,13 @@ pub fn unmask_into(update: &mut Config, current: &Config) -> Result<(), Vec<Conf
             }
         }
 
-        let mut keys_claimed = vec![false; stored_keys.len()];
-        let mut credentials_claimed = vec![false; stored_credentials.len()];
+        // Both lists phase by phase (see [`restore`]): each keeps its own
+        // secrets — a labelled credential the one its label names — before
+        // either takes one from the other.
         {
-            let own: Vec<Candidate<'_>> = stored_keys
+            let mut keys_claimed = vec![false; stored_keys.len()];
+            let mut credentials_claimed = vec![false; stored_credentials.len()];
+            let own_keys: Vec<Candidate<'_>> = stored_keys
                 .iter()
                 .map(|k| Candidate {
                     secret: k,
@@ -691,7 +732,7 @@ pub fn unmask_into(update: &mut Config, current: &Config) -> Result<(), Vec<Conf
                     anchor: "",
                 })
                 .collect();
-            let mut slots: Vec<Slot<'_>> = provider
+            let mut key_slots: Vec<Slot<'_>> = provider
                 .api_keys
                 .iter_mut()
                 .map(|k| Slot {
@@ -700,18 +741,7 @@ pub fn unmask_into(update: &mut Config, current: &Config) -> Result<(), Vec<Conf
                     anchor: "",
                 })
                 .collect();
-            for j in restore(
-                &mut slots,
-                &own,
-                &mut keys_claimed,
-                &stored_credential_keys,
-                &mut credentials_claimed,
-            ) {
-                issue(format!("providers[{i}].api_keys[{j}]"));
-            }
-        }
-        {
-            let mut slots: Vec<Slot<'_>> = provider
+            let mut credential_slots: Vec<Slot<'_>> = provider
                 .credentials
                 .iter_mut()
                 .map(|c| Slot {
@@ -720,12 +750,32 @@ pub fn unmask_into(update: &mut Config, current: &Config) -> Result<(), Vec<Conf
                     anchor: &c.service_account_file,
                 })
                 .collect();
-            for j in restore(
-                &mut slots,
+            let mut key_needs = restore_own(&mut key_slots, &own_keys, &mut keys_claimed);
+            let mut credential_needs = restore_own(
+                &mut credential_slots,
                 &stored_credentials,
                 &mut credentials_claimed,
+            );
+            restore_moved(
+                &mut key_slots,
+                &mut key_needs,
+                &stored_credential_keys,
+                &mut credentials_claimed,
+            );
+            restore_moved(
+                &mut credential_slots,
+                &mut credential_needs,
                 &stored_keys,
                 &mut keys_claimed,
+            );
+            for j in restore_empty(&mut key_slots, &mut key_needs, &own_keys, &mut keys_claimed) {
+                issue(format!("providers[{i}].api_keys[{j}]"));
+            }
+            for j in restore_empty(
+                &mut credential_slots,
+                &mut credential_needs,
+                &stored_credentials,
+                &mut credentials_claimed,
             ) {
                 issue(format!("providers[{i}].credentials[{j}].api_key"));
             }
