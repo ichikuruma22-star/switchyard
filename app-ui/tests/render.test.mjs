@@ -26,7 +26,8 @@ const textIn=node=>flatten(node).filter(item=>item.nodeType===3).map(item=>item.
 // Collapsed <details> content is not what a reviewer reads first.
 const visibleText=node=>node.localName==='details'?'':node.nodeType===3?node.data:node.childNodes.map(visibleText).join('');
 const attribute=(node,name)=>node?.attributes.find(item=>item.name===name)?.value;
-const buttonLabelled=(root,label)=>flatten(root).find(node=>node.localName==='button'&&textIn(node).includes(label));
+// Icon-only buttons carry their name in aria-label, as assistive technology reads it.
+const buttonLabelled=(root,label)=>flatten(root).find(node=>node.localName==='button'&&(textIn(node).includes(label)||attribute(node,'aria-label')===label));
 const taskInput=root=>flatten(root).find(node=>attribute(node,'id')==='task-input');
 // Preact keeps each element's listeners in `l`; call one as the browser would.
 function fire(node,type,event={}) {
@@ -225,4 +226,122 @@ test('a changed file shows its current diff after a transient refresh failure',a
       assert.ok(!textIn(root).includes('Project inspection is busy'),'a successful refresh replaces the earlier error');
     }finally{render(null,root);}
   }
+});
+
+const withClass=(root,name)=>flatten(root).filter(node=>String(attribute(node,'class')||'').split(' ').includes(name));
+
+test('a file preview copies exactly the file text: blank lines carry no hidden characters',async()=>{
+  const root=new Element('div');installDom(root);
+  const { CodePreview }=await import('../workbench.js');
+  render(html`<${CodePreview} file=${{path:'a.py',content:'def a():\n\n    return 1\n',truncated:false}}/>`,root);
+  try{
+    const lines=withClass(root,'source-line');
+    assert.equal(lines.length,4);
+    assert.ok(!textIn(root).includes('\u200b'),'no zero-width space in any text node');
+    assert.equal(withClass(root,'source-lines')[0].childNodes.map(line=>textIn(line.childNodes[1])).join('\n'),'def a():\n\n    return 1\n');
+  }finally{render(null,root);}
+});
+
+// A two-turn Antigravity conversation, shaped like the adapter's recorded events.
+const project={id:'p',name:'Project',root:'\\\\?\\E:\\work\\project'};
+const planNotice='Antigravity runs in plan mode: it can inspect the project and answer, but cannot apply edits or run commands that change files. Continuing sends only your new message.';
+const antigravityTurn=(runId,task,answer)=>[
+  {seq:1,kind:'state_changed',payload:{state:'starting'}},{seq:2,kind:'user_task',payload:{text:task}},{seq:3,kind:'state_changed',payload:{state:'running'}},
+  {seq:4,kind:'notice',payload:{message:planNotice}},
+  {seq:5,kind:'item_started',payload:{item:{type:'claudeTool',id:`${runId}-tool`,name:'view_file',input:{AbsolutePath:'src/main.rs'},status:'inProgress'}}},
+  {seq:6,kind:'item_completed',payload:{item:{type:'claudeTool',id:`${runId}-tool`,name:'view_file',input:{AbsolutePath:'src/main.rs'},status:'completed',output:'fn main() {}'}}},
+  {seq:7,kind:'item_completed',payload:{item:{type:'agentMessage',id:`${runId}-msg`,text:answer}}},
+  {seq:8,kind:'turn_completed',payload:{status:'completed'}},{seq:9,kind:'state_changed',payload:{state:'completed'}},
+].map(event=>({...event,run_id:runId,at_ms:event.seq}));
+async function mountConversation(root,runs,eventsByRun){
+  const { AdapterWorkspace }=await import('../adapters.js');
+  const adapters=[{id:'antigravity',name:'Antigravity',installed:true,supported:true,status:'available',permission_boundary:'Plan mode.'}];
+  const api={async request(path){
+    if(path==='/adapters')return {adapters};
+    if(path==='/adapter-runs')return {runs:runs()};
+    const id=decodeURIComponent(path.split('/')[2].split('?')[0]);
+    if(!path.includes('/events'))return {run:runs().find(run=>run.id===id)};
+    const after=Number(new URLSearchParams(path.split('?')[1]).get('after_seq'));
+    return {events:eventsByRun()[id].filter(event=>event.seq>after)};
+  }};
+  render(html`<${AdapterWorkspace} api=${api} project=${project} hostId="conversation-fixture" storage=${memoryStorage()} profiles=${[]} conversationId="c1" onNative=${()=>{}} onOpenProject=${()=>{}} onOpenNavigation=${()=>{}}/>`,root);
+}
+
+test('a continued Antigravity conversation reads as messages, one notice and one rule per turn',async()=>{
+  const root=new Element('div');installDom(root);
+  const run=(id,started,extra={})=>({id,conversation_id:'c1',adapter_id:'antigravity',profile_id:'system-antigravity',profile_name:'Existing Antigravity CLI',project_path:project.root,state:'completed',thread_id:'t',turn_id:'u',started_at_ms:started,last_seq:9,first_retained_seq:1,pending_approvals:[],permission_boundary:'Plan mode.',...extra});
+  const runs=[run('r1',1000),run('r2',2000)];
+  const events={r1:antigravityTurn('r1','What does main do?','It starts the app.'),r2:antigravityTurn('r2','And the tests?','There are none yet.')};
+  await mountConversation(root,()=>runs,()=>events);
+  try{
+    await until(()=>withClass(root,'turn-rule').length===2,'both turn rules');
+    const scroll=withClass(root,'conversation-scroll')[0];
+    assert.equal(withClass(scroll,'message').length,4);
+    assert.equal(withClass(scroll,'notice').filter(node=>textIn(node).includes('plan mode')).length,1,'the plan-mode notice appears once');
+    assert.equal(withClass(scroll,'run-divider').length,1);
+    const stateRows=withClass(scroll,'state-event').filter(node=>!String(attribute(node,'class')).includes('run-divider'));
+    assert.deepEqual(stateRows.map(textIn),[],'no Starting, Working or Completed rows');
+    assert.equal(textIn(withClass(scroll,'turn-rule')[0]).startsWith('Antigravity reported the turn completed'),true);
+    const tool=withClass(scroll,'codex-item')[0];
+    assert.equal(textIn(flatten(tool).find(node=>node.localName==='strong')),'Read file');
+    assert.ok(textIn(tool).includes('view_file'),'the exact tool name stays in Details');
+    // The pinned account is in the header while the composer has no agent or account row.
+    assert.ok(textIn(withClass(root,'run-account')[0]).includes('Existing Antigravity CLI'));
+    assert.equal(withClass(root,'composer-top').length,0);
+  }finally{render(null,root);}
+});
+
+test('an existing-agent approval row holds the amber rule only while its request is pending',async()=>{
+  const root=new Element('div');installDom(root);
+  const approval={id:'a1',method:'claude/can_use_tool',can_allow_once:true,expected_hash:'h',permission_boundary:'OS permissions.',preview:{request:{tool_name:'Edit',input:{file_path:'a.txt',old_string:'a',new_string:'b'}}}};
+  let current={id:'r1',conversation_id:'c1',adapter_id:'claude',profile_name:'Existing Claude CLI',project_path:project.root,state:'awaiting_approval',thread_id:'t',turn_id:'u',started_at_ms:1,last_seq:3,first_retained_seq:1,pending_approvals:[approval],permission_boundary:'OS permissions.'};
+  let events=[{seq:1,kind:'user_task',payload:{text:'Edit a.txt'}},{seq:2,kind:'state_changed',payload:{state:'awaiting_approval'}},{seq:3,kind:'approval_requested',payload:{approval}}].map(event=>({...event,run_id:'r1',at_ms:event.seq}));
+  await mountConversation(root,()=>[current],()=>({r1:events}));
+  const held=()=>withClass(root,'conversation-scroll')[0]&&flatten(withClass(root,'conversation-scroll')[0]).filter(node=>attribute(node,'data-hold')==='true');
+  try{
+    await until(()=>held()?.length===1,'the held approval row');
+    assert.ok(textIn(held()[0]).includes('Allow Claude Code to use Edit?'));
+    assert.ok(textIn(root).includes('Waiting for your decision'),'the live row names the wait');
+    assert.ok(textIn(withClass(root,'signal-light')[0]).includes('Approval needed'));
+    current={...current,state:'completed',pending_approvals:[],last_seq:5};
+    events=[...events,{seq:4,kind:'approval_resolved',payload:{approval_id:'a1',decision:'deny'},run_id:'r1',at_ms:4},{seq:5,kind:'turn_completed',payload:{status:'completed'},run_id:'r1',at_ms:5}];
+    await until(()=>withClass(root,'turn-rule').length===1,'the decided turn');
+    assert.equal(held().length,0,'nothing stays amber after the decision');
+    assert.ok(textIn(withClass(root,'signal-light')[0]).includes('Nothing to approve'));
+    assert.ok(!textIn(root).includes('Waiting for your decision'));
+  }finally{render(null,root);}
+});
+
+test('a built-in tool row holds the amber rule only while the backend reports its operation pending',async()=>{
+  const root=new Element('div');installDom(root);
+  const project={id:'P',name:'Project',root:'/work/project'};
+  const operation={id:'o1',session_id:'S1',name:'run_command',arguments_hash:'h',arguments:{command:'npm test'},preview:{command:'npm test',cwd:'.'}};
+  const at=(seq,kind,payload)=>({seq,kind,payload,session_id:'S1',run_id:'R1',at_ms:seq});
+  let state={session:{id:'S1',title:'Check',state:'awaiting_approval',model:'fixture-model',updated_at_ms:2,last_seq:3,revision:1,active_run_id:'R1'},project,pending_operation:operation,
+    events:[at(1,'turn.started',{text:'Run the tests'}),at(2,'tool.proposed',operation),at(3,'approval.required',operation)]};
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async url=>{
+    const path=url.replace(/^\/api/,''),reply=value=>({ok:true,status:200,json:async()=>value});
+    if(path==='/status')return reply({version:'fixture'});
+    if(path==='/models')return reply({models:[{id:'fixture-model',owned_by:'fixture'}]});
+    if(path==='/projects')return reply({projects:[project]});
+    if(path==='/workspace')return reply({selection:{project_id:'P',session_id:'S1',mode:'native',tool:'conversation'}});
+    if(path.startsWith('/sessions?'))return reply({sessions:[state.session]});
+    if(path.startsWith('/sessions/'))return reply(state);
+    return reply({});
+  };
+  const held=()=>flatten(root).filter(node=>attribute(node,'data-hold')==='true');
+  try{
+    await import('../app.js?hold-fixture');
+    await until(()=>held().length===1,'the held tool row');
+    assert.ok(textIn(held()[0]).includes('Needs your approval'));
+    assert.ok(withClass(root,'approval').length>0,'the approval card is shown beside it');
+    assert.ok(textIn(withClass(root,'signal-light')[0]).includes('Approval needed'));
+    state={...state,session:{...state.session,state:'completed',last_seq:6,active_run_id:null},pending_operation:null,
+      events:[...state.events,at(4,'approval.decided',{operation_id:'o1',decision:'deny'}),at(5,'tool.completed',{operation_id:'o1',name:'run_command',result:{status:'denied',error:'denied'}}),at(6,'run.completed',{message:'The model finished this run. Review changes and observed checks separately.'})]};
+    await until(()=>withClass(root,'turn-rule').length===1,'the completed turn');
+    assert.equal(held().length,0,'the row returns to neutral after the decision');
+    assert.ok(textIn(withClass(root,'turn-rule')[0]).includes('Review changes and observed checks separately.'));
+    assert.ok(textIn(withClass(root,'signal-light')[0]).includes('Nothing to approve'));
+  }finally{render(null,root);globalThis.fetch=originalFetch;}
 });
