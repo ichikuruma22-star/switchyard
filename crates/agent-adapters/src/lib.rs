@@ -305,6 +305,7 @@ impl AdapterManager {
             ephemeral,
             history_error: None,
             permission_boundary: types::permission_boundary(&adapter_id).into(),
+            auto_approve: request.auto_approve,
         };
         let mut stored = StoredRun {
             view,
@@ -335,6 +336,7 @@ impl AdapterManager {
             prompt: request.prompt,
             resume_thread,
             ephemeral,
+            auto_approve: request.auto_approve,
         };
         let task_state = state.clone();
         let shutdown = self.inner.shutdown.child_token();

@@ -776,9 +776,10 @@ async fn watch(
         () = cancelled.cancelled() => Err(AppError::new(StatusCode::CONFLICT, "interrupted", "Interruption requested.")),
         result = async {
             let run = read_run(remote, id).await?;
-            write_stderr(&format!("Run: {}\nConversation: {}\nAccount: {}\n{}\n",
+            write_stderr(&format!("Run: {}\nConversation: {}\nAccount: {}\n{}\n{}\n",
                 terminal_text(&run.id), terminal_text(&run.conversation_id),
-                terminal_text(run.profile_name.as_deref().unwrap_or("Unknown")), terminal_text(&run.permission_boundary)))?;
+                terminal_text(run.profile_name.as_deref().unwrap_or("Unknown")), terminal_text(&run.permission_boundary),
+                auto_approval_line(run.auto_approve)))?;
             drive(remote, id, input, Role::Owner).await
         } => result,
     };
@@ -1191,6 +1192,19 @@ fn append_output(text: &mut String, output: Option<&str>, run_id: &str) {
     }
 }
 
+/// The approval setting a run started with, in the words of the trust settings.
+fn auto_approval_line(auto: switchyard_agent_adapters::AutoApproval) -> String {
+    let what = match (auto.edits, auto.commands) {
+        (false, false) => return "Approvals: you decide each file change and command.".into(),
+        (true, false) => "file changes",
+        (false, true) => "commands",
+        (true, true) => "file changes and commands",
+    };
+    format!(
+        "Approvals: Switchya approves complete single-operation requests for {what} itself (project setting). Requests it cannot allow once still wait for you."
+    )
+}
+
 fn render_event(event: &AdapterEvent, streamed: &mut HashMap<String, String>) -> Result<()> {
     if let Some(text) = assistant_output(event, streamed) {
         return write_stdout(&terminal_text(&text));
@@ -1208,6 +1222,12 @@ fn render_event(event: &AdapterEvent, streamed: &mut HashMap<String, String>) ->
             if let Some(message) = event.payload["message"].as_str() {
                 write_stderr(&format!("\n{}\n", terminal_text(message)))?;
             }
+        }
+        "approval_resolved" if event.payload["decided_by"] == "auto_approve" => {
+            write_stderr(&format!(
+                "\nApproved automatically by the project's approval setting ({}).\n",
+                terminal_text(event.payload["approval_id"].as_str().unwrap_or("request"))
+            ))?;
         }
         _ => {}
     }

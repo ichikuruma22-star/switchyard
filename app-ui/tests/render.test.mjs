@@ -345,3 +345,49 @@ test('a built-in tool row holds the amber rule only while the backend reports it
     assert.ok(textIn(withClass(root,'signal-light')[0]).includes('Nothing to approve'));
   }finally{render(null,root);globalThis.fetch=originalFetch;}
 });
+
+test('a trusted project shows auto-approval plainly and saves the project setting',async()=>{
+  const root=new Element('div');installDom(root);
+  let project={id:'P',name:'Project',root:'/work/project',auto_approve:{edits:true,commands:false}};
+  const operation={id:'o1',session_id:'S1',name:'apply_patch',arguments_hash:'h',arguments:{edits:[{path:'a.txt',before_sha256:null,content:'x'}]},preview:{edits:[{path:'a.txt',before_sha256:null,diff:'+x'}]}};
+  const at=(seq,kind,payload)=>({seq,kind,payload,session_id:'S1',run_id:'R1',at_ms:seq});
+  const state={session:{id:'S1',title:'Edit',state:'completed',model:'fixture-model',updated_at_ms:2,last_seq:6,revision:1,active_run_id:null,auto_approve:null},project,pending_operation:null,auto_approve:{edits:true,commands:false,source:'project'},
+    events:[at(1,'turn.started',{text:'Edit a.txt'}),at(2,'tool.proposed',operation),at(3,'approval.decided',{operation_id:'o1',decision:'allow_once',decided_by:'auto_approve',policy_source:'project'}),at(4,'tool.started',{operation_id:'o1',name:'apply_patch'}),at(5,'tool.completed',{operation_id:'o1',name:'apply_patch',result:{status:'completed',changes:[{path:'a.txt',before_sha256:null,after_sha256:'z'}]}}),at(6,'run.completed',{message:'Done.'})]};
+  const posted=[];
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(url,options={})=>{
+    const path=url.replace(/^\/api/,''),reply=value=>({ok:true,status:200,json:async()=>value});
+    if(options.method==='POST'&&path==='/projects/P/auto-approve'){const body=JSON.parse(options.body);posted.push(body);project={...project,auto_approve:body};return reply({project});}
+    if(path==='/status')return reply({version:'fixture'});
+    if(path==='/models')return reply({models:[{id:'fixture-model',owned_by:'fixture'}]});
+    if(path==='/projects')return reply({projects:[project]});
+    if(path==='/workspace')return reply({selection:{project_id:'P',session_id:'S1',mode:'native',tool:'conversation'}});
+    if(path.startsWith('/sessions?'))return reply({sessions:[state.session]});
+    if(path.startsWith('/sessions/'))return reply({...state,project,auto_approve:{...project.auto_approve,source:'project'}});
+    return reply({});
+  };
+  try{
+    await import('../app.js?trust-fixture');
+    const toggle=()=>withClass(root,'trust-open')[0];
+    await until(()=>toggle()&&textIn(toggle()).includes('Edits apply without asking'),'the trusted composer boundary');
+    assert.equal(attribute(toggle(),'data-tone'),'caution');
+    assert.ok(textIn(withClass(root,'trust-badge')[0]).includes('Auto-approve on'));
+    await until(()=>textIn(root).includes('Auto-approved · Completed'),'the auto-approved tool row');
+    // The fixture DOM has no modal dialogs; record the state a browser would.
+    Element.prototype.showModal??=function(){this.open=true;};
+    Element.prototype.close??=function(){this.open=false;};
+    fire(toggle(),'click');
+    const commands=()=>flatten(root).find(node=>attribute(node,'id')==='trust-project-commands');
+    await until(()=>withClass(root,'trust-dialog')[0]?.open&&commands(),'the approval settings dialog');
+    // Let the dialog reset its fields on opening before they are edited.
+    await new Promise(resolve=>setTimeout(resolve,50));
+    fire(commands(),'change',{currentTarget:{checked:true}});
+    await until(()=>textIn(root).includes('Commands will run without review'),'the command warning');
+    const form=flatten(root).find(node=>node.localName==='form'&&flatten(node).some(item=>attribute(item,'id')==='trust-project-commands'));
+    fire(form,'submit');
+    await until(()=>posted.length===1,'the saved project setting');
+    assert.deepEqual(posted[0],{edits:true,commands:true});
+    await until(()=>textIn(toggle()).includes('Edits and commands run without asking'),'the updated boundary');
+    assert.equal(attribute(toggle(),'data-tone'),'stop');
+  }finally{render(null,root);globalThis.fetch=originalFetch;}
+});

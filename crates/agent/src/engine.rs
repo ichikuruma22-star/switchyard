@@ -6,7 +6,7 @@ use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use switchyard_agent_tools::{PreparedTool, ToolResult};
@@ -38,6 +38,8 @@ struct Inner {
     /// with overlapping roots. This trades mutation throughput for reliable
     /// stale-hash checks; model requests, reads and approval waits stay concurrent.
     mutations: tokio::sync::Mutex<()>,
+    /// Canonical locations whose edits are never auto-approved.
+    review_paths: Vec<PathBuf>,
     closing: AtomicBool,
 }
 
@@ -73,6 +75,10 @@ impl AppEngine {
             ));
         }
         let store = Store::open(&options.data_dir)?;
+        let review_paths = std::iter::once(&options.data_dir)
+            .chain(&options.review_paths)
+            .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
+            .collect();
         Ok(Self {
             inner: Arc::new(Inner {
                 gateway,
@@ -81,6 +87,7 @@ impl AppEngine {
                 options,
                 active: Mutex::new(HashMap::new()),
                 mutations: tokio::sync::Mutex::new(()),
+                review_paths,
                 closing: AtomicBool::new(false),
             }),
         })
@@ -174,6 +181,7 @@ impl AppEngine {
                     .to_owned(),
                 root,
                 created_at_ms: now_ms(),
+                auto_approve: AutoApprove::OFF,
             };
             tx.execute(
                 "INSERT INTO projects(id,root,value) VALUES(?1,?2,?3)",
@@ -216,6 +224,7 @@ impl AppEngine {
                 last_seq: 0,
                 created_at_ms: now,
                 updated_at_ms: now,
+                auto_approve: None,
             };
             tx.execute(
                 "INSERT INTO sessions(id,project_id,value) VALUES(?1,?2,?3)",
@@ -238,10 +247,54 @@ impl AppEngine {
             .store
             .events(id, session.last_seq.saturating_sub(200), 200)?;
         Ok(SessionView {
+            auto_approve: EffectiveAutoApprove::resolve(&project, &session),
             session,
             project,
             pending_operation,
             events,
+        })
+    }
+
+    /// Opt a whole project in or out of auto-approval. Sessions with their own
+    /// override keep it. A change applies to the next proposed operation; an
+    /// operation already awaiting a decision still needs one.
+    pub fn set_project_auto_approve(
+        &self,
+        project_id: &str,
+        policy: AutoApprove,
+    ) -> Result<Project> {
+        self.inner.store.transaction(|tx| {
+            let mut project = store::get_project(tx, project_id)?;
+            project.auto_approve = policy;
+            tx.execute(
+                "UPDATE projects SET value=?2 WHERE id=?1",
+                params![project.id, serde_json::to_string(&project)?],
+            )?;
+            Ok(project)
+        })
+    }
+
+    /// Override (`Some`) or inherit (`None`) the project's trust for one
+    /// session. The change is journalled in the session's events.
+    pub fn set_session_auto_approve(
+        &self,
+        session_id: &str,
+        policy: Option<AutoApprove>,
+    ) -> Result<Session> {
+        self.inner.store.transaction(|tx| {
+            let mut session = store::get_session(tx, session_id)?;
+            let project = store::get_project(tx, &session.project_id)?;
+            session.auto_approve = policy;
+            store::save_session(tx, &session)?;
+            let effective = EffectiveAutoApprove::resolve(&project, &session);
+            store::append_event(
+                tx,
+                session_id,
+                session.active_run_id.as_deref(),
+                "auto_approve.changed",
+                json!({"session_override":policy,"effective":effective}),
+            )?;
+            store::get_session(tx, session_id)
         })
     }
 
@@ -628,7 +681,9 @@ impl AppEngine {
             )?;
             Ok(())
         })?;
-        if operation.requires_approval {
+        let auto_approved =
+            operation.requires_approval && self.auto_approve(run, &prepared, &mut operation)?;
+        if operation.requires_approval && !auto_approved {
             let receiver = {
                 let mut active = self.inner.active.lock();
                 let entry = active
@@ -703,6 +758,58 @@ impl AppEngine {
         Ok(())
     }
 
+    /// Record an approval made by the session's opt-in trust instead of a
+    /// person. The policy is read in the same transaction that records the
+    /// decision, so turning trust off applies to every later operation.
+    fn auto_approve(
+        &self,
+        run: &Run,
+        prepared: &PreparedTool,
+        operation: &mut Operation,
+    ) -> Result<bool> {
+        self.inner.store.transaction(|tx| {
+            let session = store::get_session(tx, &run.session_id)?;
+            let project = store::get_project(tx, &session.project_id)?;
+            let effective = EffectiveAutoApprove::resolve(&project, &session);
+            if !effective.policy().allows(&operation.name)
+                || (operation.name == "apply_patch"
+                    && self.edits_private_state(Path::new(&project.root), prepared))
+            {
+                return Ok(false);
+            }
+            operation.state = "approved".into();
+            store::save_operation(tx, operation)?;
+            store::append_event(
+                tx,
+                &run.session_id,
+                Some(&run.id),
+                "approval.decided",
+                json!({"operation_id":operation.id,"decision":Decision::AllowOnce,
+                    "decided_by":"auto_approve","policy_source":effective.source,
+                    "arguments_hash":operation.arguments_hash}),
+            )?;
+            Ok(true)
+        })
+    }
+
+    /// A project can contain the app's own state or gateway configuration (for
+    /// example a home directory). Edits there always go to a person.
+    fn edits_private_state(&self, root: &Path, prepared: &PreparedTool) -> bool {
+        let Some(edits) = prepared.args["edits"].as_array() else {
+            return true;
+        };
+        edits.iter().any(|edit| {
+            let Some(path) = edit["path"].as_str() else {
+                return true;
+            };
+            let target = root.join(path);
+            self.inner
+                .review_paths
+                .iter()
+                .any(|protected| within(&target, protected) || within(protected, &target))
+        })
+    }
+
     fn record_result(&self, run: &Run, operation: &Operation, result: Value) -> Result<()> {
         self.inner.store.transaction(|tx| {
             store::save_operation(tx, operation)?;
@@ -743,4 +850,23 @@ impl AppEngine {
             Ok(())
         })
     }
+}
+
+/// Component-wise prefix test. Windows paths compare case-insensitively.
+fn within(path: &Path, base: &Path) -> bool {
+    let normal = |path: &Path| -> Vec<String> {
+        path.components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .map(|c| {
+                let text = c.as_os_str().to_string_lossy();
+                if cfg!(windows) {
+                    text.to_lowercase()
+                } else {
+                    text.into_owned()
+                }
+            })
+            .collect()
+    };
+    let (path, base) = (normal(path), normal(base));
+    path.len() >= base.len() && path[..base.len()] == base[..]
 }

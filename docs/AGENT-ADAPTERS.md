@@ -39,7 +39,7 @@ Later that day, live Windows runs used an existing Codex CLI account and a manag
 | `run_profile(id)` | Trusted host-only lookup of a run's binding, used to keep a continuation on the same account. The binding must never become an HTTP response. |
 | `shutdown().await` | Cancels active supervisors, stops owned process trees and waits for cleanup. |
 
-`StartRequest` contains `adapter_id`, `project_path`, `prompt`, `command_id`, an optional `continue_run_id`, and an internal optional `ProfileBinding`. The binding cannot be deserialized from HTTP JSON. The HTTP host must resolve both a project ID and profile ID from its trusted registries. It must apply the same loopback, bearer authentication, Origin, JSON body and body-size restrictions as the own-engine routes. A client command UUID is required. Reusing it with the same complete request, including profile identity/home, returns the same run; changing that request causes conflict. The registry retains all command IDs, including those of runs removed by retention, so an evicted ID cannot accidentally replay work. Each run exposes its pinned `profile_id` and `profile_name`; changing a default does not alter existing runs.
+`StartRequest` contains `adapter_id`, `project_path`, `prompt`, `command_id`, an optional `continue_run_id`, an internal optional `ProfileBinding` and an internal `AutoApproval`. Neither the binding nor the approval setting can be deserialized from HTTP JSON; the host copies the approval setting from the saved project. The HTTP host must resolve both a project ID and profile ID from its trusted registries. It must apply the same loopback, bearer authentication, Origin, JSON body and body-size restrictions as the own-engine routes. A client command UUID is required. Reusing it with the same complete request, including profile identity/home, returns the same run; changing that request causes conflict. The registry retains all command IDs, including those of runs removed by retention, so an evicted ID cannot accidentally replay work. Each run exposes its pinned `profile_id` and `profile_name`; changing a default does not alter existing runs.
 
 Executable, shell arguments, config overrides, model IDs and provider tokens are not HTTP input. Discovery resolves a fixed CLI name to an absolute path, skips relative/empty PATH entries and excludes Windows `.cmd`/`.bat` shims. `Command` launches the native executable directly. Prompt text travels as JSON over stdin; it is never interpolated into a shell command. The selected Codex model comes from the CLI configuration and is reported only after thread creation. Discovery does not test authentication, available models, subscription eligibility or provider billing. Starting a real turn uses that installation's authentication and may consume provider usage.
 
@@ -56,7 +56,8 @@ profiles are not gated on a status check.
 See [terminal examples](SWITCHYA.md#continue-an-agent-conversation-from-the-terminal).
 An uncertain start is reported with its command UUID and is never automatically
 resubmitted. Interactive decisions require the exact approval ID and current
-preview hash. Noninteractive runs cannot approve requests.
+preview hash. Noninteractive runs cannot approve requests themselves; only a
+project's opt-in automatic approval answers matching requests.
 
 ## Permissions and approvals
 
@@ -94,6 +95,30 @@ structured answer or a permission-mode change, which is not a one-time approval
 of the displayed input. Ask Claude to continue in ordinary chat. Unknown control
 requests are rejected. Raw account metadata, diagnostics, image bytes and hidden
 message fields are not added to the transcript.
+
+### Opt-in automatic approval
+
+When a run starts with a project `AutoApproval` of edits and/or commands,
+Switchya answers matching requests itself instead of holding them for a
+person. It journals `approval_requested` with the exact preview first, then
+sends the same one-time answer a person's **Allow once** would (`accept` for
+Codex; `behavior=allow` with the unchanged `updatedInput` for Claude Code) and
+records `approval_resolved` with `decided_by: "auto_approve"`.
+
+Only requests with `can_allow_once` and a known category qualify: Codex
+`item/commandExecution/requestApproval` (commands) and
+`item/fileChange/requestApproval` (edits); Claude Code `Write`, `Edit`,
+`MultiEdit` and `NotebookEdit` (edits) and `Bash` and `PowerShell` (commands).
+Deny-only requests, `grantRoot`, unsupported Codex requests and every other
+Claude tool (MCP, web, agents, questions, plan mode) still wait for a person.
+
+Exposing the agents' native modes instead (Codex `workspace-write` with
+approval policy `never`, Claude Code `acceptEdits` or `bypassPermissions`) was
+considered and not adopted: requests would no longer reach Switchya, so they
+could not be journalled or limited to complete single operations, and the
+policy read-back that Switchya verifies before each turn would have to accept
+weaker settings. The agents keep the read-only/on-request and default
+policies described above.
 
 Claude may send a result while background work continues. Switchya waits for a
 result with no queued turns followed by `session_state_changed=idle`, then closes

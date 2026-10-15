@@ -4,6 +4,18 @@
 
 ### Switchya workspace
 
+- Opt-in automatic approval. **Approval settings** (select the approval note
+  beside the model picker) lets a trusted project apply file edits and/or run
+  shell commands without a prompt; a session can override its project. It is
+  off by default, and while it is on the composer note turns amber or red and
+  the header reads "Auto-approve on". Every operation is still recorded and
+  marked Auto-approved; protected paths stay blocked, and edits to Switchya's
+  own state or gateway configuration still ask. The same project setting
+  covers complete Codex and Claude Code edit and command requests in Existing
+  agents; deny-only requests always wait for you. From the terminal, use
+  `switchya trust --edits on --commands on` or `--auto-approve` on
+  `chat` and `run`.
+
 - Transcript rows, notices and the composer share one reading column.
   Existing-agent conversations show a repeated agent notice once, with one
   thin rule per finished turn, and tool rows use readable names such as

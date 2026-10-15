@@ -6,14 +6,17 @@ use crate::{
     AppError, AppOptions, LaunchInfo, Result, default_paths, start_host, startup::AppRuntime,
 };
 use axum::http::StatusCode;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
-use switchyard_agent::{Decision, Event, Project, Run, Session, SessionState, SessionView};
+use switchyard_agent::{
+    AutoApprove, Decision, EffectiveAutoApprove, Event, PolicySource, Project, Run, Session,
+    SessionState, SessionView,
+};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
@@ -49,12 +52,25 @@ enum Command {
     },
     /// Start or continue a session interactively.
     Chat(SessionArgs),
-    /// Submit one prompt. Noninteractive runs never approve file writes or commands.
+    /// Submit one prompt. Noninteractive runs never approve file writes or
+    /// commands themselves; only an opted-in auto-approve setting does.
     Run {
         #[command(flatten)]
         session: SessionArgs,
         #[arg(long)]
         prompt: String,
+    },
+    /// Show or change a project's auto-approval of edits and commands (off by default).
+    Trust {
+        /// Project folder; defaults to the current directory.
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Apply file edits without asking. Protected paths stay blocked.
+        #[arg(long, value_enum)]
+        edits: Option<Toggle>,
+        /// Run shell commands without asking, with your full OS permissions.
+        #[arg(long, value_enum)]
+        commands: Option<Toggle>,
     },
     /// List the models actually available to the selected gateway client key.
     Models,
@@ -88,6 +104,67 @@ struct SessionArgs {
     model: Option<String>,
     #[arg(long)]
     session: Option<String>,
+    /// Save this session's approval setting: auto-approve `edits`, `commands`
+    /// or `all`; `off` asks for every edit and command; `inherit` follows the
+    /// project's `switchya trust` setting.
+    #[arg(long, value_enum)]
+    auto_approve: Option<AutoApproveArg>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum Toggle {
+    On,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum AutoApproveArg {
+    Edits,
+    Commands,
+    All,
+    Off,
+    Inherit,
+}
+
+impl AutoApproveArg {
+    /// `None` clears the session override.
+    fn policy(self) -> Option<AutoApprove> {
+        let (edits, commands) = match self {
+            Self::Edits => (true, false),
+            Self::Commands => (false, true),
+            Self::All => (true, true),
+            Self::Off => (false, false),
+            Self::Inherit => return None,
+        };
+        Some(AutoApprove { edits, commands })
+    }
+}
+
+fn describe_auto_approve(policy: AutoApprove) -> &'static str {
+    match (policy.edits, policy.commands) {
+        (false, false) => "off; every edit and command needs your decision",
+        (true, false) => "file edits apply without asking; commands need your decision",
+        (false, true) => "commands run without asking; file edits need your decision",
+        (true, true) => "file edits and commands proceed without asking",
+    }
+}
+
+fn auto_approve_line(effective: &EffectiveAutoApprove) -> String {
+    let source = match effective.source {
+        PolicySource::Project => "project setting",
+        PolicySource::Session => "this session's setting",
+    };
+    let mut line = format!(
+        "Auto-approve ({source}): {}.",
+        describe_auto_approve(effective.policy())
+    );
+    if effective.commands {
+        line.push_str(" Commands run with your full OS permissions; this is not a sandbox.");
+    }
+    if effective.edits || effective.commands {
+        line.push_str(" Every operation is still recorded.");
+    }
+    line
 }
 
 pub async fn run() -> ExitCode {
@@ -203,9 +280,11 @@ async fn execute(mut cli: Cli, cancelled: &CancellationToken) -> Result<()> {
         }
         Command::Sessions => backend.sessions().await.and_then(|sessions| write_stdout(&format!("{}\n", terminal_text(&serde_json::to_string_pretty(&sessions).map_err(|_| AppError::local("Could not format session information."))?)))),
         Command::Recover { session, expected_revision, note } => backend.recover(&session, expected_revision, &note).await.and_then(|session| write_stderr(&format!("Recovery review recorded for {} at revision {}. Unknown effects remain unknown; a new turn can now be submitted.\n", terminal_text(&session.id), session.revision))),
+        Command::Trust { project, edits, commands } => trust(&backend, project, edits, commands).await,
         Command::Chat(args) => chat(&backend, args, cancelled).await,
         Command::Run { session, prompt } => async {
             let view = select_session(&backend, session).await?;
+            write_stderr(&format!("{}\n", auto_approve_line(&view.auto_approve)))?;
             let mut input = interactive_input();
             turn(&backend, &view.session.id, &prompt, &mut input, cancelled).await
         }.await,
@@ -491,6 +570,44 @@ impl Backend {
                 .session),
         }
     }
+    async fn set_project_auto_approve(
+        &self,
+        project_id: &str,
+        policy: AutoApprove,
+    ) -> Result<Project> {
+        match self {
+            Self::Direct(runtime) => Ok(runtime
+                .engine
+                .set_project_auto_approve(project_id, policy)?),
+            Self::Remote(remote) => Ok(remote
+                .request::<ProjectResponse>(
+                    reqwest::Method::POST,
+                    &format!("projects/{}/auto-approve", segment(project_id)),
+                    Some(json!({"edits":policy.edits,"commands":policy.commands})),
+                )
+                .await?
+                .project),
+        }
+    }
+    async fn set_session_auto_approve(
+        &self,
+        session_id: &str,
+        policy: Option<AutoApprove>,
+    ) -> Result<Session> {
+        match self {
+            Self::Direct(runtime) => Ok(runtime
+                .engine
+                .set_session_auto_approve(session_id, policy)?),
+            Self::Remote(remote) => Ok(remote
+                .request::<SessionResponse>(
+                    reqwest::Method::POST,
+                    &format!("sessions/{}/auto-approve", segment(session_id)),
+                    Some(json!({ "policy": policy })),
+                )
+                .await?
+                .session),
+        }
+    }
     async fn shutdown(&self) -> Result<()> {
         match self {
             Self::Direct(runtime) => runtime.shutdown().await,
@@ -500,6 +617,64 @@ impl Backend {
 }
 
 async fn select_session(backend: &Backend, args: SessionArgs) -> Result<SessionView> {
+    let auto_approve = args.auto_approve;
+    let view = open_session(backend, args).await?;
+    let Some(choice) = auto_approve else {
+        return Ok(view);
+    };
+    backend
+        .set_session_auto_approve(&view.session.id, choice.policy())
+        .await?;
+    backend.session(&view.session.id).await
+}
+
+async fn trust(
+    backend: &Backend,
+    project: Option<PathBuf>,
+    edits: Option<Toggle>,
+    commands: Option<Toggle>,
+) -> Result<()> {
+    let path = project_path(project)?;
+    let mut project = backend.project(&path).await?;
+    if edits.is_some() || commands.is_some() {
+        let policy = AutoApprove {
+            edits: edits.map_or(project.auto_approve.edits, |t| t == Toggle::On),
+            commands: commands.map_or(project.auto_approve.commands, |t| t == Toggle::On),
+        };
+        project = backend
+            .set_project_auto_approve(&project.id, policy)
+            .await?;
+    }
+    write_stdout(&trust_report(&project))
+}
+
+fn trust_report(project: &Project) -> String {
+    let policy = project.auto_approve;
+    let mut text = format!(
+        "Project: {}\nAuto-approve: {}.\n",
+        terminal_text(&project.root),
+        describe_auto_approve(policy)
+    );
+    if policy.commands {
+        text.push_str("Commands run with your account's full OS and network permissions. The project folder is not a sandbox.\n");
+    }
+    if policy.any() {
+        text.push_str("Protected paths (repository metadata, likely secrets, links, short-name aliases) stay blocked, and edits to Switchya's own state or gateway configuration still ask. Every operation is recorded in its session. Sessions with their own --auto-approve setting keep it.\n");
+    }
+    text
+}
+
+fn project_path(project: Option<PathBuf>) -> Result<PathBuf> {
+    let path = match project {
+        Some(path) => path,
+        None => std::env::current_dir()
+            .map_err(|_| AppError::local("Could not determine the current project directory."))?,
+    };
+    path.canonicalize()
+        .map_err(|_| AppError::invalid("Project path must be an accessible directory."))
+}
+
+async fn open_session(backend: &Backend, args: SessionArgs) -> Result<SessionView> {
     if let Some(id) = args.session {
         return backend.session(&id).await;
     }
@@ -508,14 +683,7 @@ async fn select_session(backend: &Backend, args: SessionArgs) -> Result<SessionV
             "A new session requires --model. Run `switchya models` to see permitted models; configure a real provider in the browser workspace or gateway configuration.",
         ));
     };
-    let path = match args.project {
-        Some(path) => path,
-        None => std::env::current_dir()
-            .map_err(|_| AppError::local("Could not determine the current project directory."))?,
-    };
-    let path = path
-        .canonicalize()
-        .map_err(|_| AppError::invalid("Project path must be an accessible directory."))?;
+    let path = project_path(args.project)?;
     let project = backend.project(&path).await?;
     let session = backend.create(&project.id, &model).await?;
     write_stderr(&format!("Session: {}\n", terminal_text(&session.id)))?;
@@ -574,9 +742,10 @@ async fn chat(backend: &Backend, args: SessionArgs, cancelled: &CancellationToke
     }
     let view = select_session(backend, args).await?;
     write_stderr(&format!(
-        "Project: {}\nModel: {}\nEnter a prompt, or /exit. Commands run with your OS permissions after explicit review.\n",
+        "Project: {}\nModel: {}\n{}\nEnter a prompt, or /exit. Commands run with your OS permissions.\n",
         terminal_text(&view.project.root),
-        terminal_text(&view.session.model)
+        terminal_text(&view.session.model),
+        auto_approve_line(&view.auto_approve)
     ))?;
     if let Some(run_id) = &view.session.active_run_id {
         let after = view
@@ -714,6 +883,7 @@ async fn drive(
     input: &mut Input,
 ) -> Result<()> {
     let mut decided = std::collections::HashSet::new();
+    let mut proposed = std::collections::HashMap::new();
     loop {
         let events = backend.events(id, after).await?;
         for event in &events {
@@ -722,6 +892,20 @@ async fn drive(
                 continue;
             }
             match event.kind.as_str() {
+                "tool.proposed" => {
+                    if let Some(operation) = event.payload["id"].as_str() {
+                        proposed.insert(operation.to_owned(), event.payload.clone());
+                    }
+                }
+                "approval.decided" if event.payload["decided_by"] == "auto_approve" => {
+                    let operation = event.payload["operation_id"]
+                        .as_str()
+                        .and_then(|id| proposed.get(id));
+                    write_stderr(&format!(
+                        "\n{}\n",
+                        terminal_text(&auto_approved_notice(&event.payload, operation))
+                    ))?;
+                }
                 "model.delta" => {
                     if let Some(text) = event.payload["text"].as_str() {
                         write_stdout(&terminal_text(text))?;
@@ -762,7 +946,7 @@ async fn drive(
                 return Err(AppError::new(
                     StatusCode::CONFLICT,
                     "approval_required",
-                    "The run requires explicit approval. Noninteractive execution will not approve it; interruption is being requested. Continue in an interactive session.",
+                    "The run requires explicit approval. Noninteractive execution will not approve it; interruption is being requested. Continue in an interactive session, or opt this session in with --auto-approve.",
                 ));
             }
             write_stderr(&format!(
@@ -824,6 +1008,34 @@ async fn drive(
         }
         tokio::time::sleep(Duration::from_millis(120)).await;
     }
+}
+
+/// One line naming what was auto-approved: the command text or the edited paths.
+fn auto_approved_notice(decision: &Value, operation: Option<&Value>) -> String {
+    let source = if decision["policy_source"] == "session" {
+        "session setting"
+    } else {
+        "project setting"
+    };
+    let name = operation
+        .and_then(|op| op["name"].as_str())
+        .unwrap_or("operation");
+    let detail = match name {
+        "run_command" => operation
+            .and_then(|op| op["arguments"]["command"].as_str())
+            .map(|command| format!(": {command}")),
+        "apply_patch" => operation
+            .and_then(|op| op["arguments"]["edits"].as_array())
+            .map(|edits| {
+                let paths: Vec<_> = edits.iter().filter_map(|e| e["path"].as_str()).collect();
+                format!(": {}", paths.join(", "))
+            }),
+        _ => None,
+    };
+    format!(
+        "Auto-approved {name} ({source}){}",
+        detail.unwrap_or_default()
+    )
 }
 
 fn same_pending_operation(view: &SessionView, operation: &switchyard_agent::Operation) -> bool {
@@ -979,13 +1191,16 @@ mod tests {
                 last_seq: 0,
                 created_at_ms: 0,
                 updated_at_ms: 0,
+                auto_approve: None,
             },
             project: Project {
                 id: "projecttest".into(),
                 name: "Fixture".into(),
                 root: "fixture".into(),
                 created_at_ms: 0,
+                auto_approve: Default::default(),
             },
+            auto_approve: Default::default(),
             pending_operation: pending.then(|| switchyard_agent::Operation {
                 id: "operationtest".into(),
                 session_id: "sessiontest".into(),
@@ -1349,6 +1564,123 @@ mod tests {
     #[tokio::test]
     async fn cancellation_during_approval_still_interrupts_the_run() {
         exercise_approval_race(ApprovalRace::Cancelled).await;
+    }
+
+    #[test]
+    fn auto_approve_choices_and_notices_say_exactly_what_runs_unasked() {
+        assert_eq!(AutoApproveArg::Inherit.policy(), None);
+        assert_eq!(
+            AutoApproveArg::Off.policy(),
+            Some(AutoApprove {
+                edits: false,
+                commands: false
+            })
+        );
+        assert_eq!(
+            AutoApproveArg::Edits.policy(),
+            Some(AutoApprove {
+                edits: true,
+                commands: false
+            })
+        );
+        assert_eq!(
+            AutoApproveArg::All.policy(),
+            Some(AutoApprove {
+                edits: true,
+                commands: true
+            })
+        );
+        let off = EffectiveAutoApprove::default();
+        assert_eq!(
+            auto_approve_line(&off),
+            "Auto-approve (project setting): off; every edit and command needs your decision."
+        );
+        let commands = EffectiveAutoApprove {
+            edits: false,
+            commands: true,
+            source: PolicySource::Session,
+        };
+        let line = auto_approve_line(&commands);
+        assert!(
+            line.starts_with("Auto-approve (this session's setting): commands run without asking")
+        );
+        assert!(line.contains("not a sandbox"));
+        let command = json!({"name":"run_command","arguments":{"command":"cargo test"}});
+        assert_eq!(
+            auto_approved_notice(&json!({"policy_source":"session"}), Some(&command)),
+            "Auto-approved run_command (session setting): cargo test"
+        );
+        let patch =
+            json!({"name":"apply_patch","arguments":{"edits":[{"path":"a.rs"},{"path":"b.rs"}]}});
+        assert_eq!(
+            auto_approved_notice(&json!({"policy_source":"project"}), Some(&patch)),
+            "Auto-approved apply_patch (project setting): a.rs, b.rs"
+        );
+        assert_eq!(
+            auto_approved_notice(&json!({}), None),
+            "Auto-approved operation (project setting)"
+        );
+        let mut project = fixture_view(false).project;
+        assert!(trust_report(&project).contains("Auto-approve: off;"));
+        project.auto_approve = AutoApprove {
+            edits: true,
+            commands: true,
+        };
+        let report = trust_report(&project);
+        assert!(report.contains("full OS and network permissions"));
+        assert!(report.contains("Every operation is recorded"));
+    }
+
+    #[tokio::test]
+    async fn noninteractive_runs_follow_auto_approved_operations_without_a_decision() {
+        let router = Router::new()
+            .route(
+                "/api/sessions/sessiontest",
+                get(|| async {
+                    let mut view = fixture_view(false);
+                    view.session.state = SessionState::Completed;
+                    Json(view)
+                }),
+            )
+            .route(
+                "/api/sessions/sessiontest/events",
+                get(|| async {
+                    let at = |seq: u64, kind: &str, payload: Value| Event {
+                        schema_version: 1,
+                        session_id: "sessiontest".into(),
+                        run_id: Some("runtest".into()),
+                        seq,
+                        at_ms: 0,
+                        kind: kind.into(),
+                        payload,
+                    };
+                    Json(json!({"events":[
+                        at(1, "tool.proposed", json!({"id":"op","name":"run_command","arguments":{"command":"cargo test"}})),
+                        at(2, "approval.decided", json!({"operation_id":"op","decision":"allow_once","decided_by":"auto_approve","policy_source":"project"})),
+                        at(3, "tool.completed", json!({"operation_id":"op","name":"run_command","result":{"status":"completed","exit_code":0}})),
+                        at(4, "run.completed", json!({})),
+                    ]}))
+                }),
+            );
+        let (backend, stopped, server) = fixture_server(router).await;
+        // No terminal input: a pending approval would fail this run.
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            watch(
+                &backend,
+                "sessiontest",
+                "runtest",
+                0,
+                &mut None,
+                &CancellationToken::new(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(backend);
+        stopped.cancel();
+        server.await.unwrap();
     }
 
     #[test]

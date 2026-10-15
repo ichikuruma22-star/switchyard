@@ -2,7 +2,7 @@ use crate::{
     AdapterApproval, AdapterError, ApprovalDecision, Control, Result, RunState, StoredRun,
     hash_value,
     process_tree::{self, ProcessTree},
-    types::PERMISSION_BOUNDARY,
+    types::{ApprovalKind, AutoApproval, PERMISSION_BOUNDARY},
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -47,6 +47,7 @@ pub(crate) struct RunInput {
     pub(crate) resume_thread: Option<String>,
     /// Ask the agent not to save a new thread. Used when Switchya keeps no history.
     pub(crate) ephemeral: bool,
+    pub(crate) auto_approve: AutoApproval,
 }
 
 pub(crate) async fn run(
@@ -63,6 +64,7 @@ pub(crate) async fn run(
         prompt,
         resume_thread,
         ephemeral,
+        auto_approve,
     } = input;
     let mut command = Command::new(executable);
     command
@@ -180,7 +182,7 @@ pub(crate) async fn run(
                         Some(Packet::End) | None => { fail(&state, "Codex exited without a confirmed turn completion. No work will be replayed.", turn_was_requested); break; }
                     };
                     if message.get("method").is_some() && message.get("id").is_some() {
-                        if let Err(error) = server_request(&mut stdin, &state, &mut pending, &items, &message, stage == Stage::Interrupting).await {
+                        if let Err(error) = server_request(&mut stdin, &state, &mut pending, &items, &message, stage == Stage::Interrupting, auto_approve).await {
                             fail(&state, &error.to_string(), turn_was_requested); break;
                         }
                         continue;
@@ -392,6 +394,7 @@ async fn server_request(
     items: &BTreeMap<String, Value>,
     message: &Value,
     interrupting: bool,
+    auto_approve: AutoApproval,
 ) -> Result<()> {
     let method = message
         .get("method")
@@ -486,6 +489,23 @@ async fn server_request(
         can_allow_once,
         permission_boundary: PERMISSION_BOUNDARY.into(),
     };
+    let kind = if method == "item/commandExecution/requestApproval" {
+        ApprovalKind::Command
+    } else {
+        ApprovalKind::Edit
+    };
+    if approval.can_allow_once && auto_approve.allows(Some(kind)) {
+        // Journal the exact request before answering it, as for a human decision.
+        state
+            .lock()
+            .event("approval_requested", json!({"approval":approval}));
+        write(stdin, &json!({"id":id,"result":{"decision":"accept"}})).await?;
+        state.lock().event(
+            "approval_resolved",
+            json!({"approval_id":approval.id,"decision":ApprovalDecision::AllowOnce,"decided_by":"auto_approve"}),
+        );
+        return Ok(());
+    }
     pending.insert(
         approval.id.clone(),
         Pending {

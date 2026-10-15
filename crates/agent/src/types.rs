@@ -9,6 +9,9 @@ pub struct EngineOptions {
     pub max_steps: u32,
     pub max_output_tokens: u64,
     pub max_context_bytes: usize,
+    /// Files or directories whose edits always need a human decision, even in
+    /// a project that auto-approves edits. The data directory is always one.
+    pub review_paths: Vec<PathBuf>,
 }
 
 impl EngineOptions {
@@ -18,6 +21,77 @@ impl EngineOptions {
             max_steps: 16,
             max_output_tokens: 4096,
             max_context_bytes: 2 * 1024 * 1024,
+            review_paths: Vec::new(),
+        }
+    }
+}
+
+/// Opt-in trust that replaces the per-operation human decision for file edits
+/// and/or shell commands. Both are off by default. Auto-approved operations are
+/// journalled like reviewed ones; tool preparation still refuses protected
+/// paths (repository metadata, likely secrets, links and short-name aliases).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AutoApprove {
+    #[serde(default)]
+    pub edits: bool,
+    #[serde(default)]
+    pub commands: bool,
+}
+
+impl AutoApprove {
+    pub const OFF: Self = Self {
+        edits: false,
+        commands: false,
+    };
+
+    pub fn any(&self) -> bool {
+        self.edits || self.commands
+    }
+
+    /// Only mutating tools need approval; anything unrecognized stays manual.
+    pub fn allows(&self, tool: &str) -> bool {
+        match tool {
+            "apply_patch" => self.edits,
+            "run_command" => self.commands,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicySource {
+    #[default]
+    Project,
+    Session,
+}
+
+/// The trust actually applied to a session's next operation and where it came from.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EffectiveAutoApprove {
+    pub edits: bool,
+    pub commands: bool,
+    pub source: PolicySource,
+}
+
+impl EffectiveAutoApprove {
+    pub fn resolve(project: &Project, session: &Session) -> Self {
+        let (policy, source) = match session.auto_approve {
+            Some(policy) => (policy, PolicySource::Session),
+            None => (project.auto_approve, PolicySource::Project),
+        };
+        Self {
+            edits: policy.edits,
+            commands: policy.commands,
+            source,
+        }
+    }
+
+    pub fn policy(&self) -> AutoApprove {
+        AutoApprove {
+            edits: self.edits,
+            commands: self.commands,
         }
     }
 }
@@ -40,6 +114,9 @@ pub struct Project {
     pub name: String,
     pub root: String,
     pub created_at_ms: i64,
+    /// Project-wide trust; sessions inherit it unless they override it.
+    #[serde(default)]
+    pub auto_approve: AutoApprove,
 }
 
 /// A portable progress note. Its content is reported context, never authority
@@ -110,6 +187,9 @@ pub struct Session {
     pub last_seq: u64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// `None` inherits the project's trust; `Some` overrides it for this session.
+    #[serde(default)]
+    pub auto_approve: Option<AutoApprove>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -160,6 +240,8 @@ pub struct SessionView {
     pub session: Session,
     pub project: Project,
     pub pending_operation: Option<Operation>,
+    #[serde(default)]
+    pub auto_approve: EffectiveAutoApprove,
     /// Initial window of public events. Fetch later events with a sequence cursor.
     pub events: Vec<Event>,
 }

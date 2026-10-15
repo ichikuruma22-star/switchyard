@@ -42,6 +42,7 @@ fn request(project: &Path, previous: Option<String>) -> StartRequest {
         .into(),
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: previous,
+        auto_approve: Default::default(),
         profile: Some(ProfileBinding {
             id: "claude-fixture".into(),
             name: "Claude fixture".into(),
@@ -443,4 +444,82 @@ async fn claude_requires_an_explicit_valid_account() {
         AdapterManager::new().start(request),
         Err(AdapterError::Invalid(_))
     ));
+}
+
+#[tokio::test]
+async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests() {
+    let start_auto = |manager: &AdapterManager, scenario: &str, auto_approve: AutoApproval| {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().canonicalize().unwrap();
+        let mut request = request(&project, None);
+        request.auto_approve = auto_approve;
+        let run = manager
+            .start_process(request, project, fixture(), vec![scenario.into()])
+            .unwrap();
+        (directory, run)
+    };
+    let edits = AutoApproval {
+        edits: true,
+        commands: false,
+    };
+    // Write is a file edit: it is answered without a prompt.
+    let manager = AdapterManager::new();
+    let (directory, run) = start_auto(&manager, "allow", edits);
+    let finished = wait(&manager, &run.id, |run| !run.state.is_active()).await;
+    assert_eq!(finished.state, RunState::Completed);
+    manager.shutdown().await;
+    assert!(directory.path().join("approved.txt").exists());
+    let events = manager.events(&run.id, 0, 200).unwrap();
+    assert!(events.iter().any(|e| e.kind == "approval_requested"));
+    assert!(events.iter().any(|e| e.kind == "approval_resolved"
+        && e.payload["decided_by"] == "auto_approve"
+        && e.payload["decision"] == "allow_once"));
+
+    // Commands-only trust does not cover Write; deny-only plan changes always ask.
+    for (scenario, auto) in [
+        (
+            "allow",
+            AutoApproval {
+                edits: false,
+                commands: true,
+            },
+        ),
+        (
+            "deny_only",
+            AutoApproval {
+                edits: true,
+                commands: true,
+            },
+        ),
+    ] {
+        let manager = AdapterManager::new();
+        let (directory, run) = start_auto(&manager, scenario, auto);
+        let pending = wait(&manager, &run.id, |run| {
+            run.state == RunState::AwaitingApproval
+        })
+        .await;
+        let approval = &pending.pending_approvals[0];
+        manager
+            .decide(
+                &run.id,
+                &approval.id,
+                &approval.expected_hash,
+                ApprovalDecision::Deny,
+            )
+            .await
+            .unwrap();
+        wait(&manager, &run.id, |run| !run.state.is_active()).await;
+        manager.shutdown().await;
+        assert!(
+            !directory.path().join("approved.txt").exists(),
+            "{scenario}"
+        );
+    }
+    assert_eq!(claude::tool_kind("Edit"), Some(types::ApprovalKind::Edit));
+    assert_eq!(
+        claude::tool_kind("PowerShell"),
+        Some(types::ApprovalKind::Command)
+    );
+    assert_eq!(claude::tool_kind("WebFetch"), None);
+    assert_eq!(claude::tool_kind("mcp__server__tool"), None);
 }
