@@ -147,6 +147,22 @@ fn logprob_tokens(logprobs: Option<&Value>) -> Option<&Vec<Value>> {
     logprobs?.get("content")?.as_array()
 }
 
+/// How many characters of the completion text a Chat log-probability entry
+/// covers. A character split across tokens arrives as escaped text (such as
+/// `\xe2\x80`) next to its raw `bytes`, so when the entry lists its bytes the
+/// UTF-8 lead bytes are counted: the character counts once, at the token
+/// that starts it. Without `bytes` the token text is counted.
+fn token_chars(entry: &Value, token: &str) -> usize {
+    match entry.get("bytes").and_then(Value::as_array) {
+        Some(bytes) => bytes
+            .iter()
+            .filter_map(Value::as_u64)
+            .filter(|byte| byte & 0xC0 != 0x80)
+            .count(),
+        None => token.chars().count(),
+    }
+}
+
 /// Rewrites a choice's Chat `logprobs` (`{"content": [{token, logprob,
 /// bytes, top_logprobs}], "refusal": …}`) in the legacy shape: parallel
 /// `tokens`, `token_logprobs`, `top_logprobs` (one `{token: logprob}` object
@@ -183,7 +199,7 @@ fn legacy_logprobs(logprobs: Option<&Value>, offset: &mut usize) -> Value {
         }
         top_logprobs.push(Value::Object(alternatives));
         text_offset.push(json!(*offset));
-        *offset += token.chars().count();
+        *offset += token_chars(entry, token);
     }
     json!({
         "tokens": tokens,

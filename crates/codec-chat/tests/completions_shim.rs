@@ -275,6 +275,16 @@ fn response_logprobs_are_rewritten_in_the_legacy_shape() {
             // Refusal log probabilities have no legacy counterpart.
             {"index": 3, "message": {"role": "assistant", "content": null, "refusal": "No."},
              "logprobs": {"content": null, "refusal": [{"token": "No", "logprob": -0.2}]},
+             "finish_reason": "stop"},
+            // A character split across tokens counts once, where it starts;
+            // without `bytes` the token text is counted.
+            {"index": 4, "message": {"role": "assistant", "content": " Par…!"},
+             "logprobs": {"content": [
+                 {"token": " Par", "logprob": -0.1, "bytes": null},
+                 {"token": "\\xe2\\x80", "logprob": -0.3, "bytes": [226, 128]},
+                 {"token": "\\xa6", "logprob": -0.4, "bytes": [166]},
+                 {"token": "!", "logprob": -0.5}
+             ], "refusal": null},
              "finish_reason": "stop"}
         ]
     }));
@@ -301,6 +311,12 @@ fn response_logprobs_are_rewritten_in_the_legacy_shape() {
             }),
             json!({"tokens": [], "token_logprobs": [], "top_logprobs": [], "text_offset": []}),
             Value::Null,
+            json!({
+                "tokens": [" Par", "\\xe2\\x80", "\\xa6", "!"],
+                "token_logprobs": [-0.1, -0.3, -0.4, -0.5],
+                "top_logprobs": [{}, {}, {}, {}],
+                "text_offset": [0, 4, 5, 5]
+            }),
         ]
     );
 }
@@ -433,6 +449,17 @@ fn chunk_logprobs_are_rewritten_with_running_offsets() {
     assert_eq!(
         logprobs(stream.rewrite(&scored(0, "", &partial)))["text_offset"],
         json!([6])
+    );
+    // The split character ("…") counts once, not as its escaped text.
+    let rest = json!({"token": "\\xa6", "logprob": -0.4, "bytes": [166]});
+    assert_eq!(
+        logprobs(stream.rewrite(&scored(0, "…", &rest)))["text_offset"],
+        json!([7])
+    );
+    let bang = json!({"token": "!", "logprob": -0.5, "bytes": [33]});
+    assert_eq!(
+        logprobs(stream.rewrite(&scored(0, "!", &bang)))["text_offset"],
+        json!([7])
     );
     // A chunk rewritten on its own counts from its own start.
     assert_eq!(
