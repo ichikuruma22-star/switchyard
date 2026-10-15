@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## Switchya 0.1.0-preview.4 (2026-10-15)
 
-### Switchya
+A bug-fix preview from a full audit of the app, CLI, agent tools and
+adapters. It includes the gateway fixes listed under 0.1.1.
 
 - Security: on Windows, the agent's file tools refuse 8.3 short names such as
   `GIT~1` or `ENV~1`. These aliases could read, search or patch repository
@@ -59,8 +60,19 @@
   recovered with `switchya agent`; opening Claude Code in its own terminal is
   optional. The archive includes the MCP guide that the user guide, local API
   guide and desktop README link to.
+- Corrected the documentation for preview.3. The adapter contract describes
+  the Codex device-code and Claude Console/SSO sign-in methods, the built-in
+  `system-antigravity` profile and managed profile removal, and the local API
+  and account guides accept `antigravity` as an agent and terminal target. The
+  guide's verification-status links work again, and the workbench, MCP and
+  Claude workspace notes no longer tell preview.3 users to build from source.
 
-### Gateway
+## 0.1.1 (2026-10-15)
+
+A gateway bug-fix release from the same audit. Configuration files from
+0.1.0 load unchanged.
+
+### Fixes
 
 - Security: the admin API refuses (403) a direct loopback request (one not
   relayed by a reverse proxy on this machine) whose `Host`, HTTP/2 authority
@@ -186,12 +198,6 @@
 
 ### Documentation
 
-- Corrected the documentation for preview.3. The adapter contract describes
-  the Codex device-code and Claude Console/SSO sign-in methods, the built-in
-  `system-antigravity` profile and managed profile removal, and the local API
-  and account guides accept `antigravity` as an agent and terminal target. The
-  guide's verification-status links work again, and the workbench, MCP and
-  Claude workspace notes no longer tell preview.3 users to build from source.
 - `switchyard.example.toml` shows every setting, including a client key's
   `enabled` flag, an alias's `hide_targets`, the Vertex `project` and
   `location` options and the thinking `dynamic_allowed` field.
@@ -199,7 +205,8 @@
   access; pass `-e SWITCHYARD_ADMIN_ALLOW_REMOTE=true` at run time.
 - The README, design notes, security model, adapter contract, admin API
   reference, gateway API notes, agent-tools README, example configuration and
-  the Switchya, account, MCP and local API guides describe the changes above.
+  the Switchya, account, MCP and local API guides describe the changes in
+  this release and in Switchya 0.1.0-preview.4.
 
 ## Switchya 0.1.0-preview.3 (2026-10-15)
 
