@@ -1091,7 +1091,8 @@ fn secrets_that_read_as_environment_references_are_left_out() {
     let imported = import(
         "api-keys: [\"env:CLIENT_SECRET_NAME\", plain-client-key-0001]\n\
          remote-management: {secret-key: \"${ADMIN_SECRET_NAME}\"}\n\
-         gemini-api-key:\n  - api-key: \"env:UPSTREAM_SECRET_NAME\"\n  - api-key: gm-plain-0000000001\n",
+         gemini-api-key:\n  - api-key: \"env:UPSTREAM_SECRET_NAME\"\n  - api-key: gm-plain-0000000001\n\
+         openai-compatibility:\n  - name: leaky\n    base-url: https://leaky.example/v1\n    api-key-entries: [{api-key: sk-leaky-0000000001}]\n    headers: {X-Leak: \"env:HOST_SECRET_NAME\", X-Kept: plain}\n",
     );
     assert_eq!(imported.config.auth.keys.len(), 1);
     assert_eq!(imported.config.auth.keys[0].key, "plain-client-key-0001");
@@ -1100,14 +1101,26 @@ fn secrets_that_read_as_environment_references_are_left_out() {
         imported.config.providers[0].api_keys,
         ["gm-plain-0000000001"]
     );
+    // A provider header reads the host environment too, and is sent to the
+    // imported base-url.
+    let leaky = provider(&imported.config, "leaky");
+    assert_eq!(
+        leaky.headers.iter().collect::<Vec<_>>(),
+        [(&"X-Kept".to_string(), &"plain".to_string())]
+    );
     let report = imported.not_imported.join("\n");
     assert!(report.contains("client API keys: written as an environment reference"));
     assert!(report.contains("management secret-key: written as an environment reference"));
     assert!(report.contains("gemini-api-key[0]"));
+    assert!(
+        report.contains("1 of the headers are written as an environment reference"),
+        "{report}"
+    );
     for name in [
         "CLIENT_SECRET_NAME",
         "ADMIN_SECRET_NAME",
         "UPSTREAM_SECRET_NAME",
+        "HOST_SECRET_NAME",
     ] {
         assert!(!imported.text.contains(name));
     }

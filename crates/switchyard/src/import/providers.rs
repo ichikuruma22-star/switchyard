@@ -362,6 +362,7 @@ impl<'a> Importer<'a> {
             return out;
         };
         let mut dynamic = 0usize;
+        let mut references = 0usize;
         let mut malformed = 0usize;
         for (name, value) in map {
             let name = name.trim();
@@ -385,12 +386,23 @@ impl<'a> Importer<'a> {
                 dynamic += 1;
                 continue;
             }
+            // Switchyard reads a provider header written as `env:NAME` from
+            // the host environment and sends it to the imported base-url.
+            if is_environment_reference(&value) {
+                references += 1;
+                continue;
+            }
             out.insert(name.to_string(), value);
         }
         if dynamic > 0 {
             self.not_imported.push(format!(
                 "{location}: {dynamic} of the headers copy their value from the client request \
                  (`$Name`) or the session id; provider headers are fixed values here"
+            ));
+        }
+        if references > 0 {
+            self.not_imported.push(format!(
+                "{location}: {references} of the headers are {ENVIRONMENT_REFERENCE}"
             ));
         }
         if malformed > 0 {
