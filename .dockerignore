@@ -1,7 +1,10 @@
-target
+# Patterns match from the context root; **/ also excludes nested build trees.
+**/target
 .git
 .github
 data
 switchyard.toml
-node_modules
-*.log
+**/node_modules
+**/*.log
+desktop/gen
+site/.wrangler

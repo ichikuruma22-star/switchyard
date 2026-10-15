@@ -8,11 +8,13 @@ use crate::route::{GeminiMethod, RawEndpoint, Route};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+use http::header::{CACHE_CONTROL, CONTENT_LENGTH};
 use http::{HeaderMap, HeaderValue, Method};
 use serde_json::{Value, json};
 use std::time::Duration;
-use switchyard_codecs::chat::{chat_response_to_completions, completions_request_to_chat};
+use switchyard_codecs::chat::{
+    CompletionsStream, chat_response_to_completions, completions_request_to_chat,
+};
 use switchyard_core::{ApiError, Protocol};
 use switchyard_gateway::{ClientRequest, Gateway, RawRequest, Reply};
 use tokio_util::sync::CancellationToken;
@@ -286,7 +288,7 @@ fn reply_to_response(
                 },
                 StreamShape::JsonArray => Framing::JsonArray,
             };
-            respond::stream(stream, framing, job.map, guard)
+            respond::stream(stream, framing, job.map.clone(), guard)
         }
     }
 }
@@ -314,13 +316,17 @@ async fn count(context: Context, job: Job) -> Response {
 /// shape.
 async fn completions(context: Context, body: Bytes) -> Response {
     let mut job = Job::new(Protocol::OpenaiChat, "POST /v1/completions", body);
-    job.map = EventMap::LegacyCompletions;
+    job.map = EventMap::LegacyCompletions(CompletionsStream::default());
     // A body that is not JSON goes to the pipeline as it is, which answers
     // with the proper 400.
     if let Ok(legacy) = serde_json::from_slice::<Value>(&job.body)
         && legacy.is_object()
     {
-        job.body = Bytes::from(completions_request_to_chat(&legacy).to_string());
+        match completions_request_to_chat(&legacy) {
+            Ok(chat) => job.body = Bytes::from(chat.to_string()),
+            // A prompt that is not text (token ids): nothing to send.
+            Err(error) => return context.error(&ApiError::from(error)),
+        }
     }
     let (reply, guard) = run(&context, &job).await;
     let reply = match reply {
@@ -395,7 +401,9 @@ async fn raw(context: Context, endpoint: RawEndpoint, body: Bytes) -> Response {
     };
     // This endpoint always interprets its body as JSON, even if a client
     // labels it text/plain. Forward that same parsed representation so
-    // duplicate fields never give an upstream a different model selection.
+    // duplicate fields never give an upstream a different model selection,
+    // and label it as what it is: the gateway replaces the `model` of JSON
+    // bodies only, and the upstream reads the body by its label.
     let body = Bytes::from(
         serde_json::to_vec(json.as_ref().expect("a model requires a JSON body"))
             .expect("JSON values serialize"),
@@ -407,11 +415,7 @@ async fn raw(context: Context, endpoint: RawEndpoint, body: Bytes) -> Response {
         path: endpoint.upstream_path().to_string(),
         method: Method::POST,
         body,
-        content_type: context
-            .headers
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string),
+        content_type: Some("application/json".to_string()),
         query: context.query.without(&[]),
         model,
         headers: context.headers.clone(),

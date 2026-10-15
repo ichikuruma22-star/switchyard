@@ -9,6 +9,7 @@ use super::values::{
 use super::{ENVIRONMENT_REFERENCE, Importer, Layer};
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use switchyard_core::Config;
 use switchyard_core::ThinkingSupport;
@@ -362,6 +363,7 @@ impl<'a> Importer<'a> {
             return out;
         };
         let mut dynamic = 0usize;
+        let mut references = 0usize;
         let mut malformed = 0usize;
         for (name, value) in map {
             let name = name.trim();
@@ -385,12 +387,23 @@ impl<'a> Importer<'a> {
                 dynamic += 1;
                 continue;
             }
+            // Switchyard reads a provider header written as `env:NAME` from
+            // the host environment and sends it to the imported base-url.
+            if is_environment_reference(&value) {
+                references += 1;
+                continue;
+            }
             out.insert(name.to_string(), value);
         }
         if dynamic > 0 {
             self.not_imported.push(format!(
                 "{location}: {dynamic} of the headers copy their value from the client request \
                  (`$Name`) or the session id; provider headers are fixed values here"
+            ));
+        }
+        if references > 0 {
+            self.not_imported.push(format!(
+                "{location}: {references} of the headers are {ENVIRONMENT_REFERENCE}"
             ));
         }
         if malformed > 0 {
@@ -712,7 +725,8 @@ impl<'a> Importer<'a> {
     /// requests rotate across. Here a provider's model names are unique and
     /// a virtual model (`[[aliases]]`) lists targets tried in order. So the
     /// pool's members are imported under their upstream names and an alias
-    /// with those targets, hiding them from listings, takes the pool's name.
+    /// with those targets, hiding them from listings, takes the pool's name
+    /// — with the provider's prefix, as the provider's models have it.
     fn pool_models(
         &mut self,
         models: Vec<ModelConfig>,
@@ -726,6 +740,12 @@ impl<'a> Importer<'a> {
                 .or_default()
                 .push(model);
         }
+        for members in by_name.values_mut() {
+            // The same upstream model twice under one name is a repeat, not
+            // a pool.
+            let mut ids = HashSet::new();
+            members.retain(|model| ids.insert(model.id.to_ascii_lowercase()));
+        }
         let prefix = provider.normalized_prefix();
         let qualified = |id: &str| {
             if prefix.is_empty() {
@@ -734,25 +754,52 @@ impl<'a> Importer<'a> {
                 format!("{prefix}/{id}")
             }
         };
+        let force_model_prefix = config.routing.force_model_prefix;
+        // The names a pool was served under: `prefix/name`, and the bare
+        // name too unless only prefixed names are served.
+        let names_of = |pool_name: &str| {
+            let mut names = vec![qualified(pool_name)];
+            if !prefix.is_empty() && !force_model_prefix {
+                names.push(pool_name.to_string());
+            }
+            names
+        };
+        // An alias may not name itself among its targets.
+        let targets_itself = |members: &[ModelConfig], names: &[String]| {
+            members.iter().any(|model| {
+                let target = qualified(&model.id);
+                names.iter().any(|name| target.eq_ignore_ascii_case(name))
+            })
+        };
+        // Nor may its name hold a space or end in a reasoning suffix.
+        let can_name = |names: &[String]| names.iter().all(|name| is_valid_alias_name(name));
+        // Every name a pool of this provider takes (lowercase). A member's
+        // target with one of them would reach that pool, not the member: an
+        // alias answers before a model of the same name.
+        let pool_names: HashSet<String> = by_name
+            .values()
+            .filter_map(|members| {
+                let names = names_of(members.first()?.client_name());
+                let pool = members.len() > 1 && !targets_itself(members, &names);
+                (pool && can_name(&names)).then_some(names)
+            })
+            .flatten()
+            .map(|name| name.to_ascii_lowercase())
+            .collect();
 
         let mut out: Vec<ModelConfig> = Vec::new();
-        let mut taken: HashSet<String> = HashSet::new();
+        // Client-facing name → upstream id of the entry that took it (both
+        // lowercase).
+        let mut taken: HashMap<String, String> = HashMap::new();
         let mut dropped = 0usize;
-        for (_, mut members) in by_name {
-            // The same upstream model twice under one name is a repeat, not
-            // a pool.
-            let mut ids = HashSet::new();
-            members.retain(|model| ids.insert(model.id.to_ascii_lowercase()));
+        for (_, members) in by_name {
             let Some(first) = members.first() else {
                 continue;
             };
             let pool_name = first.client_name().to_string();
-            // An alias may not name itself among its targets.
-            let self_targeting = members
-                .iter()
-                .any(|model| qualified(&model.id).eq_ignore_ascii_case(&pool_name));
-            // Nor may its name hold a space or end in a reasoning suffix.
-            let nameable = is_valid_alias_name(&pool_name);
+            let names = names_of(&pool_name);
+            let self_targeting = targets_itself(&members, &names);
+            let nameable = can_name(&names);
             if members.len() > 1 && !self_targeting && !nameable {
                 self.not_imported.push(format!(
                     "provider `{}`: the model pool `{pool_name}` cannot become a virtual model, \
@@ -765,10 +812,12 @@ impl<'a> Importer<'a> {
                 // One model: the first entry of that name.
                 let mut members = members.into_iter();
                 if let Some(model) = members.next() {
-                    if taken.insert(model.client_name().to_ascii_lowercase()) {
-                        out.push(model);
-                    } else {
-                        dropped += 1;
+                    match taken.entry(model.client_name().to_ascii_lowercase()) {
+                        Entry::Occupied(_) => dropped += 1,
+                        Entry::Vacant(slot) => {
+                            slot.insert(model.id.to_ascii_lowercase());
+                            out.push(model);
+                        }
                     }
                 }
                 dropped += members.count();
@@ -778,32 +827,75 @@ impl<'a> Importer<'a> {
             let mut targets = Vec::new();
             for mut model in members {
                 model.alias = String::new();
-                targets.push(qualified(&model.id));
-                if taken.insert(model.id.to_ascii_lowercase()) {
-                    out.push(model);
+                let target = qualified(&model.id);
+                // Another pool's name, earlier or later in the list: that
+                // virtual model would answer the target.
+                if pool_names.contains(&target.to_ascii_lowercase()) {
+                    self.not_imported.push(format!(
+                        "provider `{}`: the model `{}` of the pool `{pool_name}`: another pool \
+                         is named `{target}`, so the pool goes without it",
+                        provider.name, model.id
+                    ));
+                    continue;
+                }
+                // A member is imported under its upstream name.
+                match taken.entry(model.id.to_ascii_lowercase()) {
+                    Entry::Vacant(slot) => {
+                        let id = slot.key().clone();
+                        slot.insert(id);
+                        targets.push(target);
+                        out.push(model);
+                    }
+                    // A member of an earlier pool as well: the same model.
+                    Entry::Occupied(owner) if owner.get() == owner.key() => {
+                        targets.push(target);
+                    }
+                    // An earlier entry's name for another upstream model,
+                    // which the target would reach instead.
+                    Entry::Occupied(_) => self.not_imported.push(format!(
+                        "provider `{}`: the model `{}` of the pool `{pool_name}`: an earlier \
+                         entry already gives that name to another upstream model, so the pool \
+                         goes without it",
+                        provider.name, model.id
+                    )),
                 }
             }
-            match config
-                .aliases
-                .iter_mut()
-                .find(|alias| alias.name.eq_ignore_ascii_case(&pool_name))
-            {
-                Some(alias) => {
-                    for target in targets {
-                        if !alias.targets.contains(&target) {
-                            alias.targets.push(target);
+            if targets.is_empty() {
+                continue;
+            }
+            for name in &names {
+                match config
+                    .aliases
+                    .iter_mut()
+                    .find(|alias| alias.name.eq_ignore_ascii_case(name))
+                {
+                    Some(alias) => {
+                        for target in &targets {
+                            if !alias.targets.contains(target) {
+                                alias.targets.push(target.clone());
+                            }
                         }
                     }
+                    None => config.aliases.push(AliasConfig {
+                        name: name.clone(),
+                        targets: targets.clone(),
+                        hide_targets: true,
+                    }),
                 }
-                None => config.aliases.push(AliasConfig {
-                    name: pool_name.clone(),
-                    targets,
-                    hide_targets: true,
-                }),
             }
+            let shown = names
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            let noun = if names.len() == 1 {
+                "virtual model"
+            } else {
+                "virtual models"
+            };
             self.notes.push(format!(
-                "provider `{}`: the model pool `{pool_name}` became a virtual model \
-                 ([[aliases]]) whose targets are tried in order, not in rotation",
+                "provider `{}`: the model pool `{pool_name}` became the {noun} {shown} \
+                 ([[aliases]]), whose targets are tried in order, not in rotation",
                 provider.name
             ));
         }

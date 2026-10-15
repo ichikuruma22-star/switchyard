@@ -6,7 +6,9 @@
 //!
 //! 1. admin switched off, or no secret configured → 404, as if the API did
 //!    not exist;
-//! 2. a remote peer while remote access is off → 403;
+//! 2. a remote peer while remote access is off → 403; a loopback peer that
+//!    addressed the request to a name that is not this machine's own → 403
+//!    (see [`addressed_by_own_name`]);
 //! 3. `GET /ws` → the `ticket` query parameter must be a live ticket (401);
 //! 4. every other route: the peer's address is locked out → 429; no secret
 //!    presented → 401; a wrong secret → 401, and the fifth in a row starts a
@@ -31,6 +33,16 @@
 //! `X-Real-IP` is a reverse proxy on this machine relaying somebody else, and
 //! is treated as remote. Without that, putting nginx in front of the gateway
 //! would make every client on the internet look local.
+//!
+//! # The names a local request may use
+//!
+//! A web page can have its own host name pointed at 127.0.0.1 (DNS
+//! rebinding). Its requests then come from a loopback peer, and since the
+//! browser takes them for same-origin they may carry a secret header: five
+//! wrong guesses would lock out the operator who signs in on the machine.
+//! So a direct loopback request must be addressed to one of the machine's
+//! own names, and is refused before the lockout table is consulted if it
+//! is not ([`addressed_by_own_name`]).
 
 use crate::error::ApiFailure;
 use crate::{Access, Shared};
@@ -39,8 +51,9 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use http::HeaderMap;
-use http::header::{AUTHORIZATION, CACHE_CONTROL, HeaderName, HeaderValue};
+use http::header::{AUTHORIZATION, CACHE_CONTROL, HOST, HeaderName, HeaderValue, ORIGIN};
+use http::uri::Authority;
+use http::{HeaderMap, Uri};
 use rand::RngCore;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -393,6 +406,62 @@ fn not_found() -> ApiFailure {
     ApiFailure::not_found("not found")
 }
 
+/// Whether a request was addressed to this machine by one of its own names:
+/// a loopback address, `localhost`, `configured` (`server.host`) or the
+/// address the listener is `bound` to — any address, when either is a
+/// wildcard. The `Host` header (more than one is refused), the authority
+/// of the request target (HTTP/2) and every `Origin` must name one; a
+/// request that carries none of them is not a browser's and passes.
+fn addressed_by_own_name(
+    headers: &HeaderMap,
+    uri: &Uri,
+    configured: &str,
+    bound: Option<IpAddr>,
+) -> bool {
+    let unbracketed = |host: &str| {
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_owned()
+    };
+    let configured = unbracketed(configured);
+    let bound = bound.map(|address| address.to_canonical());
+    let wildcard = bound.is_some_and(|address| address.is_unspecified())
+        || configured
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_unspecified());
+    let own = |host: &str| {
+        let host = unbracketed(host);
+        host.eq_ignore_ascii_case(&configured)
+            || host.eq_ignore_ascii_case("localhost")
+            || host.parse::<IpAddr>().is_ok_and(|address| {
+                let address = address.to_canonical();
+                address.is_loopback() || wildcard || bound == Some(address)
+            })
+    };
+
+    let mut hosts = headers.get_all(HOST).iter();
+    if let Some(host) = hosts.next() {
+        let named = host
+            .to_str()
+            .ok()
+            .and_then(|host| host.trim().parse::<Authority>().ok())
+            .is_some_and(|host| own(host.host()));
+        if !named || hosts.next().is_some() {
+            return false;
+        }
+    }
+    if uri.authority().is_some_and(|host| !own(host.host())) {
+        return false;
+    }
+    headers.get_all(ORIGIN).iter().all(|origin| {
+        origin
+            .to_str()
+            .ok()
+            .and_then(|origin| origin.trim().parse::<Uri>().ok())
+            .is_some_and(|origin| origin.host().is_some_and(own))
+    })
+}
+
 /// Whether the request is for the live-event WebSocket, the one route that
 /// is authenticated by ticket. The guard sits inside the `/admin/api` nest,
 /// where the prefix is already stripped.
@@ -413,6 +482,22 @@ fn admit(state: &Shared, access: &Access, request: &Request) -> Result<AuthConte
     let peer = Peer::classify(addr, request.headers());
     if peer.remote && !access.allow_remote {
         return Err(ApiFailure::forbidden("remote admin access is disabled"));
+    }
+    // Before the ticket and the lockout table: a page that reached the
+    // listener by DNS rebinding gets nothing done, and its guesses are not
+    // counted against the operator's own address. A proxy may relay any
+    // name, so only direct loopback requests are held to this.
+    if !peer.remote
+        && !addressed_by_own_name(
+            request.headers(),
+            request.uri(),
+            &state.gateway.config().server.host,
+            state.options.listen.map(|listen| listen.ip()),
+        )
+    {
+        return Err(ApiFailure::forbidden(
+            "the admin API answers only to localhost, a loopback address or server.host",
+        ));
     }
     let now = Instant::now();
     let context = AuthContext {
@@ -564,6 +649,101 @@ mod tests {
         // A forwarding header never makes a remote peer local.
         let spoofed = headers(&[("x-forwarded-for", "127.0.0.1")]);
         assert!(Peer::classify(addr("203.0.113.9:9"), &spoofed).remote);
+    }
+
+    /// Whether a request with these headers (repeats appended) to `target`
+    /// was addressed by one of the machine's own names.
+    fn own_name(
+        target: &'static str,
+        pairs: &[(&'static str, &str)],
+        configured: &str,
+        bound: &str,
+    ) -> bool {
+        let mut map = HeaderMap::new();
+        for (name, value) in pairs {
+            map.append(
+                HeaderName::from_static(name),
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        addressed_by_own_name(
+            &map,
+            &Uri::from_static(target),
+            configured,
+            bound.parse().ok(),
+        )
+    }
+
+    #[test]
+    fn loopback_requests_must_use_one_of_the_machines_own_names() {
+        let local =
+            |pairs: &[(&'static str, &str)]| own_name("/status", pairs, "127.0.0.1", "127.0.0.1");
+        // Not a browser: nothing to go by.
+        assert!(local(&[]));
+        for host in [
+            "127.0.0.1:8317",
+            "127.0.0.2:8317",
+            "[::1]:8317",
+            "localhost:8317",
+            "LocalHost",
+        ] {
+            assert!(local(&[("host", host)]), "{host}");
+            let origin = format!("http://{host}");
+            assert!(local(&[("host", host), ("origin", &origin)]), "{origin}");
+        }
+        // A name re-pointed at 127.0.0.1, whatever else the request says.
+        assert!(!local(&[("host", "attacker.example:8317")]));
+        assert!(!local(&[
+            ("host", "attacker.example:8317"),
+            ("origin", "http://attacker.example:8317"),
+            ("sec-fetch-site", "same-origin"),
+        ]));
+        assert!(!local(&[
+            ("host", "127.0.0.1:8317"),
+            ("origin", "http://attacker.example:8317"),
+        ]));
+        assert!(!local(&[("host", "127.0.0.1:8317"), ("origin", "null")]));
+        assert!(!local(&[
+            ("host", "127.0.0.1:8317"),
+            ("host", "attacker.example:8317"),
+        ]));
+        assert!(!local(&[("host", "not a host")]));
+        assert!(!local(&[("host", "192.0.2.1:8317")]));
+        // HTTP/2 names the host in the request target.
+        assert!(!own_name(
+            "http://attacker.example:8317/status",
+            &[],
+            "127.0.0.1",
+            "127.0.0.1"
+        ));
+        assert!(own_name(
+            "http://127.0.0.1:8317/status",
+            &[],
+            "127.0.0.1",
+            "127.0.0.1"
+        ));
+
+        // The configured name is the operator's own choice.
+        assert!(own_name(
+            "/status",
+            &[("host", "gateway.lan:8317")],
+            "gateway.lan",
+            "127.0.0.1"
+        ));
+        // A wildcard listener answers to every address of the machine, set
+        // in the file or on the command line.
+        for (configured, bound) in [("0.0.0.0", "0.0.0.0"), ("127.0.0.1", "0.0.0.0")] {
+            assert!(
+                own_name("/status", &[("host", "192.0.2.1:8317")], configured, bound),
+                "{configured} {bound}"
+            );
+            assert!(!own_name(
+                "/status",
+                &[("host", "attacker.example:8317")],
+                configured,
+                bound
+            ));
+        }
     }
 
     #[test]

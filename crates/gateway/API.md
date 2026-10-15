@@ -273,7 +273,10 @@ streaming or not):
 
 * an upstream `401` / `403` is never the client's status and its body is
   never forwarded. A rejected credential (also a service-account file that
-  cannot be loaded, or Google's `400 API_KEY_INVALID`) is a 502
+  cannot be loaded, Google's `400 API_KEY_INVALID`, or a `400` saying the
+  vendor disabled or restricted the organisation or account behind the key,
+  such as Anthropic's "This organization has been disabled." or Groq's
+  `organization_restricted`) is a 502
   `upstream_auth_error`, "the upstream provider rejected the gateway's
   credential". A `403` the transport files under another class so that the
   scheduler rests the model rather than the key ("project … does not have
@@ -492,8 +495,9 @@ Always a `Reply::Full`. Picks an `openai` / `openai-compat` credential for
 the model (404 when the model has no such route), forwards the body with only
 the JSON `model` field replaced by the upstream id and the object serialized
 again even when the model id was already correct. The server's raw JSON routes
-also serialize the parsed body regardless of its media-type label, so duplicate
-JSON fields cannot change the authorized model downstream. Library callers'
+also serialize the parsed body regardless of its media-type label and pass it
+on as `application/json`, so duplicate JSON fields cannot change the authorized
+model downstream and a mislabelled body still has its `model` replaced. Library callers'
 non-JSON bodies are forwarded byte for byte. Returns the upstream's status, body and
 `Content-Type`. Errors are in the OpenAI envelope.
 

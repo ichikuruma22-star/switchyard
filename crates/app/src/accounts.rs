@@ -359,7 +359,7 @@ impl AccountManager {
         self.ensure_running()?;
         if !valid_agent(agent_id) {
             return Err(AppError::invalid(
-                "Choose codex or claude for this account profile.",
+                "Choose codex, claude or antigravity for this account profile.",
             ));
         }
         let name = checked_name(name)?;
@@ -404,8 +404,10 @@ impl AccountManager {
         Self::view(&state, &id)
     }
 
-    fn persist(&self, state: &mut ProfileState, manifest: Manifest) -> Result<()> {
-        validate_manifest(&manifest)?;
+    /// Every check `persist` makes before writing, returning the metadata path.
+    /// A caller that must act before persisting runs this first.
+    fn persistable(&self, state: &ProfileState, manifest: &Manifest) -> Result<PathBuf> {
+        validate_manifest(manifest)?;
         let path = self.inner.data_dir.join("account-profiles.json");
         check_directory_chain(&self.inner.data_dir)?;
         if read_manifest(&path)? != state.disk_bytes {
@@ -415,6 +417,11 @@ impl AccountManager {
                 "Account metadata changed outside this app. Restart before editing profiles; that file was not overwritten.",
             ));
         }
+        Ok(path)
+    }
+
+    fn persist(&self, state: &mut ProfileState, manifest: Manifest) -> Result<()> {
+        let path = self.persistable(state, &manifest)?;
         let bytes = serde_json::to_vec_pretty(&manifest)
             .map_err(|_| AppError::local("Could not encode account profile metadata."))?;
         write_manifest(&self.inner.data_dir, &path, &bytes)?;
@@ -431,7 +438,7 @@ impl AccountManager {
     ) -> Result<ProfileBinding> {
         if !valid_agent(agent_id) {
             return Err(AppError::invalid(
-                "Choose codex or claude for the account profile.",
+                "Choose codex, claude or antigravity for the account profile.",
             ));
         }
         let id = profile_id
@@ -583,19 +590,6 @@ impl AccountManager {
                 "This profile has an active run. Finish it before removing the profile.",
             ));
         }
-        // Delete the credential home first: if metadata persistence then
-        // fails, the profile is still listed and a refresh shows it signed
-        // out, rather than credentials lingering in an orphaned directory
-        // no profile points at.
-        match std::fs::remove_dir_all(&binding.home) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => {
-                return Err(AppError::local(
-                    "Could not delete this profile's local account data. It was not removed.",
-                ));
-            }
-        }
         let mut manifest = state.manifest.clone();
         manifest.profiles.retain(|profile| profile.id != id);
         let system_default = match binding.agent_id.as_str() {
@@ -612,7 +606,29 @@ impl AccountManager {
         if defaults.as_deref() == Some(id) {
             *defaults = Some(system_default.into());
         }
-        self.persist(&mut state, manifest)?;
+        // A metadata change made outside this app must leave the profile and
+        // its sign-in untouched, so check it before deleting anything.
+        self.persistable(&state, &manifest)?;
+        // Delete the credential home first, rather than leaving credentials in
+        // an orphaned directory no profile points at.
+        match std::fs::remove_dir_all(&binding.home) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(AppError::local(
+                    "Could not delete this profile's local account data. It was not removed.",
+                ));
+            }
+        }
+        if let Err(error) = self.persist(&mut state, manifest) {
+            // The metadata write itself failed after the sign-in was deleted.
+            // The profile stays listed, so give it an empty private home that
+            // reads as signed out instead of a missing directory that blocks
+            // every later action and the next host start.
+            let _ = crate::startup::private_directory(&binding.home);
+            state.cache.insert(id.into(), CachedProfile::default());
+            return Err(error);
+        }
         state.cache.remove(id);
         Ok(state.manifest.defaults.clone())
     }
@@ -1594,6 +1610,84 @@ mod tests {
         let reopened = AccountManager::open(temp.path()).unwrap();
         assert_eq!(reopened.cached().0.len(), 3);
         assert_eq!(reopened.cached().1.codex.as_deref(), Some(SYSTEM_CODEX));
+        reopened.shutdown().await;
+        adapters.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn removal_after_an_external_metadata_change_keeps_the_profile_usable() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let adapters = AdapterManager::new();
+        let profile = manager.create_profile("codex", "Work").unwrap();
+        manager.select_profile(&profile.id).unwrap();
+        let home = manager.inner.homes.join(&profile.id);
+        std::fs::write(home.join("credentials.fixture"), b"not a real credential").unwrap();
+        // A valid manifest that still lists the profile, written by another
+        // process with different bytes.
+        let path = temp.path().join("account-profiles.json");
+        let original = std::fs::read(&path).unwrap();
+        let compact =
+            serde_json::to_vec(&serde_json::from_slice::<Value>(&original).unwrap()).unwrap();
+        assert_ne!(compact, original);
+        write_manifest(temp.path(), &path, &compact).unwrap();
+        let error = manager.remove_profile(&profile.id, &adapters).unwrap_err();
+        assert_eq!(error.code, "profile_metadata_changed");
+        assert!(home.join("credentials.fixture").exists());
+        assert!(
+            manager
+                .binding(&lock(&manager.inner.state), &profile.id)
+                .is_ok()
+        );
+        manager.shutdown().await;
+        drop(manager);
+        // The restart the error asks for succeeds, and removal then works.
+        let reopened = AccountManager::open(temp.path()).unwrap();
+        assert!(reopened.cached().0.iter().any(|item| item.id == profile.id));
+        reopened.remove_profile(&profile.id, &adapters).unwrap();
+        assert!(!home.exists());
+        reopened.shutdown().await;
+        adapters.shutdown().await;
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_failed_metadata_write_during_removal_leaves_an_empty_signed_out_home() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let temp = tempfile::tempdir().unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let adapters = AdapterManager::new();
+        let profile = manager.create_profile("codex", "Work").unwrap();
+        let home = manager.inner.homes.join(&profile.id);
+        std::fs::write(home.join("credentials.fixture"), b"not a real credential").unwrap();
+        lock(&manager.inner.state)
+            .cache
+            .get_mut(&profile.id)
+            .unwrap()
+            .account
+            .auth_status = "signed_in".into();
+        // Another reader without delete sharing blocks only the final rename.
+        let path = temp.path().join("account-profiles.json");
+        let reader = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&path)
+            .unwrap();
+        manager.remove_profile(&profile.id, &adapters).unwrap_err();
+        drop(reader);
+        assert!(!home.join("credentials.fixture").exists());
+        assert!(home.is_dir());
+        {
+            let state = lock(&manager.inner.state);
+            assert!(manager.binding(&state, &profile.id).is_ok());
+            assert_eq!(state.cache[&profile.id].account.auth_status, "unknown");
+        }
+        manager.shutdown().await;
+        drop(manager);
+        let reopened = AccountManager::open(temp.path()).unwrap();
+        reopened.remove_profile(&profile.id, &adapters).unwrap();
+        assert!(!home.exists());
         reopened.shutdown().await;
         adapters.shutdown().await;
     }

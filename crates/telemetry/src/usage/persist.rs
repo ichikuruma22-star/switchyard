@@ -10,7 +10,7 @@ use crate::record::RequestRecord;
 use crate::time::{day_index, parse_day, utc_day};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -148,18 +148,13 @@ pub(crate) fn find_in_day(dir: &Path, day: &str, id: &str) -> Option<RequestReco
     }
 }
 
-#[derive(Default)]
-struct IoState {
-    /// Days whose file has been checked for a clean (newline-terminated)
-    /// end during this process.
-    checked: HashSet<String>,
-}
-
 /// Queue + writer for usage files.
 pub(crate) struct Persister {
     dir: PathBuf,
     pending: Mutex<Vec<Arc<RequestRecord>>>,
-    io: Mutex<IoState>,
+    /// Serialises file I/O: batches are written in order, and never while
+    /// files are being deleted.
+    io: Mutex<()>,
     /// Wakes the background writer early when the queue is long.
     pub(crate) wake: Notify,
     dropped: AtomicU64,
@@ -170,7 +165,7 @@ impl Persister {
         Persister {
             dir,
             pending: Mutex::new(Vec::new()),
-            io: Mutex::new(IoState::default()),
+            io: Mutex::new(()),
             wake: Notify::new(),
             dropped: AtomicU64::new(0),
         }
@@ -217,7 +212,7 @@ impl Persister {
     pub(crate) fn write_pending(&self) -> io::Result<usize> {
         // The I/O lock is taken before the queue is drained so concurrent
         // callers cannot write their batches out of order.
-        let mut io_state = self.io.lock();
+        let _io = self.io.lock();
         let batch = std::mem::take(&mut *self.pending.lock());
         if batch.is_empty() {
             return Ok(0);
@@ -240,9 +235,11 @@ impl Persister {
                 OpenOptions::new().create(true).append(true).read(true),
                 &path,
             )?;
-            if io_state.checked.insert(day) && !ends_with_newline(&mut file)? {
-                // A crash left half a line behind; terminate it so the next
-                // record does not get glued onto the garbage.
+            // Checked before every append, not once per day: a crash, or a
+            // write that failed part-way in this process (a full disk),
+            // leaves half a line behind. Terminate it so the next record
+            // does not get glued onto the garbage.
+            if !ends_with_newline(&mut file)? {
                 file.write_all(b"\n")?;
             }
             file.write_all(text.as_bytes())?;
@@ -253,9 +250,8 @@ impl Persister {
 
     /// Drops the queue and deletes every usage file.
     pub(crate) fn clear(&self) {
-        let mut io_state = self.io.lock();
+        let _io = self.io.lock();
         self.pending.lock().clear();
-        io_state.checked.clear();
         for (_, path) in list_files(&self.dir) {
             let _ = fs::remove_file(path);
         }
@@ -263,7 +259,7 @@ impl Persister {
 
     /// Deletes files of days before `first_day`.
     pub(crate) fn prune(&self, first_day: i64) -> usize {
-        let _io_state = self.io.lock();
+        let _io = self.io.lock();
         prune_dir(&self.dir, first_day)
     }
 }
@@ -405,6 +401,26 @@ mod tests {
         let (ids, report) = read_ids(&dir, i64::MIN);
         assert_eq!(ids, ["a", "b"]);
         assert_eq!(report.skipped_lines, 1);
+    }
+
+    #[test]
+    fn appending_after_a_failed_write_of_this_process_starts_on_a_fresh_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Persister::new(usage_dir(tmp.path()));
+        p.enqueue(record("a", T0));
+        p.write_pending().unwrap();
+        // A later batch for the same day failed part-way (the disk filled
+        // up) and left half a record behind.
+        let path = p.dir().join("2026-10-02.jsonl");
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"id\":\"half").unwrap();
+        drop(file);
+        p.enqueue(record("b", T0));
+        p.write_pending().unwrap();
+        let (ids, report) = read_ids(p.dir(), i64::MIN);
+        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(report.skipped_lines, 1);
+        assert_eq!(find_in_day(p.dir(), "2026-10-02", "b").unwrap().id, "b");
     }
 
     #[test]

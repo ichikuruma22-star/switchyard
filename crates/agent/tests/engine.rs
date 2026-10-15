@@ -296,6 +296,12 @@ async fn overlapping_project_mutations_serialize_and_recheck_hashes_while_reads_
         .create_session(&h.session.project_id, "fixture")
         .unwrap();
 
+    // A cold Windows PowerShell start on a hosted CI runner has taken more
+    // than 15 seconds before the script's first line ran, so the barrier
+    // allows for that; the command's own timeout must outlast it.
+    const BARRIER_WAIT: Duration = Duration::from_secs(60);
+    const COMMAND_TIMEOUT_MS: u64 = 120_000;
+
     // Release the bounded command even if an assertion fails before cleanup.
     struct ReleaseCommand(std::path::PathBuf);
     impl Drop for ReleaseCommand {
@@ -327,7 +333,7 @@ printf 'first change\n' > nested/hello.txt
         [
             Behaviour::Reply(Answer::tool(
                 "run_command",
-                json!({"command":command,"timeout_ms":30_000}),
+                json!({"command":command,"timeout_ms":COMMAND_TIMEOUT_MS}),
             )),
             Behaviour::Reply(patch()),
             Behaviour::Reply(Answer::tool(
@@ -356,7 +362,7 @@ printf 'first change\n' > nested/hello.txt
             Decision::AllowOnce,
         )
         .unwrap();
-    let barrier = tokio::time::timeout(Duration::from_secs(10), async {
+    let barrier = tokio::time::timeout(BARRIER_WAIT, async {
         while !project.join("command-ready").exists() {
             let events = h.engine.events(&h.session.id, 0, 500).unwrap();
             if let Some(completed) = events.iter().find(|event| event.kind == "tool.completed") {
@@ -370,10 +376,10 @@ printf 'first change\n' > nested/hello.txt
     })
     .await;
     if let Err(error) = barrier {
-        // Preserve the failed ten-second assertion, but let the bounded tool
+        // Preserve the failed barrier assertion, but let the bounded tool
         // finish so its captured output can explain a CI-only startup failure.
         drop(release);
-        let _ = tokio::time::timeout(Duration::from_secs(35), async {
+        let _ = tokio::time::timeout(Duration::from_millis(COMMAND_TIMEOUT_MS + 5_000), async {
             loop {
                 if h.engine
                     .events(&h.session.id, 0, 500)

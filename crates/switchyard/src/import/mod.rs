@@ -348,6 +348,8 @@ impl<'a> Importer<'a> {
         self.requests(&mut config);
         self.observability(&mut config);
         self.providers(&mut config);
+        // Needs the credentials.
+        self.attempts(&mut config);
         config
     }
 }

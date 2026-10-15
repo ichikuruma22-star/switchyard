@@ -736,7 +736,7 @@ call `onChange(value)`.
 | `NumberInput` | `value` (number or null), `min`, `max`, `step` (a whole step means whole numbers only), `unit`, `placeholder` (say what empty means). `onChange` fires only for values inside the range; other text is marked invalid, blocks `Form` submit, and is clamped on blur |
 | `Switch` | `checked` |
 | `Checkbox` | `checked`, `indeterminate` |
-| `TagInput` | `value` (string[]), `validate(tag)`, `placeholder`. Pasting a list adds every entry that is new and empties the field either way |
+| `TagInput` | `value` (string[]), `validate(tag)`, `placeholder`, `caseSensitive` (for JSON paths; by default entries that differ only in case are duplicates, as model names are to the gateway). Pasting a list adds every entry that is new and empties the field either way |
 | `SecretInput` | `value`, `placeholder`, `copy`, `readOnly`, `onReveal` (async, for stored secrets), `autocomplete` |
 | `Field` | `label`, `hint`, `error`, `warning`, `htmlFor`: labels a custom control |
 | `Form`, `FormRow`, `FormActions`, `FormError`, `useIssues` | see "Forms and API issues" |

@@ -37,7 +37,7 @@
 //! the work proportional to the request or response being processed.
 
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use switchyard_core::ir::{Message, Part, Reasoning, Request, Response, Role, Signature, ToolCall};
@@ -666,6 +666,15 @@ impl ReasoningStore {
     ///   insist that such a turn *starts* with its reasoning). A part that is
     ///   already present is not inserted twice.
     ///
+    /// An OpenAI Responses upstream rejects a request that carries one
+    /// reasoning item twice, so for that target "already present" covers the
+    /// whole request: when a client split the parallel calls of one response
+    /// over several assistant turns, their shared reasoning goes back only in
+    /// front of the first of them, and not at all when the client kept it in
+    /// any turn. Other targets get it in every turn that lost it (Anthropic
+    /// insists that the last assistant turn of a tool loop starts with its
+    /// thinking).
+    ///
     /// The client may have rearranged the turn (a Chat Completions client
     /// sends all text first and merges it into one string, clients drop
     /// calls). As long as it kept the calls themselves in order, restored
@@ -709,9 +718,12 @@ impl ReasoningStore {
             }
         }
 
-        for (index, entries) in lookups {
-            if let Some(message) = request.messages.get_mut(index) {
-                restore_message(message, &entries, target, &mut restored);
+        // A Responses upstream takes each reasoning item once per request.
+        let mut carried = (target == Protocol::OpenaiResponses)
+            .then(|| Carried::already_in(request, &lookups, target));
+        for (index, entries) in &lookups {
+            if let Some(message) = request.messages.get_mut(*index) {
+                restore_message(message, entries, target, carried.as_mut(), &mut restored);
             }
         }
         restored
@@ -809,10 +821,79 @@ fn insertion_point(
     at
 }
 
-fn restore_message(
+/// Signed reasoning parts a request carries, by item id and by blob: a part
+/// with either in common is the same item. Holds remembered parts, so it can
+/// be kept while the request is changed.
+#[derive(Default)]
+struct Carried<'a> {
+    ids: HashSet<&'a str>,
+    blobs: HashSet<&'a str>,
+}
+
+impl<'a> Carried<'a> {
+    /// The remembered parts of `lookups` that an assistant turn of `request`
+    /// already carries, as a part valid for `target`.
+    fn already_in(
+        request: &Request,
+        lookups: &'a [(usize, Vec<Option<Remembered>>)],
+        target: Protocol,
+    ) -> Self {
+        let mut in_request = Carried::default();
+        for message in &request.messages {
+            if message.role != Role::Assistant {
+                continue;
+            }
+            for part in &message.parts {
+                if let Part::Reasoning(reasoning) = part
+                    && valid_for(&reasoning.signature, target)
+                {
+                    in_request.insert(reasoning);
+                }
+            }
+        }
+        let mut carried = Carried::default();
+        for entry in lookups
+            .iter()
+            .flat_map(|(_, entries)| entries.iter().flatten())
+        {
+            for preceding in entry.reasoning.iter().take(entry.reasoning_len) {
+                if in_request.contains(&preceding.part) {
+                    carried.insert(&preceding.part);
+                }
+            }
+        }
+        carried
+    }
+
+    fn contains(&self, reasoning: &Reasoning) -> bool {
+        reasoning
+            .id
+            .as_deref()
+            .is_some_and(|id| self.ids.contains(id))
+            || reasoning
+                .signature
+                .as_ref()
+                .is_some_and(|signature| self.blobs.contains(signature.data.as_str()))
+    }
+
+    fn insert(&mut self, reasoning: &'a Reasoning) {
+        if let Some(id) = reasoning.id.as_deref() {
+            self.ids.insert(id);
+        }
+        if let Some(signature) = &reasoning.signature {
+            self.blobs.insert(&signature.data);
+        }
+    }
+}
+
+/// Restores the entries of one assistant message. `carried`, when given,
+/// holds the parts the whole request already has; they are not inserted
+/// again, and the parts that are inserted are added to it.
+fn restore_message<'a>(
     message: &mut Message,
-    entries: &[Option<Remembered>],
+    entries: &'a [Option<Remembered>],
     target: Protocol,
+    mut carried: Option<&mut Carried<'a>>,
     restored: &mut Restored,
 ) {
     // Eligibility is judged on the message as the client sent it, not on the
@@ -854,7 +935,10 @@ fn restore_message(
             let already_there = message
                 .parts
                 .iter()
-                .any(|part| matches!(part, Part::Reasoning(r) if r == preceding.part.as_ref()));
+                .any(|part| matches!(part, Part::Reasoning(r) if r == preceding.part.as_ref()))
+                || carried
+                    .as_ref()
+                    .is_some_and(|carried| carried.contains(&preceding.part));
             if already_there {
                 continue;
             }
@@ -870,6 +954,9 @@ fn restore_message(
             message
                 .parts
                 .insert(at, Part::Reasoning(preceding.part.as_ref().clone()));
+            if let Some(carried) = carried.as_deref_mut() {
+                carried.insert(&preceding.part);
+            }
             inserted.push(Arc::clone(&preceding.part));
             restored.reasoning_parts += 1;
         }
@@ -1147,6 +1234,86 @@ mod tests {
         assert_eq!(kinds(&req.messages[3].parts), ["R:two", "C:c2"]);
         // User turns are never touched.
         assert_eq!(kinds(&req.messages[2].parts), ["TR:c1"]);
+    }
+
+    /// One response's parallel calls, each in an assistant turn of its own
+    /// (a Chat client writing one message per call, or a Responses client
+    /// interleaving `function_call` and `function_call_output` items).
+    fn split_calls(first: Vec<Part>) -> Request {
+        let mut req = Request::new("m", Protocol::OpenaiResponses);
+        req.messages = vec![
+            Message::user_text("q"),
+            Message::new(Role::Assistant, first),
+            Message::new(Role::User, vec![Part::tool_result_text("a", "ra")]),
+            Message::new(Role::Assistant, vec![call("b")]),
+            Message::new(Role::User, vec![Part::tool_result_text("b", "rb")]),
+        ];
+        req
+    }
+
+    fn reasoning_item(text: &str) -> Part {
+        Part::Reasoning(Reasoning {
+            id: Some("rs_1".into()),
+            text: text.into(),
+            signature: Some(Signature::new(Protocol::OpenaiResponses, "enc")),
+            redacted: false,
+        })
+    }
+
+    #[test]
+    fn split_parallel_calls_get_their_shared_reasoning_item_once() {
+        let (store, _) = store(16);
+        store.remember(
+            &response(vec![reasoning_item("plan"), call("a"), call("b")]),
+            "key",
+        );
+        let mut req = split_calls(vec![call("a")]);
+        let restored = store.restore(&mut req, Protocol::OpenaiResponses, "key");
+        assert_eq!(restored.reasoning_parts, 1);
+        assert_eq!(kinds(&req.messages[1].parts), ["R:plan", "C:a"]);
+        assert_eq!(kinds(&req.messages[3].parts), ["C:b"]);
+
+        let once = req.clone();
+        assert!(
+            store
+                .restore(&mut req, Protocol::OpenaiResponses, "key")
+                .is_empty()
+        );
+        assert_eq!(req, once);
+    }
+
+    #[test]
+    fn a_reasoning_item_the_client_kept_is_not_added_to_a_later_turn() {
+        let (store, _) = store(16);
+        store.remember(
+            &response(vec![reasoning_item("plan"), call("a"), call("b")]),
+            "key",
+        );
+        // The client's copy of the item lost its summary: still the same item.
+        let mut req = split_calls(vec![reasoning_item(""), call("a")]);
+        let before = req.clone();
+        let restored = store.restore(&mut req, Protocol::OpenaiResponses, "key");
+        assert!(restored.is_empty());
+        assert_eq!(req, before);
+    }
+
+    #[test]
+    fn split_parallel_calls_each_get_their_thinking_for_anthropic() {
+        // The last assistant turn of a tool loop must start with thinking.
+        let (store, _) = store(16);
+        store.remember(
+            &response(vec![
+                signed("plan", Protocol::Anthropic, "s"),
+                call("a"),
+                call("b"),
+            ]),
+            "key",
+        );
+        let mut req = split_calls(vec![call("a")]);
+        let restored = store.restore(&mut req, Protocol::Anthropic, "key");
+        assert_eq!(restored.reasoning_parts, 2);
+        assert_eq!(kinds(&req.messages[1].parts), ["R:plan", "C:a"]);
+        assert_eq!(kinds(&req.messages[3].parts), ["R:plan", "C:b"]);
     }
 
     // ----- placement -------------------------------------------------------

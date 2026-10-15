@@ -360,21 +360,23 @@ async fn dispatch(State(app): State<App>, request: Request) -> Response {
         presented.ws_ticket = query.get(TICKET_PARAM).map(str::to_string);
     }
     // The Realtime route accepts one more place for the key (a WebSocket
-    // subprotocol, the only place a browser can put it).
-    if route == Route::Realtime
-        && presented.authorization.is_none()
-        && let Some(key) = ws::realtime::subprotocol_key(&parts.headers)
-    {
-        presented.authorization = Some(format!("Bearer {key}"));
+    // subprotocol, the only place a browser can put it): in place of an
+    // `Authorization` header, or after one that does not hold a key.
+    let mut subprotocol_key = (route == Route::Realtime)
+        .then(|| ws::realtime::subprotocol_key(&parts.headers))
+        .flatten();
+    if presented.authorization.is_none() {
+        presented.authorization = subprotocol_key.take().map(|key| format!("Bearer {key}"));
     }
     let identity = match app.gateway.authenticate(&presented) {
-        Ok(identity) => identity,
-        Err(first) => {
+        Ok(identity) if !identity.anonymous => identity,
+        outcome => {
             // A browser client that also sent an `Authorization` header of
-            // its own still gets its subprotocol key looked at.
-            let retried = (route == Route::Realtime)
-                .then(|| ws::realtime::subprotocol_key(&parts.headers))
-                .flatten()
+            // its own (a reverse proxy's Basic credentials, say) still gets
+            // its subprotocol key looked at: whether that header was
+            // refused or, with `auth.required = false`, let through as
+            // anonymous.
+            let retried = subprotocol_key
                 .and_then(|key| {
                     app.gateway
                         .authenticate(&PresentedCredentials {
@@ -382,10 +384,11 @@ async fn dispatch(State(app): State<App>, request: Request) -> Response {
                             ..PresentedCredentials::default()
                         })
                         .ok()
-                });
-            match retried {
-                Some(identity) => identity,
-                None => {
+                })
+                .filter(|identity| !identity.anonymous);
+            match (retried, outcome) {
+                (Some(identity), _) | (None, Ok(identity)) => identity,
+                (None, Err(first)) => {
                     let response = respond::error(&app.gateway, protocol, &first);
                     return refuse(response, &parts.headers, body).await;
                 }

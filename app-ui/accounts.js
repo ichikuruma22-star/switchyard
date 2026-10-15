@@ -65,7 +65,7 @@ export function AccountsDialog({api,open,onClose,profiles=[],defaults={},loading
       if(result.login)setLogins(old=>mergeLoginState(old,[result.login]));
       if(kind==='select')setNotice(`${profile.name} is the default for future ${agentName(profile.agent_id)} runs. Running sessions keep their current account.`);
       if(kind==='remove'){setConfirmRemove('');setNotice(`${profile.name} was removed. Its local sign-in data was deleted. Conversations that used it cannot continue.`);}
-      if(kind==='terminal')setNotice(result.message||'Claude Code was opened in a separate terminal. This session is not tracked in Switchya.');
+      if(kind==='terminal')setNotice(result.message||`${agentName(profile.agent_id)} was opened in a separate terminal. This session is not tracked in Switchya.`);
       onRefresh();
     }catch(error){if(openRef.current){setError(error.uncertain?'The action outcome could not be confirmed. Refresh the account status before trying again.':errorText(error));onRefresh();}}
     finally{setBusy('');lock.current=false;}

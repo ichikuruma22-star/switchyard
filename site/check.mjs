@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile, stat, readdir } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,4 +42,18 @@ const pkg = JSON.parse(await readFile(resolve(here, 'package.json'), 'utf8'));
 assert.equal(pkg.devDependencies.wrangler, '4.149.0');
 const assets = await readdir(root, { recursive: true, withFileTypes: true });
 const files = assets.filter(entry => entry.isFile());
-console.log(`Site checks passed: 2 HTML pages, ${localReferences} local references, ${files.length} static files; Wrangler ${pkg.devDependencies.wrangler} pinned.`);
+// Deployment read-backs are compared with the manifest, so it must describe
+// exactly the files that would be published.
+const manifest = new Map(JSON.parse(await readFile(resolve(here, 'asset-manifest.json'), 'utf8'))
+  .map(entry => [entry.path, entry]));
+for (const entry of files) {
+  const path = relative(root, resolve(entry.parentPath, entry.name)).replaceAll('\\', '/');
+  const listed = manifest.get(path);
+  const bytes = await readFile(resolve(root, path));
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  assert.deepEqual(listed && [listed.bytes, listed.sha256], [bytes.length, sha256],
+    `asset-manifest.json: ${path} is missing or stale; regenerate the manifest`);
+  manifest.delete(path);
+}
+assert.deepEqual([...manifest.keys()], [], 'asset-manifest.json lists files that are not in public/');
+console.log(`Site checks passed: 2 HTML pages, ${localReferences} local references, ${files.length} static files matching asset-manifest.json; Wrangler ${pkg.devDependencies.wrangler} pinned.`);

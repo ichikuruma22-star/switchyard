@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -12,20 +12,20 @@ authors = ["Switchyard contributors"]
 
 [workspace.dependencies]
 # workspace crates
-switchyard-core = { path = "crates/core", version = "0.1.0" }
-switchyard-codec-chat = { path = "crates/codec-chat", version = "0.1.0" }
-switchyard-codec-responses = { path = "crates/codec-responses", version = "0.1.0" }
-switchyard-codec-anthropic = { path = "crates/codec-anthropic", version = "0.1.0" }
-switchyard-codec-gemini = { path = "crates/codec-gemini", version = "0.1.0" }
-switchyard-codecs = { path = "crates/codecs", version = "0.1.0" }
-switchyard-translate = { path = "crates/translate", version = "0.1.0" }
-switchyard-upstream = { path = "crates/upstream", version = "0.1.0" }
-switchyard-scheduler = { path = "crates/scheduler", version = "0.1.0" }
-switchyard-telemetry = { path = "crates/telemetry", version = "0.1.0" }
-switchyard-config-store = { path = "crates/config-store", version = "0.1.0" }
-switchyard-gateway = { path = "crates/gateway", version = "0.1.0" }
-switchyard-server = { path = "crates/server", version = "0.1.0" }
-switchyard-admin = { path = "crates/admin", version = "0.1.0" }
+switchyard-core = { path = "crates/core", version = "0.1.1" }
+switchyard-codec-chat = { path = "crates/codec-chat", version = "0.1.1" }
+switchyard-codec-responses = { path = "crates/codec-responses", version = "0.1.1" }
+switchyard-codec-anthropic = { path = "crates/codec-anthropic", version = "0.1.1" }
+switchyard-codec-gemini = { path = "crates/codec-gemini", version = "0.1.1" }
+switchyard-codecs = { path = "crates/codecs", version = "0.1.1" }
+switchyard-translate = { path = "crates/translate", version = "0.1.1" }
+switchyard-upstream = { path = "crates/upstream", version = "0.1.1" }
+switchyard-scheduler = { path = "crates/scheduler", version = "0.1.1" }
+switchyard-telemetry = { path = "crates/telemetry", version = "0.1.1" }
+switchyard-config-store = { path = "crates/config-store", version = "0.1.1" }
+switchyard-gateway = { path = "crates/gateway", version = "0.1.1" }
+switchyard-server = { path = "crates/server", version = "0.1.1" }
+switchyard-admin = { path = "crates/admin", version = "0.1.1" }
 
 # async runtime + http
 tokio = { version = "1", features = ["full"] }

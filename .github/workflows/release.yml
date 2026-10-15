@@ -23,8 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.revision.outputs.sha }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
     steps:
       - name: Validate tag name
+        id: tag
         shell: bash
         run: |
           set -euo pipefail
@@ -32,6 +34,10 @@ jobs:
             echo 'Expected a version tag such as v0.1.0' >&2
             exit 1
           }
+          # A suffix such as -rc.1 publishes a prerelease, which must not
+          # become the Latest release or move the container's latest tag.
+          if [[ "$TAG" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ env.TAG }}
@@ -170,11 +176,14 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
           ls -la dist
+          kind=()
+          if [[ "$PRERELEASE" == true ]]; then kind=(--prerelease --latest=false); fi
           if ! gh release view "$TAG" > /dev/null 2>&1; then
-            gh release create "$TAG" --title "Switchyard ${TAG}" --generate-notes
+            gh release create "$TAG" --title "Switchyard ${TAG}" --generate-notes "${kind[@]}"
           fi
           gh release upload "$TAG" dist/* --clobber
 
@@ -215,10 +224,14 @@ jobs:
           password: ${{ github.token }}
       - name: Image tags
         id: tags
+        env:
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           version="${TAG#v}"
           repo="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
-          echo "tags=${repo}:${version},${repo}:latest" >> "$GITHUB_OUTPUT"
+          tags="${repo}:${version}"
+          if [[ "$PRERELEASE" != true ]]; then tags="${tags},${repo}:latest"; fi
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v7
         with:
           context: ctx

@@ -706,19 +706,21 @@ const bare = (host) => String(host ?? '').toLowerCase();
  *
  * When the page's address is a different one (a TLS-terminating proxy, a
  * port mapping, a tunnel), the listen address is not known to be reachable
- * from where the operator sits. The page's own origin is: it has just served
- * this dashboard from the gateway. A page whose scheme is not the listener's
- * came through such a proxy, whatever its host and port.
+ * from where the operator sits. The page's own address is: it has just served
+ * this dashboard from the gateway. That address is the page's origin plus any
+ * path prefix a reverse proxy adds, and a page under such a prefix, like one
+ * whose scheme is not the listener's, came through a proxy whatever its host
+ * and port.
  *
  * `tls` is not a boolean for a gateway that does not report it: the page's
  * scheme is then taken for the gateway's.
  */
 export function clientBase(listen, pageLocation, tls) {
   const page = pageLocation?.host ? pageLocation : null;
-  const origin = page ? `${page.protocol}//${page.host}` : null;
+  const root = page ? pageRoot(page) : null;
   const parts = /^(.*):(\d+)$/.exec(listen ?? '');
   // No address with a port to go by (the gateway did not report one).
-  if (!parts) return { base: origin ?? 'http://127.0.0.1:8317', direct: false };
+  if (!parts) return { base: root?.base ?? 'http://127.0.0.1:8317', direct: false };
   if (!page) return { base: `${tls === true ? 'https' : 'http'}://${listen}`, direct: true };
   const [, host, port] = parts;
   const pageTls = page.protocol === 'https:';
@@ -726,8 +728,25 @@ export function clientBase(listen, pageLocation, tls) {
   const wildcard = WILDCARD_HOSTS.has(bare(host));
   const sameHost = wildcard || bare(host) === bare(page.hostname) || (LOOPBACK_HOSTS.has(bare(host)) && LOOPBACK_HOSTS.has(bare(page.hostname)));
   const listenTls = typeof tls === 'boolean' ? tls : pageTls;
-  if (port !== pagePort || !sameHost || listenTls !== pageTls) return { base: origin, direct: false };
-  return { base: wildcard ? origin : `${listenTls ? 'https' : 'http'}://${listen}`, direct: true };
+  if (root.prefixed || port !== pagePort || !sameHost || listenTls !== pageTls) return { base: root.base, direct: false };
+  return { base: wildcard ? root.base : `${listenTls ? 'https' : 'http'}://${listen}`, direct: true };
+}
+
+/**
+ * The gateway's root as the page reaches it, as { base, prefixed }. The
+ * dashboard is served at <root>/admin/, so the root is one directory up from
+ * the page, with a reverse proxy's path prefix (`prefixed`) kept.
+ *
+ *   http://127.0.0.1:8317/admin/#/overview -> http://127.0.0.1:8317
+ *   https://ai.example.com/gw/admin/       -> https://ai.example.com/gw
+ */
+function pageRoot(page) {
+  try {
+    const root = new URL('../', page.href);
+    return { base: root.origin + root.pathname.replace(/\/+$/, ''), prefixed: root.pathname !== '/' };
+  } catch {
+    return { base: `${page.protocol}//${page.host}`, prefixed: false };
+  }
 }
 
 /** A request for bash/zsh. The key is a variable, never the key. */

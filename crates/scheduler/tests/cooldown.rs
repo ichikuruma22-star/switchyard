@@ -167,6 +167,37 @@ fn a_burst_inside_one_window_escalates_only_once() {
     assert_eq!(wait(&f, "gpt-5.5"), Some(secs(2)));
 }
 
+/// Regression: a rate limit that arrived while the model rested for another
+/// reason counted as a window of its own, so every request still in flight
+/// doubled the backoff.
+#[test]
+fn rate_limits_inside_another_rest_do_not_escalate() {
+    let f = fixture(&one_key(""));
+    let leases: Vec<_> = (0..6).map(|_| f.pick("gpt-5.5").unwrap()).collect();
+    f.fail_class(&leases[0], FailureClass::Server);
+    for lease in &leases[1..] {
+        f.fail_class(lease, FailureClass::RateLimit);
+    }
+    assert_eq!(wait(&f, "gpt-5.5"), Some(secs(60)));
+    f.advance(60);
+    let lease = f.pick("gpt-5.5").unwrap();
+    f.fail_class(&lease, FailureClass::RateLimit);
+    assert_eq!(wait(&f, "gpt-5.5"), Some(secs(1)));
+
+    // The same when a longer 5xx rest took over a rate-limit window.
+    let f = fixture(&one_key(""));
+    let leases: Vec<_> = (0..4).map(|_| f.pick("gpt-5.5").unwrap()).collect();
+    f.fail_class(&leases[0], FailureClass::RateLimit);
+    f.fail_class(&leases[1], FailureClass::Server);
+    f.fail_class(&leases[2], FailureClass::RateLimit);
+    f.fail_class(&leases[3], FailureClass::RateLimit);
+    assert_eq!(wait(&f, "gpt-5.5"), Some(secs(60)));
+    f.advance(60);
+    let lease = f.pick("gpt-5.5").unwrap();
+    f.fail_class(&lease, FailureClass::RateLimit);
+    assert_eq!(wait(&f, "gpt-5.5"), Some(secs(2)));
+}
+
 #[test]
 fn success_resets_the_backoff_ladder() {
     let f = fixture(&one_key(""));
@@ -588,6 +619,38 @@ fn cooling_down_quotes_the_error_that_explains_the_rest() {
         last_error(&f, "gpt-5.5").as_deref(),
         Some("404 no such model gpt-5.5")
     );
+}
+
+/// Regression: a request still in flight on a resting model that failed
+/// differently, without lengthening the rest, was quoted as its cause.
+#[test]
+fn a_straggler_does_not_change_why_a_model_rests() {
+    let f = fixture(&one_key(""));
+    let first = f.pick("gpt-5.5").unwrap();
+    let straggler = f.pick("gpt-5.5").unwrap();
+    let mut missing = error(FailureClass::ModelNotFound, None);
+    missing.info.message = "no such model gpt-5.5".into();
+    f.fail(&first, &missing);
+    f.advance(1);
+    let mut reset = error(FailureClass::Transport, None);
+    reset.info.message = "connection reset".into();
+    f.fail(&straggler, &reset);
+
+    assert_eq!(
+        f.all_credentials()[0].last_error.as_ref().unwrap().message,
+        "connection reset"
+    );
+    match f.pick("gpt-5.5").unwrap_err() {
+        PickError::CoolingDown {
+            retry_after,
+            last_error,
+            ..
+        } => {
+            assert_eq!(retry_after, secs(12 * 3600 - 1));
+            assert_eq!(last_error.as_deref(), Some("404 no such model gpt-5.5"));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

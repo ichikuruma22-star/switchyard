@@ -71,7 +71,8 @@ fn flat_layout_general_settings() {
     assert_eq!(config.admin.secret, "flat-management-secret");
     assert!(config.admin.allow_remote);
     assert_eq!(config.upstream.proxy, "socks5://127.0.0.1:1080");
-    assert_eq!(config.routing.max_attempts, 4);
+    // `request-retry: 3` is four rounds over the eight enabled credentials.
+    assert_eq!(config.routing.max_attempts, 32);
     assert_eq!(config.routing.strategy, Strategy::FillFirst);
     assert_eq!(config.routing.max_wait_secs, 30);
     assert_eq!(config.streaming.keepalive_secs, 20);
@@ -189,14 +190,14 @@ fn flat_layout_openai_compatibility() {
             ("glm-5", "")
         ]
     );
-    assert_eq!(
-        config.aliases,
-        vec![AliasConfig {
-            name: "big-pool".into(),
-            targets: vec!["or/deepseek-v3.1".into(), "or/glm-5".into()],
-            hide_targets: true,
-        }]
-    );
+    // The pool is served as `or/big-pool`, like the provider's other
+    // models, and (no force-model-prefix) under its bare name too.
+    let pool = |name: &str| AliasConfig {
+        name: name.into(),
+        targets: vec!["or/deepseek-v3.1".into(), "or/glm-5".into()],
+        hide_targets: true,
+    };
+    assert_eq!(config.aliases, vec![pool("or/big-pool"), pool("big-pool")]);
 
     // A keyless local server, with a name that needs sanitising.
     let local = provider(config, "my-local-llm");
@@ -269,7 +270,13 @@ fn flat_layout_report() {
         assert!(report.contains(needle), "missing `{needle}` in:\n{report}");
     }
     let notes = imported.notes.join("\n");
-    assert!(notes.contains("the model pool `big-pool`"), "{notes}");
+    assert!(
+        notes.contains(
+            "the model pool `big-pool` became the virtual models `or/big-pool` and `big-pool`"
+        ),
+        "{notes}"
+    );
+    assert!(notes.contains("routing.max_attempts is 32"), "{notes}");
 }
 
 /// The upstream Responses WebSocket relay does not exist here: a key that
@@ -388,7 +395,9 @@ fn nested_layout() {
     assert!(!config.routing.session_affinity);
     assert_eq!(config.routing.session_affinity_ttl_secs, 5400);
     assert!(config.routing.force_model_prefix);
-    assert_eq!(config.routing.max_attempts, 1);
+    // `request-retry: 0` is one round over the five credentials, not a
+    // single attempt.
+    assert_eq!(config.routing.max_attempts, 5);
     assert!(!config.routing.cooldown.enabled);
     assert_eq!(config.routing.cooldown.transient_secs, 15);
     assert_eq!(config.upstream.proxy, "");
@@ -468,10 +477,205 @@ fn nested_spelling_wins_by_presence() {
         "port: 1111\nserver:\n  port: 2222\nrequest-retry: 4\nrouting:\n  retry:\n    max-retry-credentials: 2\ndebug: true\nobservability:\n  logs:\n    debug: false\napi-keys:\n  gemini: []\ngemini-api-key:\n  - api-key: ignored-flat-twin-000000\n",
     );
     assert_eq!(imported.config.server.port, 2222);
-    // No nested `request-retry` leaf: the flat one counts.
+    // No nested `request-retry` leaf: the flat one counts (five rounds; with
+    // no credential imported, of one each).
     assert_eq!(imported.config.routing.max_attempts, 5);
     assert_eq!(imported.config.logging.level, "info");
     assert!(imported.config.providers.is_empty());
+}
+
+/// `request-retry` counts rounds there, each over every credential that
+/// serves the model; `routing.max_attempts` counts upstream calls. One
+/// attempt per round would end the failover between keys at the first.
+#[test]
+fn request_retry_counts_rounds_over_every_credential() {
+    const KEYS: &str = "gemini-api-key:\n  - api-key: gm-round-0000000001\n  - api-key: gm-round-0000000002\n  - api-key: gm-round-0000000003\n  - api-key: gm-round-0000000004\n  - api-key: gm-round-0000000005\n";
+    let with = |settings: &str| import(&format!("{settings}{KEYS}"));
+
+    // One round: each of the five keys gets its try.
+    let imported = with("request-retry: 0\n");
+    assert_eq!(imported.config.routing.max_attempts, 5);
+    let notes = imported.notes.join("\n");
+    assert!(
+        notes.contains("routing.max_attempts is 5: request-retry counts extra rounds"),
+        "{notes}"
+    );
+    // Two rounds of at most two credentials each; `max-retry-credentials`
+    // is read, so it is not reported.
+    let imported = with("routing:\n  retry:\n    request-retry: 1\n    max-retry-credentials: 2\n");
+    assert_eq!(imported.config.routing.max_attempts, 4);
+    assert!(
+        imported.not_imported.is_empty(),
+        "{:?}",
+        imported.not_imported
+    );
+    // Not set: still one round over every key.
+    assert_eq!(with("").config.routing.max_attempts, 5);
+    // Never below the default.
+    let one = import("request-retry: 0\ngemini-api-key:\n  - api-key: gm-round-0000000001\n");
+    assert_eq!(one.config.routing.max_attempts, 3);
+}
+
+/// A pool of a provider with a prefix is asked for as `prefix/pool`, like
+/// the provider's other models; with force-model-prefix on, only so.
+#[test]
+fn a_pool_of_a_prefixed_provider_keeps_the_prefix() {
+    let imported = import(
+        "force-model-prefix: true\nopenai-compatibility:\n  - name: OpenRouter\n    base-url: https://openrouter.ai/api/v1\n    prefix: or\n    models:\n      - {name: deepseek-v3.1, alias: big-pool}\n      - {name: glm-5, alias: big-pool}\n",
+    );
+    let config = &imported.config;
+    assert!(config.validate().is_empty());
+    assert_eq!(
+        config.aliases,
+        vec![AliasConfig {
+            name: "or/big-pool".into(),
+            targets: vec!["or/deepseek-v3.1".into(), "or/glm-5".into()],
+            hide_targets: true,
+        }]
+    );
+    let notes = imported.notes.join("\n");
+    assert!(
+        notes.contains("the model pool `big-pool` became the virtual model `or/big-pool` ("),
+        "{notes}"
+    );
+}
+
+/// A pool member is imported under its upstream name. When an earlier
+/// entry already gives that name to another upstream model, the pool's
+/// target would reach that model instead: the member is left out, and the
+/// report says so.
+#[test]
+fn a_pool_member_whose_name_another_model_took_is_left_out() {
+    let imported = import(
+        "openai-compatibility:\n  - name: pools\n    base-url: https://pools.example/v1\n    models:\n      - {name: gpt-4o-2024-11-20, alias: gpt-4o}\n      - {name: gpt-4o, alias: fast}\n      - {name: gpt-4o-mini, alias: fast}\n",
+    );
+    let config = &imported.config;
+    assert!(config.validate().is_empty());
+    let models: Vec<(&str, &str)> = provider(config, "pools")
+        .models
+        .iter()
+        .map(|m| (m.id.as_str(), m.alias.as_str()))
+        .collect();
+    assert_eq!(
+        models,
+        [("gpt-4o-2024-11-20", "gpt-4o"), ("gpt-4o-mini", "")]
+    );
+    assert_eq!(
+        config.aliases,
+        vec![AliasConfig {
+            name: "fast".into(),
+            targets: vec!["gpt-4o-mini".into()],
+            hide_targets: true,
+        }]
+    );
+    let report = imported.not_imported.join("\n");
+    assert!(
+        report.contains(
+            "provider `pools`: the model `gpt-4o` of the pool `fast`: an earlier entry already \
+             gives that name to another upstream model"
+        ),
+        "{report}"
+    );
+
+    // A member of two pools is the same model in both: no conflict.
+    let shared = import(
+        "openai-compatibility:\n  - name: pools\n    base-url: https://pools.example/v1\n    models:\n      - {name: a, alias: p1}\n      - {name: b, alias: p1}\n      - {name: b, alias: p2}\n      - {name: c, alias: p2}\n",
+    );
+    let targets: Vec<(&str, Vec<&str>)> = shared
+        .config
+        .aliases
+        .iter()
+        .map(|a| {
+            (
+                a.name.as_str(),
+                a.targets.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(targets, [("p1", vec!["a", "b"]), ("p2", vec!["b", "c"])]);
+    let ids: Vec<&str> = provider(&shared.config, "pools")
+        .models
+        .iter()
+        .map(|m| m.id.as_str())
+        .collect();
+    assert_eq!(ids, ["a", "b", "c"]);
+    assert!(shared.not_imported.is_empty(), "{:?}", shared.not_imported);
+}
+
+/// Nor may a pool member's target be another pool's name: that virtual
+/// model answers before the model, so the pool would route to the other
+/// pool's members. Whichever pool comes first, with or without
+/// force-model-prefix, the member is left out and reported.
+#[test]
+fn a_pool_member_named_like_another_pool_is_left_out() {
+    const CHAT: &str = "      - {name: deepseek-chat, alias: deepseek-v3.1}\n      - {name: deepseek-v3.1-fast, alias: deepseek-v3.1}\n";
+    const FAST: &str =
+        "      - {name: deepseek-v3.1, alias: fast}\n      - {name: glm-5, alias: fast}\n";
+    let aliases = |config: &Config| {
+        let mut aliases: Vec<(String, Vec<String>)> = config
+            .aliases
+            .iter()
+            .map(|a| (a.name.clone(), a.targets.clone()))
+            .collect();
+        aliases.sort();
+        aliases
+    };
+    let alias = |name: &str, targets: &[&str]| {
+        (
+            name.to_string(),
+            targets.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+        )
+    };
+    for force in [false, true] {
+        for models in [format!("{CHAT}{FAST}"), format!("{FAST}{CHAT}")] {
+            let imported = import(&format!(
+                "force-model-prefix: {force}\nopenai-compatibility:\n  - name: pools\n    base-url: https://pools.example/v1\n    prefix: or\n    models:\n{models}"
+            ));
+            let config = &imported.config;
+            assert!(config.validate().is_empty());
+            let chat = ["or/deepseek-chat", "or/deepseek-v3.1-fast"];
+            let mut expected = vec![
+                alias("or/deepseek-v3.1", &chat),
+                alias("or/fast", &["or/glm-5"]),
+            ];
+            if !force {
+                expected.push(alias("deepseek-v3.1", &chat));
+                expected.push(alias("fast", &["or/glm-5"]));
+            }
+            expected.sort();
+            assert_eq!(aliases(config), expected, "force-model-prefix: {force}");
+            let mut ids: Vec<&str> = provider(config, "pools")
+                .models
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect();
+            ids.sort_unstable();
+            assert_eq!(ids, ["deepseek-chat", "deepseek-v3.1-fast", "glm-5"]);
+            let report = imported.not_imported.join("\n");
+            assert!(
+                report.contains(
+                    "provider `pools`: the model `deepseek-v3.1` of the pool `fast`: another \
+                     pool is named `or/deepseek-v3.1`"
+                ),
+                "{report}"
+            );
+        }
+    }
+
+    // Without a prefix the target is the bare upstream name.
+    let imported = import(
+        "openai-compatibility:\n  - name: pools\n    base-url: https://pools.example/v1\n    models:\n      - {name: a, alias: x}\n      - {name: b, alias: x}\n      - {name: x, alias: fast}\n      - {name: c, alias: fast}\n",
+    );
+    assert!(imported.config.validate().is_empty());
+    assert_eq!(
+        aliases(&imported.config),
+        [alias("fast", &["c"]), alias("x", &["a", "b"])]
+    );
+    let report = imported.not_imported.join("\n");
+    assert!(
+        report.contains("the model `x` of the pool `fast`: another pool is named `x`"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -1091,7 +1295,8 @@ fn secrets_that_read_as_environment_references_are_left_out() {
     let imported = import(
         "api-keys: [\"env:CLIENT_SECRET_NAME\", plain-client-key-0001]\n\
          remote-management: {secret-key: \"${ADMIN_SECRET_NAME}\"}\n\
-         gemini-api-key:\n  - api-key: \"env:UPSTREAM_SECRET_NAME\"\n  - api-key: gm-plain-0000000001\n",
+         gemini-api-key:\n  - api-key: \"env:UPSTREAM_SECRET_NAME\"\n  - api-key: gm-plain-0000000001\n\
+         openai-compatibility:\n  - name: leaky\n    base-url: https://leaky.example/v1\n    api-key-entries: [{api-key: sk-leaky-0000000001}]\n    headers: {X-Leak: \"env:HOST_SECRET_NAME\", X-Kept: plain}\n",
     );
     assert_eq!(imported.config.auth.keys.len(), 1);
     assert_eq!(imported.config.auth.keys[0].key, "plain-client-key-0001");
@@ -1100,14 +1305,26 @@ fn secrets_that_read_as_environment_references_are_left_out() {
         imported.config.providers[0].api_keys,
         ["gm-plain-0000000001"]
     );
+    // A provider header reads the host environment too, and is sent to the
+    // imported base-url.
+    let leaky = provider(&imported.config, "leaky");
+    assert_eq!(
+        leaky.headers.iter().collect::<Vec<_>>(),
+        [(&"X-Kept".to_string(), &"plain".to_string())]
+    );
     let report = imported.not_imported.join("\n");
     assert!(report.contains("client API keys: written as an environment reference"));
     assert!(report.contains("management secret-key: written as an environment reference"));
     assert!(report.contains("gemini-api-key[0]"));
+    assert!(
+        report.contains("1 of the headers are written as an environment reference"),
+        "{report}"
+    );
     for name in [
         "CLIENT_SECRET_NAME",
         "ADMIN_SECRET_NAME",
         "UPSTREAM_SECRET_NAME",
+        "HOST_SECRET_NAME",
     ] {
         assert!(!imported.text.contains(name));
     }

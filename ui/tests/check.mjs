@@ -824,6 +824,91 @@ for (const name of ['stop', 'arrow-left', 'grip']) assert.ok(ICON_NAMES.includes
   assert.equal(toCsv([['name', 'count'], ['one;two', 2]]), '"name","count"\r\n"one;two",2\r\n');
 }
 
+// A status filter the gateway refuses (400) matches no live record either;
+// one it accepts is read the way it reads it (StatusFilter::from_str).
+{
+  const { default: matchesFilters } = await import(url('js/pages/requests/record.js'));
+  const record = { started_at: 1000, status: 200, ok: true };
+  for (const status of ['6xx', '999', '0', '0xx', '-200', '2x', '+', 'bogus', ' ']) {
+    assert.equal(matchesFilters(record, { status }), false, `status=${status}`);
+  }
+  for (const status of ['200', ' 2XX ', 'ok', '0200', '+200', '02xx']) {
+    assert.equal(matchesFilters(record, { status }), true, `status=${status}`);
+  }
+  assert.equal(matchesFilters(record, { status: '4xx' }), false);
+  assert.equal(matchesFilters(record, { status: 'error' }), false);
+}
+
+// The first-run curl example: the address the dashboard was opened on keeps
+// a reverse proxy's path prefix, and a prefix means the page came through one.
+{
+  const { clientBase, curlExample } = await import(url('js/pages/overview/model.js'));
+  const proxied = new URL('https://ai.example.com/gw/admin/#/overview');
+  assert.deepEqual(clientBase('127.0.0.1:8317', proxied, false), { base: 'https://ai.example.com/gw', direct: false });
+  assert.deepEqual(clientBase(undefined, proxied, false), { base: 'https://ai.example.com/gw', direct: false });
+  assert.deepEqual(clientBase('0.0.0.0:443', proxied, true), { base: 'https://ai.example.com/gw', direct: false });
+  assert.deepEqual(clientBase(null, new URL('http://h:9000/p/admin/index.html'), null), { base: 'http://h:9000/p', direct: false });
+  assert.match(curlExample({ base: clientBase('127.0.0.1:8317', proxied, false).base, model: 'm', authRequired: true }), /^curl 'https:\/\/ai\.example\.com\/gw\/v1\/chat\/completions'/);
+  // Without a prefix the answers are what they were.
+  assert.deepEqual(clientBase('127.0.0.1:8317', new URL('http://127.0.0.1:8317/admin/#/overview'), false), { base: 'http://127.0.0.1:8317', direct: true });
+  assert.deepEqual(clientBase('0.0.0.0:8317', new URL('http://192.168.1.5:8317/admin/'), false), { base: 'http://192.168.1.5:8317', direct: true });
+  assert.deepEqual(clientBase('127.0.0.1:8317', new URL('https://ai.example.com/admin/'), false), { base: 'https://ai.example.com', direct: false });
+  assert.deepEqual(clientBase('127.0.0.1:8317', null, true), { base: 'https://127.0.0.1:8317', direct: true });
+}
+
+// Payload rules are read with their numbers exact, or not at all: a failed
+// read is an error, never a second, plainly parsed answer whose rounded
+// numbers the next save would write back.
+{
+  const exactUrl = url('js/pages/settings/exact.js');
+  const { rawJSON } = JSON;
+  let plain;
+  try {
+    // A copy of the module that finds no JSON.rawJSON, as older browsers do.
+    delete JSON.rawJSON;
+    plain = await import(`${exactUrl}?plain`);
+  } finally {
+    JSON.rawJSON = rawJSON;
+  }
+  const rich = await import(exactUrl);
+  assert.equal(plain.exact, false);
+  const rules = '{"default":[],"override":[{"models":["*"],"set":{"seed":9007199254740993,"temperature":1.0}}],"filter":[]}';
+  const realFetch = globalThis.fetch;
+  const answers = [];
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return answers.shift()();
+  };
+  const good = () => new Response(rules, { status: 200 });
+  try {
+    for (const exactModule of [rich, plain]) {
+      // A 503 with a good answer right behind it: the read fails, in one request.
+      answers.splice(0, Infinity, () => new Response('{"error":{"message":"busy"}}', { status: 503 }), good);
+      calls = 0;
+      await assert.rejects(exactModule.getExact('/payload'), (e) => e instanceof ApiError && e.status === 503 && e.message === 'busy');
+      assert.equal(calls, 1, 'no second read');
+      answers.splice(0, Infinity, () => {
+        throw new TypeError('fetch failed');
+      }, good);
+      await assert.rejects(exactModule.getExact('/payload'), (e) => e instanceof ApiError && e.code === 'network');
+      answers.splice(0, Infinity, () => new Response('{"default":', { status: 200 }), good);
+      await assert.rejects(exactModule.getExact('/payload'), (e) => e instanceof ApiError && e.code === 'http');
+    }
+    // A good read: kept exact where the browser can, the loss named where not.
+    answers.splice(0, Infinity, good);
+    const kept = await rich.getExact('/payload');
+    if (rich.exact) assert.equal(JSON.stringify(kept), rules);
+    assert.deepEqual(rich.lossIn(kept), rich.exact ? [] : ['9007199254740993', '1.0']);
+    answers.splice(0, Infinity, good);
+    const rounded = await plain.getExact('/payload');
+    assert.equal(rounded.override[0].set.seed, 9007199254740992);
+    assert.deepEqual(plain.lossIn(rounded), ['9007199254740993', '1.0']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 // 21. Components in a document: see dom.mjs.
 await import('./dom.mjs');
 

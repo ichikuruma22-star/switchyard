@@ -6,8 +6,8 @@ mod common;
 use common::{Fixture, error, fixture};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use switchyard_core::{ApiError, FailureClass};
-use switchyard_scheduler::{Lease, PickError};
+use switchyard_core::{ApiError, FailureClass, Protocol};
+use switchyard_scheduler::{Clock, Lease, PickError, PickRequest, Resolved};
 
 /// Keys are `sk-key-<letter>-…`; tests talk about credentials by letter.
 fn letter(lease: &Lease) -> char {
@@ -119,6 +119,86 @@ fn round_robin_keeps_a_cursor_per_model() {
     assert_eq!(letters(&f, "gpt-5.5", 2), "ca");
     // Spelling does not split the cursor.
     assert_eq!(letters(&f, "GPT-5.5", 1), "b");
+}
+
+/// Regression: models whose registered names differ only in case shared
+/// one cursor, so each kept restarting the other's rotation and their
+/// second credentials were never picked.
+#[test]
+fn round_robin_keeps_apart_models_that_differ_only_in_case() {
+    let f = fixture(
+        r#"
+[[providers]]
+name = "upper"
+kind = "openai-compat"
+base_url = "http://upper.test/v1"
+api_keys = ["sk-key-a-0000000000000", "sk-key-b-0000000000000"]
+
+[[providers.models]]
+id = "Model-X"
+
+[[providers]]
+name = "lower"
+kind = "openai-compat"
+base_url = "http://lower.test/v1"
+api_keys = ["sk-key-c-0000000000000", "sk-key-d-0000000000000"]
+
+[[providers.models]]
+id = "model-x"
+"#,
+    );
+    let picks: String = (0..4)
+        .flat_map(|_| ["Model-X", "model-x"])
+        .map(|model| letter(&f.pick(model).unwrap()))
+        .collect();
+    assert_eq!(picks, "acbdacbd");
+}
+
+/// Regression: a request narrowed to some providers shared the cursor of
+/// the full set, and pulled the full set's rotation back to its start.
+#[test]
+fn round_robin_keeps_a_cursor_per_set_of_providers() {
+    let f = fixture(
+        r#"
+[[providers]]
+name = "one"
+kind = "openai"
+api_keys = ["sk-key-a-0000000000000", "sk-key-b-0000000000000"]
+
+[[providers.models]]
+id = "gpt-5.5"
+
+[[providers]]
+name = "two"
+kind = "openai"
+api_keys = ["sk-key-c-0000000000000", "sk-key-d-0000000000000"]
+
+[[providers.models]]
+id = "gpt-5.5"
+"#,
+    );
+    let full = f.scheduler.resolve("gpt-5.5").unwrap();
+    let mut narrowed = full.clone();
+    narrowed.retain_routes(|route| route.provider == "one");
+    let pick = |resolved: &Resolved| {
+        letter(
+            &f.scheduler
+                .pick(&PickRequest {
+                    resolved,
+                    tried: &[],
+                    session: None,
+                    client_protocol: Protocol::OpenaiChat,
+                    now: f.clock.now(),
+                })
+                .unwrap(),
+        )
+    };
+    let (mut all, mut some) = (String::new(), String::new());
+    for _ in 0..4 {
+        all.push(pick(&full));
+        some.push(pick(&narrowed));
+    }
+    assert_eq!((all.as_str(), some.as_str()), ("abcd", "abab"));
 }
 
 #[test]

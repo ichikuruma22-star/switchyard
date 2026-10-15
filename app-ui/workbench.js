@@ -60,7 +60,8 @@ function Changes({api,project,onReference}) {
     if(!file||file.protected)return;
     const abort=new AbortController();
     const endpoint=file.untracked?`file?path=${enc(file.path)}`:`diff?path=${enc(file.path)}&scope=${scope}`;
-    api.request(`/projects/${enc(project.id)}/${endpoint}`,{signal:abort.signal}).then(value=>{if(!abort.signal.aborted)setDetail(value);}).catch(error=>{if(!abort.signal.aborted)setDetailError(errorText(error));}).finally(()=>{if(!abort.signal.aborted)setDetailLoading(false);});
+    // A refresh of the same file replaces an earlier transient error once it succeeds.
+    api.request(`/projects/${enc(project.id)}/${endpoint}`,{signal:abort.signal}).then(value=>{if(!abort.signal.aborted){setDetail(value);setDetailError('');}}).catch(error=>{if(!abort.signal.aborted)setDetailError(errorText(error));}).finally(()=>{if(!abort.signal.aborted)setDetailLoading(false);});
     return()=>abort.abort();
   },[project.id,fileVersion,scope,tick]);
   function choose(change){setSelected(change.path);setScope(change.unstaged.trim()&&change.unstaged!=='?'?'unstaged':'staged');}

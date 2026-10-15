@@ -423,6 +423,24 @@ async fn legacy_completions_are_served_through_chat() {
     assert_eq!(body["error"]["code"], "model_not_found");
 }
 
+#[tokio::test]
+async fn legacy_completions_refuse_token_id_prompts() {
+    let server = TestServer::start().await;
+    for stream in [false, true] {
+        let response = post(
+            &server,
+            "/v1/completions",
+            &json!({"model": "mock-echo", "prompt": [1212, 318, 257, 1332],
+                    "max_tokens": 20, "stream": stream}),
+        )
+        .await;
+        assert_eq!(response.status(), 400, "stream: {stream}");
+        let body = json_of(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error", "{body}");
+        assert_eq!(body["error"]["param"], "prompt", "{body}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------
@@ -651,6 +669,30 @@ async fn embeddings_are_proxied_to_the_upstream_that_serves_the_model() {
     assert_eq!(response.status(), 404);
     assert!(json_of(response).await["error"]["message"].is_string());
     assert_eq!(server.fake.on("/v1/embeddings").len(), 1);
+}
+
+/// The side endpoints read a body as JSON whatever its label (`curl -d`
+/// sends `application/x-www-form-urlencoded`), so the upstream gets it as
+/// JSON too — labelled so, with its own model id.
+#[tokio::test]
+async fn mislabelled_json_bodies_reach_the_upstream_as_json_with_its_model_id() {
+    let server = TestServer::start().await;
+    for label in ["text/plain", "application/x-www-form-urlencoded"] {
+        let response = http()
+            .post(server.url(&format!("/v1/embeddings?key={KEY}")))
+            .header("content-type", label)
+            .body(json!({"model": "embed", "input": "hi"}).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{label}");
+    }
+    let seen = server.fake.on("/v1/embeddings");
+    assert_eq!(seen.len(), 2);
+    for recorded in seen {
+        assert_eq!(recorded.body, json!({"model": "embed-up", "input": "hi"}));
+        assert_eq!(recorded.content_type.as_deref(), Some("application/json"));
+    }
 }
 
 // ---------------------------------------------------------------------------

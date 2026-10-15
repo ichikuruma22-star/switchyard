@@ -222,6 +222,81 @@ fn repair_drops_orphaned_calls_and_orphaned_outputs() {
 }
 
 #[test]
+fn repair_drops_the_reasoning_a_dropped_call_leaves_without_output() {
+    let reasoning = |id: &str| json!({"type": "reasoning", "id": id, "summary": [], "encrypted_content": "gAAAA"});
+    // The client cancelled the tool and moved on: the call has no output,
+    // and its reasoning would be followed by the next user message.
+    let repaired = repair_tool_pairs(vec![
+        user("u1", "go"),
+        reasoning("rs_1"),
+        reasoning("rs_2"),
+        call("fc1", "c1"),
+        user("u2", "never mind, do X"),
+    ]);
+    assert_eq!(
+        repaired,
+        vec![user("u1", "go"), user("u2", "never mind, do X")]
+    );
+
+    // Nothing at all after the dropped call.
+    let repaired = repair_tool_pairs(vec![user("u1", "go"), reasoning("rs_1"), call("fc1", "c1")]);
+    assert_eq!(repaired, vec![user("u1", "go")]);
+
+    // A parallel call that was answered still follows the reasoning, which
+    // it needs; so does an assistant message.
+    let repaired = repair_tool_pairs(vec![
+        user("u1", "go"),
+        reasoning("rs_1"),
+        call("fc1", "c1"),
+        call("fc2", "c2"),
+        output("c2", "two"),
+        reasoning("rs_2"),
+        call("fc3", "c3"),
+        json!({"type": "message", "role": "assistant", "content": "done"}),
+    ]);
+    assert_eq!(
+        repaired,
+        vec![
+            user("u1", "go"),
+            reasoning("rs_1"),
+            call("fc2", "c2"),
+            output("c2", "two"),
+            reasoning("rs_2"),
+            json!({"type": "message", "role": "assistant", "content": "done"}),
+        ]
+    );
+}
+
+#[test]
+fn repair_drops_the_signature_carrier_of_a_dropped_call() {
+    // What the gateway hands a client for a Gemini step with two parallel
+    // calls: the first call's signature on a carrier directly ahead of it.
+    let carrier =
+        json!({"type": "reasoning", "summary": [], "encrypted_content": "sy1.g.call:CiQBcsig=="});
+    let repaired = repair_tool_pairs(vec![
+        user("u1", "go"),
+        carrier.clone(),
+        call("fc1", "c1"),
+        call("fc2", "c2"),
+        output("c2", "two"),
+    ]);
+    // The signature must not move onto the call that stays.
+    assert_eq!(
+        repaired,
+        vec![user("u1", "go"), call("fc2", "c2"), output("c2", "two")]
+    );
+
+    // The carrier of a call that stays is kept.
+    let paired = vec![
+        user("u1", "go"),
+        carrier,
+        call("fc1", "c1"),
+        output("c1", "one"),
+    ];
+    assert_eq!(repair_tool_pairs(paired.clone()), paired);
+}
+
+#[test]
 fn repair_handles_items_without_call_ids() {
     let named_result =
         json!({"type": "function_call_output", "name": "heartbeat", "output": "alive"});

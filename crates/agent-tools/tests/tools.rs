@@ -1,6 +1,6 @@
 use serde_json::json;
 use std::{fs, time::Duration};
-use switchyard_agent_tools::{definitions, execute, prepare, sha256};
+use switchyard_agent_tools::{definitions, execute, prepare, project_search, sha256};
 use tokio_util::sync::CancellationToken;
 
 #[test]
@@ -144,6 +144,183 @@ async fn search_excludes_secrets_build_output_and_supports_literal_queries() {
 }
 
 #[tokio::test]
+async fn search_skips_unsupported_subdirectories_without_failing() {
+    let directory = tempfile::tempdir().unwrap();
+    // A verbatim path lets Windows create a directory with a device name.
+    let root = directory.path().canonicalize().unwrap();
+    fs::create_dir(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "needle\n").unwrap();
+    fs::create_dir(root.join("aux")).unwrap();
+    fs::write(root.join("aux/notes.txt"), "needle\n").unwrap();
+    let plan = prepare(&root, "search_files", &json!({"query":"needle"})).unwrap();
+    let result = execute(&plan, CancellationToken::new()).await;
+    assert_eq!(result.status, "completed", "{result:?}");
+    assert_eq!(
+        result.output["matches"],
+        json!([{"path":"src/main.rs","line":1,"text":"needle"}])
+    );
+    assert_eq!(result.output["omitted"], 1);
+    let result = project_search(&root, "needle", ".", 10, &CancellationToken::new()).unwrap();
+    assert_eq!(result.status, "completed", "{result:?}");
+    assert_eq!(result.output["matches"][0]["path"], "src/main.rs");
+    #[cfg(windows)]
+    fs::remove_dir_all(root.join("aux")).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn search_skips_unreadable_subdirectories_without_failing() {
+    use std::os::unix::fs::PermissionsExt;
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping: root can list a directory without read permission");
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let locked = directory.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("data.txt"), "needle\n").unwrap();
+    fs::write(directory.path().join("ok.txt"), "needle\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let plan = prepare(directory.path(), "search_files", &json!({"query":"needle"})).unwrap();
+    let result = execute(&plan, CancellationToken::new()).await;
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(result.status, "completed", "{result:?}");
+    assert_eq!(
+        result.output["matches"],
+        json!([{"path":"ok.txt","line":1,"text":"needle"}])
+    );
+    assert_eq!(result.output["omitted"], 1);
+}
+
+#[tokio::test]
+async fn search_matches_text_before_a_character_split_by_the_read_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    // The 64 KiB per-file read ends after the first byte of a 3-byte character.
+    let mut text = String::from("needle\n");
+    text.push_str(&"x".repeat(64 * 1024 - 1 - text.len()));
+    text.push_str(&"\u{3042}".repeat(16));
+    fs::write(directory.path().join("split.md"), text).unwrap();
+    // Invalid UTF-8 inside the read portion is still not searched.
+    let mut invalid = b"needle\n\xff".to_vec();
+    invalid.resize(70 * 1024, b'x');
+    fs::write(directory.path().join("invalid.md"), invalid).unwrap();
+    let plan = prepare(directory.path(), "search_files", &json!({"query":"needle"})).unwrap();
+    let result = execute(&plan, CancellationToken::new()).await;
+    assert_eq!(result.status, "completed", "{result:?}");
+    assert!(result.truncated);
+    assert_eq!(
+        result.output["matches"],
+        json!([{"path":"split.md","line":1,"text":"needle"}])
+    );
+}
+
+/// Return an 8.3 short name for `path`, assigning `assign` when the volume did
+/// not generate one. Assignment needs an elevated process; None means skip.
+#[cfg(windows)]
+fn short_name(path: &std::path::Path, assign: &str) -> Option<String> {
+    use std::os::windows::{
+        ffi::{OsStrExt, OsStringExt},
+        process::CommandExt,
+    };
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+    let long = path.file_name()?.to_string_lossy().into_owned();
+    let read = || {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let mut buffer = [0u16; 1024];
+        // SAFETY: the input is NUL-terminated and the buffer length is exact.
+        let length =
+            unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) }
+                as usize;
+        if length == 0 || length >= buffer.len() {
+            return None;
+        }
+        let short = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length]));
+        let name = short.file_name()?.to_string_lossy().into_owned();
+        (name != long).then_some(name)
+    };
+    if let Some(name) = read() {
+        return Some(name);
+    }
+    std::process::Command::new("fsutil")
+        .args(["file", "setshortname"])
+        .arg(path)
+        .arg(assign)
+        .creation_flags(0x08000000)
+        .output()
+        .ok()?;
+    read()
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn short_name_aliases_cannot_reach_blocked_or_renamed_paths() {
+    use switchyard_agent_tools::{project_directory, project_file};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    fs::create_dir_all(root.join(".git/hooks")).unwrap();
+    fs::write(
+        root.join(".git/config"),
+        "url = https://needle@example.invalid\n",
+    )
+    .unwrap();
+    fs::write(root.join(".env"), "TOKEN=needle\n").unwrap();
+    fs::create_dir(root.join("source-files")).unwrap();
+    fs::write(root.join("source-files/main.rs"), "needle\n").unwrap();
+    let (Some(git), Some(env), Some(source)) = (
+        short_name(&root.join(".git"), "GIT~1"),
+        short_name(&root.join(".env"), "ENV~1"),
+        short_name(&root.join("source-files"), "SOURCE~1"),
+    ) else {
+        eprintln!("skipping: the temporary volume has no 8.3 short names");
+        return;
+    };
+    for path in [
+        format!("{git}/config"),
+        format!("{}/config", git.to_lowercase()),
+        env.clone(),
+        format!("{source}/main.rs"),
+    ] {
+        assert!(
+            prepare(root, "read_file", &json!({"path":path})).is_err(),
+            "allowed {path}"
+        );
+        assert_eq!(project_file(root, &path).status, "failed", "read {path}");
+    }
+    for path in [&git, &source] {
+        assert!(
+            prepare(root, "search_files", &json!({"query":"needle","path":path})).is_err(),
+            "searched {path}"
+        );
+        assert!(project_directory(root, path).is_err(), "listed {path}");
+    }
+    for path in [format!("{git}/hooks/pre-commit"), env.clone()] {
+        assert!(
+            prepare(
+                root,
+                "apply_patch",
+                &json!({"edits":[{"path":path,"before_sha256":null,"content":"x"}]})
+            )
+            .is_err(),
+            "created {path}"
+        );
+    }
+    // Stored names, including a different letter case, still work.
+    for path in ["source-files/main.rs", "Source-Files/main.rs"] {
+        let plan = prepare(root, "read_file", &json!({"path":path})).unwrap();
+        assert_eq!(
+            execute(&plan, CancellationToken::new()).await.status,
+            "completed"
+        );
+    }
+    let search = prepare(root, "search_files", &json!({"query":"needle"})).unwrap();
+    assert_eq!(
+        execute(&search, CancellationToken::new()).await.output["matches"],
+        json!([{"path":"source-files/main.rs","line":1,"text":"needle"}])
+    );
+}
+
+#[tokio::test]
 async fn approved_patch_preview_is_exact_and_stale_batch_does_not_clobber() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("a.txt"), "one\n").unwrap();
@@ -208,6 +385,45 @@ async fn patch_creates_and_replaces_with_explicit_preconditions() {
         fs::read_to_string(directory.path().join("new.txt")).unwrap(),
         "replacement\n"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn created_files_follow_the_umask_and_replacements_keep_their_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let mode = |name: &str| {
+        fs::metadata(directory.path().join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let plan = prepare(
+        directory.path(),
+        "apply_patch",
+        &json!({"edits":[{"path":"new.txt","before_sha256":null,"content":"new"}]}),
+    )
+    .unwrap();
+    let result = execute(&plan, CancellationToken::new()).await;
+    assert_eq!(result.status, "completed", "{result:?}");
+    // Compare with an ordinary creation so the runner's umask does not matter.
+    fs::File::create(directory.path().join("reference.txt")).unwrap();
+    assert_eq!(mode("new.txt"), mode("reference.txt"));
+    fs::set_permissions(
+        directory.path().join("new.txt"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    let plan = prepare(
+        directory.path(),
+        "apply_patch",
+        &json!({"edits":[{"path":"new.txt","before_sha256":sha256(b"new"),"content":"changed"}]}),
+    )
+    .unwrap();
+    let result = execute(&plan, CancellationToken::new()).await;
+    assert_eq!(result.status, "completed", "{result:?}");
+    assert_eq!(mode("new.txt"), 0o640);
 }
 
 #[tokio::test]

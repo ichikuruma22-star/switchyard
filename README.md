@@ -26,7 +26,7 @@ and Microsoft Edge WebView2 Runtime; WebView2 is required for the desktop
 shell. Extract the ZIP and open `switchya-desktop.exe`, or run `switchya.exe serve`
 for the browser workspace. The first run guides you through provider setup.
 No macOS app binary is available, and separate Linux checks do not constitute
-a Linux desktop release. See [the preview verification status](docs/SWITCHYA.md#preview-verification-status)
+a Linux desktop release. See [the preview verification status](docs/SWITCHYA.md#published-preview-verification-status)
 for the tested scope and remaining limits.
 
 The gateway release includes a Windows x64 ZIP and Linux x64 musl archive with
@@ -180,7 +180,7 @@ curl "http://127.0.0.1:8317/v1beta/models/gpt-5:generateContent" \
 | | |
 |---|---|
 | `POST /v1/chat/completions` | OpenAI Chat Completions |
-| `POST /v1/completions` | legacy completions (served through chat) |
+| `POST /v1/completions` | legacy completions (served through chat; text prompts only, token-id prompts get a 400) |
 | `POST /v1/responses` | OpenAI Responses |
 | `GET  /v1/responses` | Responses over WebSocket |
 | `POST /v1/responses/input_tokens` | token count |
@@ -225,7 +225,10 @@ models = ["gpt-*"]
 set = { "reasoning.summary" = "auto" }
 ```
 
-Secrets may be literal or `env:NAME`. The file is reloaded when it changes; an
+Secrets may be literal or `env:NAME` (also written `${NAME}`). Provider
+`headers` values accept the same references, resolved like API keys; a header
+whose variable is unset makes that provider's credentials unusable instead of
+sending the reference text. The file is reloaded when it changes; an
 invalid edit is rejected and the running config kept.
 
 See [the security and deployment model](docs/SECURITY-MODEL.md) before sharing

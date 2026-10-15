@@ -387,6 +387,92 @@ async fn allow_remote_admits_remote_peers() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// A web page that has its own name pointed at 127.0.0.1 (DNS rebinding)
+/// connects from loopback, and its same-origin requests may carry a secret
+/// header. The name gives it away: it is refused before the secret is
+/// looked at, so it cannot lock out the operator on this machine.
+#[tokio::test]
+async fn a_loopback_request_under_a_foreign_name_is_refused_and_not_counted() {
+    let app = App::start().await;
+    let port = app.addr.port();
+    let rebound = format!("attacker.example:{port}");
+    let page = format!("http://{rebound}");
+
+    for attempt in 1..=6 {
+        let (status, body) = read(
+            app.http
+                .post(app.api("/login"))
+                .header("host", &rebound)
+                .header("origin", &page)
+                .header("x-admin-secret", "a-guess")
+                .json(&json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "attempt {attempt}: {body}");
+        assert_eq!(
+            body["error"]["message"],
+            "the admin API answers only to localhost, a loopback address or server.host"
+        );
+    }
+    // Not even with the right secret, nor with the page's origin alone.
+    let (status, _) = read(
+        app.http
+            .get(app.api("/status"))
+            .header("host", &rebound)
+            .bearer_auth(SECRET),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = read(
+        app.http
+            .get(app.api("/status"))
+            .header("origin", &page)
+            .bearer_auth(SECRET),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Nor the live-event socket.
+    let ticket = app.ticket().await;
+    assert_eq!(
+        app.upgrade_status(&app.ws_url(&ticket), &[("host", rebound.as_str())])
+            .await,
+        403
+    );
+
+    // None of the guesses counted: the operator signs in, under any of the
+    // machine's own names.
+    for host in [
+        format!("127.0.0.1:{port}"),
+        format!("localhost:{port}"),
+        format!("[::1]:{port}"),
+    ] {
+        let (status, body) = read(
+            app.http
+                .get(app.api("/status"))
+                .header("host", &host)
+                .header("origin", format!("http://{host}"))
+                .bearer_auth(SECRET),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{host}: {body}");
+    }
+
+    // What a reverse proxy relays keeps the name it was asked for.
+    let (status, body) = app
+        .patch("/settings", json!({"admin": {"allow_remote": true}}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = read(
+        app.http
+            .get(app.api("/status"))
+            .header("host", "gateway.example")
+            .header("x-forwarded-for", "198.51.100.4")
+            .bearer_auth(SECRET),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 // ---------------------------------------------------------------------------
 // Environment overrides
 // ---------------------------------------------------------------------------

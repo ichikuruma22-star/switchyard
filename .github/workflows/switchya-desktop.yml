@@ -50,6 +50,8 @@ jobs:
         run: node --test app-ui/tests/*.test.mjs
       - name: Build desktop shell
         run: cargo build --manifest-path desktop/Cargo.toml --locked
+      - name: Native shell tests
+        run: cargo test --manifest-path desktop/Cargo.toml --locked
       - name: Check command-line startup only
         run: |
           executable=desktop/target/debug/switchya-desktop

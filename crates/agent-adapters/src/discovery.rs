@@ -10,6 +10,14 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, process::Command};
 
+/// Agents reported by discovery. Only some of them can start runs.
+const AGENTS: [(&str, &str); 4] = [
+    ("codex", "Codex"),
+    ("claude", "Claude Code"),
+    ("antigravity", "Antigravity"),
+    ("omp", "Oh My Pi"),
+];
+
 /// Resolve only native executable names. Windows .cmd/.bat shims are deliberately
 /// excluded: a shell must never interpret a discovered path or the user prompt.
 pub(crate) fn find_cli(id: &str) -> Option<PathBuf> {
@@ -21,28 +29,7 @@ pub(crate) fn find_cli(id: &str) -> Option<PathBuf> {
     };
     let mut candidates = Vec::new();
     if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
-        let home = PathBuf::from(home);
-        match id {
-            "codex" => {
-                if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-                    candidates.push(
-                        PathBuf::from(local)
-                            .join("Programs/OpenAI/Codex/bin")
-                            .join(&name),
-                    );
-                }
-                candidates.push(home.join(".local/bin").join(&name));
-                candidates.push(home.join(".cargo/bin").join(&name));
-            }
-            "claude" => candidates.push(home.join(".local/bin").join(&name)),
-            "antigravity" => {
-                if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-                    candidates.push(PathBuf::from(local).join("agy/bin").join(&name));
-                }
-                candidates.push(home.join(".local/bin").join(&name));
-            }
-            _ => return None,
-        }
+        candidates = home_candidates(id, &name, Path::new(&home))?;
     }
     if let Some(path) = std::env::var_os("PATH") {
         // Empty/relative PATH elements could make the project control execution.
@@ -73,6 +60,35 @@ pub(crate) fn find_cli(id: &str) -> Option<PathBuf> {
         }
         Some(canonical)
     })
+}
+
+/// Per-user install locations for a discovered agent, or `None` for an id
+/// that discovery does not know.
+fn home_candidates(id: &str, name: &str, home: &Path) -> Option<Vec<PathBuf>> {
+    let mut candidates = Vec::new();
+    match id {
+        "codex" => {
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                candidates.push(
+                    PathBuf::from(local)
+                        .join("Programs/OpenAI/Codex/bin")
+                        .join(name),
+                );
+            }
+            candidates.push(home.join(".local/bin").join(name));
+            candidates.push(home.join(".cargo/bin").join(name));
+        }
+        "claude" => candidates.push(home.join(".local/bin").join(name)),
+        "antigravity" => {
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                candidates.push(PathBuf::from(local).join("agy/bin").join(name));
+            }
+            candidates.push(home.join(".local/bin").join(name));
+        }
+        "omp" => candidates.push(home.join(".bun/bin").join(name)),
+        _ => return None,
+    }
+    Some(candidates)
 }
 
 async fn version(path: &Path) -> Option<String> {
@@ -122,13 +138,8 @@ async fn version(path: &Path) -> Option<String> {
 }
 
 pub(crate) async fn discover() -> Vec<AdapterStatus> {
-    let mut statuses = Vec::with_capacity(3);
-    for (id, name) in [
-        ("codex", "Codex"),
-        ("claude", "Claude Code"),
-        ("antigravity", "Antigravity"),
-        ("omp", "Oh My Pi"),
-    ] {
+    let mut statuses = Vec::with_capacity(AGENTS.len());
+    for (id, name) in AGENTS {
         let executable = find_cli(id);
         let installed = executable.is_some();
         let detected_version = match &executable {
@@ -161,4 +172,26 @@ pub(crate) async fn discover() -> Vec<AdapterStatus> {
         });
     }
     statuses
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_discovered_agent_has_home_install_locations() {
+        let home = Path::new("/home/person");
+        for (id, _) in AGENTS {
+            assert!(
+                home_candidates(id, id, home).is_some_and(|c| !c.is_empty()),
+                "{id} is listed by discovery but never resolved"
+            );
+        }
+        assert!(
+            home_candidates("omp", "omp", home)
+                .unwrap()
+                .contains(&home.join(".bun/bin/omp"))
+        );
+        assert!(home_candidates("unknown", "unknown", home).is_none());
+    }
 }

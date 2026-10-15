@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 /// conversation turns.
 const MAX_PROMPT_BYTES: usize = 24_000;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
+const CONVERSATION_CHANGED: &str = "Antigravity reported a different conversation than the saved one. Review the project before continuing; nothing will be replayed.";
 
 enum Packet {
     Line(String),
@@ -163,11 +164,11 @@ pub(crate) async fn run(
                 };
                 match message.get("event").and_then(Value::as_str) {
                     Some("init") => {
-                        if let Some(id) = message.get("conversation_id").and_then(Value::as_str)
-                            .filter(|id| uuid::Uuid::parse_str(id).is_ok())
-                        {
-                            state.lock().view.thread_id = Some(id.to_owned());
+                        if attach(&state, &message, resume_thread.as_deref()) {
+                            continue;
                         }
+                        fail(&state, CONVERSATION_CHANGED, true);
+                        break;
                     }
                     Some("step_update") => {
                         if let Some(step) = message.get("step_update")
@@ -178,6 +179,10 @@ pub(crate) async fn run(
                     }
                     Some("result") => {
                         let result = message.get("result").cloned().unwrap_or(Value::Null);
+                        if !attach(&state, &result, resume_thread.as_deref()) {
+                            fail(&state, CONVERSATION_CHANGED, true);
+                            break;
+                        }
                         finish(&state, &result, emitted_text);
                         finished = true;
                         break;
@@ -204,6 +209,31 @@ pub(crate) async fn run(
 
 fn truncate(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
+}
+
+/// Record the conversation agy reports in `value`. A run stays in one
+/// conversation, and a continued run must stay in the saved one. Returns
+/// false when agy reports a different conversation.
+fn attach(state: &Arc<Mutex<StoredRun>>, value: &Value, resume_thread: Option<&str>) -> bool {
+    let Some(id) = value
+        .get("conversation_id")
+        .and_then(Value::as_str)
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+    else {
+        return true;
+    };
+    let mut run = state.lock();
+    if run
+        .view
+        .thread_id
+        .as_deref()
+        .or(resume_thread)
+        .is_some_and(|expected| expected != id)
+    {
+        return false;
+    }
+    run.view.thread_id = Some(id.to_owned());
+    true
 }
 
 fn step_event(
@@ -278,6 +308,9 @@ fn finish(state: &Arc<Mutex<StoredRun>>, result: &Value, emitted_text: bool) {
             );
         }
         let mut run = state.lock();
+        // agy reports no turn identifier. Record the confirmed turn so the
+        // saved conversation can be continued; the state change saves it.
+        run.view.turn_id = Some(uuid::Uuid::new_v4().to_string());
         run.event("turn_completed", json!({"status":"completed"}));
         run.state(RunState::Completed);
     } else {

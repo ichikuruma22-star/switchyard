@@ -879,6 +879,106 @@ targets = [\"also-missing\"]
     assert!(!visible_ids(&f.scheduler).contains(&"broken".to_string()));
 }
 
+/// Regression: an alias ignored for want of a routable target still took
+/// its name over when other aliases named it, although for clients the
+/// name meant the real model of that name.
+#[test]
+fn an_ignored_alias_does_not_capture_its_name_in_other_aliases() {
+    let f = fixture(
+        r#"
+[[providers]]
+name = "openai"
+kind = "openai"
+api_keys = ["sk-openai-aaaaaaaaaaaaaaaaaaaa"]
+
+[[providers.models]]
+id = "gpt-5.5"
+
+[[providers.models]]
+id = "gpt-4o"
+
+[[providers]]
+name = "parked"
+kind = "anthropic"
+enabled = false
+api_keys = ["sk-ant-aaaaaaaaaaaaaaaaaaaa"]
+
+[[providers.models]]
+id = "claude-opus-4-6"
+
+[[aliases]]
+name = "gpt-5.5"
+targets = ["claude-opus-4-6"]
+
+[[aliases]]
+name = "fast"
+targets = ["gpt-5.5"]
+
+[[aliases]]
+name = "both"
+targets = ["gpt-5.5", "gpt-4o"]
+hide_targets = true
+"#,
+    );
+    let client_models = |name: &str| -> Vec<String> {
+        f.scheduler
+            .resolve(name)
+            .unwrap()
+            .targets
+            .into_iter()
+            .map(|t| t.client_model)
+            .collect()
+    };
+    let lease = f.pick("gpt-5.5").unwrap();
+    assert_eq!(
+        (
+            lease.credential.provider.as_str(),
+            lease.upstream_model.as_str()
+        ),
+        ("openai", "gpt-5.5")
+    );
+    assert_eq!(client_models("fast"), vec!["gpt-5.5"]);
+    let lease = f.pick("fast").unwrap();
+    assert_eq!(
+        (
+            lease.credential.provider.as_str(),
+            lease.upstream_model.as_str()
+        ),
+        ("openai", "gpt-5.5")
+    );
+    assert_eq!(client_models("both"), vec!["gpt-5.5", "gpt-4o"]);
+
+    // `hide_targets` hides the model the name stands for.
+    assert_eq!(visible_ids(&f.scheduler), vec!["both", "fast"]);
+    let table = f.scheduler.models();
+    let flags: Vec<(&str, bool, bool)> = table
+        .iter()
+        .map(|m| (m.name.as_str(), m.hidden, m.ignored))
+        .collect();
+    assert_eq!(
+        flags,
+        vec![
+            ("both", false, false),
+            ("fast", false, false),
+            ("gpt-4o", true, false),
+            ("gpt-5.5", true, false),
+        ]
+    );
+    let warnings = f.scheduler.warnings();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("alias `gpt-5.5` has no routable target")),
+        "{warnings:?}"
+    );
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.contains("`fast`") || w.contains("`both`")),
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn alias_targets_may_use_prefixed_names() {
     let f = fixture(&format!(
@@ -1146,6 +1246,61 @@ api_keys = ["sk-b-aaaaaaaaaaaaaaaaaaaaaa"]
     let b = f.scheduler.credentials("b");
     assert_eq!(b[0].proxy, "direct");
     assert!(f.scheduler.credentials("nope").is_empty());
+}
+
+/// Regression: a header value written as a secret reference was handed to
+/// the transport as written, and sent upstream as the literal `env:NAME`.
+#[test]
+fn header_references_are_resolved_like_keys() {
+    let f = fixture(
+        r#"
+[[providers]]
+name = "proxied"
+kind = "openai"
+headers = { "Helicone-Auth" = "env:SET_HELICONE_KEY", "X-Title" = "switchyard" }
+[[providers.credentials]]
+api_key = "sk-proxied-aaaaaaaaaaaaaaaa"
+label = "proxied"
+
+[[providers]]
+name = "broken"
+kind = "openai"
+headers = { "X-Api-Key" = "${MISSING_HEADER_KEY}" }
+[[providers.credentials]]
+api_key = "sk-broken-aaaaaaaaaaaaaaaaa"
+label = "broken"
+"#,
+    );
+    let proxied = f.scheduler.credentials("proxied");
+    let headers: Vec<(&str, &str)> = proxied[0]
+        .headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(
+        headers,
+        vec![
+            ("Helicone-Auth", "sk-from-env-SET_HELICONE_KEY"),
+            ("X-Title", "switchyard")
+        ]
+    );
+    assert!(f.credential_by_label("proxied").usable);
+
+    // One that cannot be resolved takes the provider's credentials out of
+    // rotation and says why, as an unset key does.
+    let broken = f.credential_by_label("broken");
+    assert!(!broken.usable);
+    assert_eq!(broken.status, CredentialStatus::Unusable);
+    assert_eq!(
+        broken.unusable_reason.as_deref(),
+        Some("header `X-Api-Key`: environment variable MISSING_HEADER_KEY is not set")
+    );
+    assert!(f.scheduler.credentials("broken").is_empty());
+    let warnings = f.scheduler.warnings();
+    assert!(
+        warnings.iter().any(|w| w.contains("MISSING_HEADER_KEY")),
+        "{warnings:?}"
+    );
 }
 
 #[test]

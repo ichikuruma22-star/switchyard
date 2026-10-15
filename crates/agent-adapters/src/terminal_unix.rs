@@ -1,5 +1,5 @@
 //! Explicit user-requested terminal launch. No prompts, credentials, or shell flags
-//! come from the project; native Claude retains its own interactive permissions.
+//! come from the project; the native CLI retains its own interactive permissions.
 use crate::{AdapterError, ProfileBinding, Result};
 #[cfg(any(target_os = "linux", test))]
 use std::path::PathBuf;
@@ -17,20 +17,7 @@ use tokio::{process::Command, runtime::Handle};
 const RUN_IN_PROJECT: &str = "cd -- \"$1\" && shift && exec \"$@\"";
 
 pub(crate) fn launch(executable: &Path, binding: &ProfileBinding, project: &Path) -> Result<()> {
-    crate::profile::validate(binding, "claude")?;
-    if !binding.managed || !native_executable(executable) {
-        return Err(AdapterError::Unavailable(
-            "A managed Claude profile and installed native Claude executable are required.".into(),
-        ));
-    }
-    if !project.is_absolute()
-        || !project.is_dir()
-        || project.canonicalize().ok().as_deref() != Some(project)
-    {
-        return Err(AdapterError::Invalid(
-            "Reopen the project before launching its terminal.".into(),
-        ));
-    }
+    check(executable, binding, project)?;
     let runtime = Handle::try_current().map_err(|_| {
         AdapterError::Unavailable("The local host cannot monitor a terminal launch.".into())
     })?;
@@ -97,6 +84,29 @@ pub(crate) fn launch(executable: &Path, binding: &ProfileBinding, project: &Path
             }
         }
     }
+}
+
+/// Only managed Claude and Antigravity profiles open their CLI in a terminal,
+/// from an installed native executable in the exact opened project.
+fn check(executable: &Path, binding: &ProfileBinding, project: &Path) -> Result<()> {
+    crate::profile::validate(binding, &binding.agent_id)?;
+    if !matches!(binding.agent_id.as_str(), "claude" | "antigravity")
+        || !binding.managed
+        || !native_executable(executable)
+    {
+        return Err(AdapterError::Unavailable(
+            "A managed Claude or Antigravity profile and the agent's installed native executable are required.".into(),
+        ));
+    }
+    if !project.is_absolute()
+        || !project.is_dir()
+        || project.canonicalize().ok().as_deref() != Some(project)
+    {
+        return Err(AdapterError::Invalid(
+            "Reopen the project before launching its terminal.".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn native_executable(path: &Path) -> bool {
@@ -374,6 +384,55 @@ mod tests {
         ] {
             assert!(!values.contains_key(OsStr::new(key)));
         }
+    }
+
+    #[test]
+    fn antigravity_terminal_uses_the_profile_home() {
+        let mut profile = binding();
+        profile.agent_id = "antigravity".into();
+        let values: std::collections::BTreeMap<_, _> = environment(
+            &profile,
+            [
+                ("HOME", "/home/person"),
+                ("PATH", "/usr/bin"),
+                ("ANTIGRAVITY_API_KEY", "not-forwarded"),
+                ("GEMINI_API_KEY", "not-forwarded"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into())),
+        )
+        .into_iter()
+        .collect();
+        for key in ["HOME", "USERPROFILE"] {
+            assert_eq!(
+                values.get(OsStr::new(key)),
+                Some(&profile.home.clone().into_os_string())
+            );
+        }
+        for key in ["CLAUDE_CONFIG_DIR", "ANTIGRAVITY_API_KEY", "GEMINI_API_KEY"] {
+            assert!(!values.contains_key(OsStr::new(key)));
+        }
+    }
+
+    #[test]
+    fn managed_claude_and_antigravity_profiles_pass_launch_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().canonicalize().unwrap();
+        let executable = home.join("agent");
+        std::fs::write(&executable, "").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut profile = binding();
+        profile.home = home.clone();
+        for agent in ["claude", "antigravity"] {
+            profile.agent_id = agent.into();
+            check(&executable, &profile, &home).unwrap();
+        }
+        // Codex profiles sign in through the account manager instead.
+        profile.agent_id = "codex".into();
+        assert!(check(&executable, &profile, &home).is_err());
+        profile.agent_id = "antigravity".into();
+        profile.managed = false;
+        assert!(check(&executable, &profile, &home).is_err());
     }
 
     #[test]

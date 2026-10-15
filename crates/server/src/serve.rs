@@ -32,10 +32,10 @@ use tower::{Service, ServiceExt};
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How long a connection may sit without sending a (complete) request
-/// head — or, when new, anything at all. Bounds what an idle or
-/// deliberately slow client can hold on to; longer than the idle timeouts
-/// of common HTTP clients' connection pools, so those give a connection up
-/// before the server does.
+/// head — or, when new, enough to tell its HTTP version. Bounds what an
+/// idle or deliberately slow client can hold on to; longer than the idle
+/// timeouts of common HTTP clients' connection pools, so those give a
+/// connection up before the server does.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How often an HTTP/2 connection is pinged, and how long the answer may
@@ -349,9 +349,9 @@ where
         + 'static,
     S::Future: Send + 'static,
 {
-    // A peer that connects and says nothing, or stops taking what it is
-    // sent, ends the connection instead of holding it — and what is behind
-    // it — forever.
+    // A peer that connects and says nothing (not even which HTTP version
+    // it speaks), or stops taking what it is sent, ends the connection
+    // instead of holding it — and what is behind it — forever.
     let io = StallGuard::new(io, HEADER_READ_TIMEOUT, WRITE_STALL_TIMEOUT);
     let connection = builder.serve_connection_with_upgrades(TokioIo::new(io), service);
     if let Err(error) = watcher.watch(connection).await {

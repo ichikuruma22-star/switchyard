@@ -15,15 +15,23 @@ and normalized arguments. Public metadata is checked against the sealed plan.
 | `run_command` | Project-relative cwd; default 30 seconds, maximum 5 minutes; 128 KiB per output stream | Always |
 
 File tools reject absolute/traversing paths, symlinks, Windows reparse points,
-repository metadata and common credential filenames. Search also skips dependency
-and build directories. An incomplete search or read is marked `truncated`.
+repository metadata and common credential filenames. On Windows, each existing
+path component is also checked against the long name stored on disk, so an 8.3
+short-name alias (`GIT~1`, `ENV~1`) is refused: it can neither reach a blocked
+entry nor hide the real name from an approval preview. Search also skips
+dependency and build directories. Entries search cannot validate or read (an
+unreadable folder, a reserved name such as `aux`) are skipped and counted in
+`omitted`; only the requested folder itself must be readable. A search or read
+that stopped at a limit is marked `truncated`.
 This filename policy is a default guard, not a guarantee that arbitrary source
 files never contain secrets.
 Conventional `.env.example`, `.env.sample` and `.env.template` files remain readable.
 
 Patch previews contain the complete before/after unified diff. A null
 `before_sha256` creates a new file only; existing files require the exact hash
-returned by `read_file`. Parent directories must already exist. Execution checks
+returned by `read_file`. Parent directories must already exist. On Unix a created
+file follows the process umask (typically `0644`), as editors create files, and a
+replaced file keeps its permission bits without setuid/setgid. Execution checks
 the entire batch before writing and checks each file again before replacing it.
 Individual replacements are atomic, while the batch is not a transaction. A late
 failure or cancellation reports every successfully changed file in `changes`.

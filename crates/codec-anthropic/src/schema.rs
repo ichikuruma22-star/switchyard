@@ -23,7 +23,8 @@
 //! the way Anthropic's own SDKs do: unsupported constraints are removed and
 //! recorded in the `description` so the model still reads them, and objects
 //! are closed. A schema that cannot be made acceptable yields `None`; the
-//! caller then describes it in a system instruction instead.
+//! caller then describes it in a system instruction instead. That includes
+//! maps and objects without properties, which closing would reduce to `{}`.
 
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
@@ -367,6 +368,23 @@ impl Fitter {
                 .and_then(Value::as_object)
                 .map(|properties| properties.keys().collect::<Vec<_>>())
                 .unwrap_or_default();
+            // Closing keeps the declared properties, which is all an open
+            // object promises. A map (a schema for the other keys' values,
+            // `patternProperties`) or an object that declares no property
+            // would be left able to hold only `{}`, losing the content it is
+            // for, so it is described instead.
+            let typed = |keyword: &str| {
+                map.get(keyword)
+                    .and_then(Value::as_object)
+                    .is_some_and(|schema| !schema.is_empty())
+            };
+            let closed = map.get("additionalProperties") == Some(&Value::Bool(false));
+            if typed("additionalProperties")
+                || typed("patternProperties")
+                || (properties.is_empty() && !closed)
+            {
+                return None;
+            }
             let required: Vec<&str> = out
                 .get("required")
                 .and_then(Value::as_array)
@@ -405,9 +423,9 @@ impl Fitter {
 /// Rewrites `schema` into the dialect `output_config.format` accepts (see the
 /// module documentation). `None` when it cannot be done: the schema is not
 /// an object schema document, refers outside itself or to itself, holds an
-/// enum of objects, uses tuple arrays or boolean sub-schemas, nests too
-/// deeply, or exceeds the API's limits on optional and union-typed
-/// properties.
+/// enum of objects, a map or an object that declares no property, uses tuple
+/// arrays or boolean sub-schemas, nests too deeply, or exceeds the API's
+/// limits on optional and union-typed properties.
 pub(crate) fn fit_output_schema(schema: &Value) -> Option<Value> {
     let root = schema.as_object()?;
     if !references_are_usable(root) {
@@ -441,7 +459,7 @@ mod tests {
             },
             "required": ["name", "ghost"],
             "propertyOrdering": ["name", "age"],
-            "additionalProperties": {"type": "string"}
+            "additionalProperties": true
         });
         assert_eq!(
             fit_output_schema(&schema).unwrap(),
@@ -518,9 +536,42 @@ mod tests {
             json!({"type": "object", "properties": {"e": {"enum": [{"a": 1}]}}}),
             json!({"type": "array", "items": [{"type": "string"}, {"type": "number"}]}),
             json!({"type": "object", "properties": {"any": true}}),
+            // Maps and objects without properties: closed, they could only
+            // ever be `{}`.
+            json!({"type": "object", "properties": {"scores": {
+                "type": "object", "additionalProperties": {"type": "integer"}
+            }}, "required": ["scores"]}),
+            json!({"type": "object", "properties": {"id": {"type": "string"}},
+                   "additionalProperties": {"type": "integer"}}),
+            json!({"type": "object", "properties": {"m": {
+                "type": "object", "patternProperties": {"^x": {"type": "string"}}
+            }}}),
+            json!({"type": "object", "properties": {"meta": {"type": "object"}}}),
+            json!({"type": "object", "additionalProperties": true}),
+            json!({"type": "object", "properties": {}}),
+            json!({"type": "object"}),
         ] {
             assert_eq!(fit_output_schema(&schema), None, "{schema}");
         }
+    }
+
+    #[test]
+    fn open_objects_with_properties_and_empty_closed_objects_still_fit() {
+        let closed = json!({"type": "object", "additionalProperties": false});
+        assert_eq!(fit_output_schema(&closed).unwrap(), closed);
+        assert_eq!(
+            fit_output_schema(&json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}},
+                "additionalProperties": {}
+            }))
+            .unwrap(),
+            json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}},
+                "additionalProperties": false
+            })
+        );
     }
 
     #[test]

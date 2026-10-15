@@ -39,7 +39,8 @@ pub struct CredentialView {
     /// Effective outbound proxy setting in `config::parse_proxy` syntax:
     /// the credential's own, else the provider's, else `upstream.proxy`.
     pub proxy: String,
-    /// Extra headers for every upstream request (provider `headers`).
+    /// Extra headers for every upstream request (provider `headers`), with
+    /// secret references resolved.
     pub headers: IndexMap<String, String>,
     /// `vertex` only: Google Cloud project id (may be empty).
     pub project: String,

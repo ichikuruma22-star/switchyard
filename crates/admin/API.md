@@ -114,7 +114,7 @@ a key on the broken line is not repeated.
 |---|---|
 | `400` | The request is malformed: not JSON, a missing or unknown field, a wrong type, a field that may not be changed here; or a query parameter given twice or with a value the route refuses (see [Conventions](#conventions)). `issues` names the field — or the query parameter — when one can be named. |
 | `401` | No secret, a wrong secret, or (on `/ws`) a missing, used, expired or revoked ticket. Carries `WWW-Authenticate: Bearer`. |
-| `403` | The peer is remote and remote access is off. |
+| `403` | The peer is remote and remote access is off, or a direct loopback request names a host that is not one of the machine's own in its `Host`, HTTP/2 authority or `Origin` (see [Access](#access)). |
 | `404` | No such route, provider, credential, key or request — or the admin interface is off (see [Access](#access)). |
 | `405` | The route exists but not with this method. |
 | `409` | A name or key that already exists: `issues` names the field (`name`, `key`). Or the configuration file on disk is not valid and the edit would overwrite it (see [Configuration edits](#configuration-edits)): `issues` are then the file's. (Also, without `issues`: a credential that another edit changed while it was being switched on or off.) |
@@ -259,6 +259,19 @@ In this order, for every route under `/admin/api`:
    headers (nginx: `proxy_set_header X-Forwarded-For
    $proxy_add_x_forwarded_for;`): a proxy on this machine that adds none
    makes every client it relays look local.
+
+   A direct loopback request (one without these proxy headers) must also be
+   addressed to the machine by one of its own names: the `Host` header (only
+   one), the authority of an HTTP/2 request target and every `Origin` must
+   name `localhost`, a loopback address, `server.host` or the address the
+   listener is bound to (any IP address when the listener or `server.host`
+   is a wildcard such as `0.0.0.0`). Otherwise the answer is `403` "the
+   admin API answers only to localhost, a loopback address or server.host",
+   given before the lockout table is consulted: a web page that points its
+   own name at 127.0.0.1 (DNS rebinding) cannot lock out the operator who
+   signs in on the machine. A request that carries no `Host`, authority or
+   `Origin` is not a browser's and is let through. To reach a loopback
+   gateway through a hosts-file alias, set `server.host` to that name.
 3. **Lockout.** Five wrong secrets in a row from one address (IPv6: one /64)
    lock that address out for 30 minutes: the fifth and everything after it
    gets `429` with `Retry-After`, the right secret included. A successful
@@ -1561,7 +1574,7 @@ A credential entry:
 | `latency_ms` | Moving average of the response latency, `null` before the first success. |
 | `last_used_at` | Unix ms of the last attempt, or `null`. |
 | `last_error` | `{status, class, message, at, model}` of the latest upstream failure, or `null`. `status` is `0` when no response arrived. |
-| `usable`, `unusable_reason` | `false` with a reason when the credential cannot be used as it is: its variable is not set, it has no key, or its `service_account_file` is missing, unreadable or not a usable key file (the reason names the file and the problem, never what the file holds). Such a credential is never picked and is listed in `warnings` of `GET /status`. The file is looked at when a configuration is applied (`POST /reload` is enough) and before a provider test or a model listing on request, so repairing it and pressing "Test" brings the credential back — and so does taking the `service_account_file` out of a credential that also has an `api_key`: it is `ready` again as soon as the edit is applied. |
+| `usable`, `unusable_reason` | `false` with a reason when the credential cannot be used as it is: its variable is not set, a provider `headers` value refers to a variable that is not set (``header `X-Name`: environment variable NAME is not set`` — every credential of the provider, since header references are resolved like keys and nothing is sent with the reference text), it has no key, or its `service_account_file` is missing, unreadable or not a usable key file (the reason names the file and the problem, never what the file holds). Such a credential is never picked and is listed in `warnings` of `GET /status`. The file is looked at when a configuration is applied (`POST /reload` is enough) and before a provider test or a model listing on request, so repairing it and pressing "Test" brings the credential back — and so does taking the `service_account_file` out of a credential that also has an `api_key`: it is `ready` again as soon as the edit is applied. |
 
 The same view of a provider whose only credential is implicit and has seen a
 failure:
@@ -3128,7 +3141,8 @@ issue at `[i].name`, `[i].targets` or `[i].targets[j]`:
 A target that matches no model, or carries a suffix the gateway does not
 know, is *not* refused — the model may appear later: it shows as a warning
 in `GET /status`, and an alias none of whose targets is routable is
-`ignored` in `GET /models`.
+`ignored` in `GET /models`. An ignored alias's name then stands for the
+model of that name, also where another alias names it as a target.
 
 ```http
 PUT /admin/api/aliases
@@ -4404,7 +4418,10 @@ A request record:
 
 The record — from memory, else from the usage files — and its captured
 bodies, or `"bodies": null` when none were captured. Bodies are text,
-truncated to `logging.request_log_max_body_kb` and redacted by the gateway;
+truncated to `logging.request_log_max_body_kb` and redacted by the gateway
+(a body over that limit is cut earlier by as much as redaction shortened
+it, so nothing captured past the limit, where the start of a secret cut off
+by the capture may lie, is stored);
 they describe the last attempt. `client_headers` and `upstream_headers` are
 redacted header maps (empty when the pipeline was given none). `404` unknown
 id — and for a request still in flight. (Bodies are cut to 400 characters
@@ -4867,7 +4884,9 @@ The loopback rule applies as everywhere. Before the upgrade:
 * `401` — the ticket is missing, unknown, expired, already used, or was
   issued under a different admin secret (each
   connection needs a fresh one);
-* `403` — remote peer while remote access is off;
+* `403` — remote peer while remote access is off, or a direct loopback
+  request whose `Host`, HTTP/2 authority or `Origin` names a host that is
+  not the machine's own (the ticket is not consumed);
 * `404` — admin interface off;
 * `400` — a repeated parameter or malformed query encoding (the ticket is
   not consumed); or a good ticket on a request that is not a WebSocket

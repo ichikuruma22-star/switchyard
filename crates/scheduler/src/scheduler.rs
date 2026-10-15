@@ -536,8 +536,9 @@ impl Scheduler {
     ///
     /// The rate-limit streak grows by one per cooldown window, not per
     /// failure: requests that were already in flight when the window opened
-    /// do not escalate it. Any success on the model resets it. A running
-    /// cooldown is never shortened by a later failure. With
+    /// do not escalate it, nor does a rate limit that arrives while the
+    /// model rests for another reason. Any success on the model resets it.
+    /// A running cooldown is never shortened by a later failure. With
     /// `routing.cooldown.enabled = false` nothing rests: only the counters,
     /// `last_error` and the record of what failed (which [`Scheduler::pick`]
     /// reads for the tried list and for `least-latency`) are updated.
@@ -1155,7 +1156,7 @@ fn select<'c, 'a>(
         ready.iter().filter(|c| c.entry.priority == top).collect();
     tier.sort_by_key(|c| c.entry.order);
     let first = *tier.first()?;
-    let key: RotationKey = (first.target.client_model.to_lowercase(), top);
+    let key: RotationKey = (rotation_scope(first.target), top);
 
     match strategy {
         Strategy::FillFirst => Some(first),
@@ -1197,6 +1198,21 @@ fn select<'c, 'a>(
             rotate(rotation, key, &pool, registry)
         }
     }
+}
+
+/// What one rotation cursor covers: the target's model in the registry's
+/// own spelling, and the providers left to serve it. Names that differ only
+/// in case are separate models with credentials of their own, and a
+/// resolution narrowed to some providers ([`Resolved::retain_routes`])
+/// rotates over fewer credentials; sharing a cursor with either would keep
+/// restarting the other's rotation and starve its later credentials.
+fn rotation_scope(target: &ResolvedTarget) -> String {
+    let mut scope = target.client_model.clone();
+    for route in &target.routes {
+        scope.push('\u{0}');
+        scope.push_str(&route.provider);
+    }
+    scope
 }
 
 /// Round-robin over `pool` (sorted by config order).

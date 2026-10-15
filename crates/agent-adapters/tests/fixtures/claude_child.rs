@@ -53,6 +53,26 @@ fn main() {
             send(&format!(r#"{{"type":"system","subtype":"init","cwd":{actual_cwd},"session_id":{actual_session},"model":"fixture-model","permissionMode":"default","apiKeySource":"private-account-do-not-display"}}"#));
             if scenario == "malformed" { send("not-json"); continue; }
             if scenario == "oversized" { send(&"x".repeat(256 * 1024 + 1)); continue; }
+            if scenario == "thinking" {
+                // Like Claude Code: each finished block is its own assistant message,
+                // so the text block is first in its message but second in the stream.
+                let stream = |event: &str| send(&format!(r#"{{"type":"stream_event","session_id":{session},"event":{event}}}"#));
+                let assistant = |block: &str| send(&format!(r#"{{"type":"assistant","session_id":{session},"message":{{"id":"msg-fixture","content":[{block}]}}}}"#));
+                stream(r#"{"type":"message_start","message":{"id":"msg-fixture"}}"#);
+                stream(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#);
+                stream(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Fixture thought"}}"#);
+                stream(r#"{"type":"content_block_stop","index":0}"#);
+                assistant(r#"{"type":"thinking","thinking":"Fixture thought","signature":"fixture"}"#);
+                stream(r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#);
+                stream(r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Fixture "}}"#);
+                stream(r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"text"}}"#);
+                stream(r#"{"type":"content_block_stop","index":1}"#);
+                assistant(r#"{"type":"text","text":"Fixture text"}"#);
+                stream(r#"{"type":"message_stop"}"#);
+                result(&session, false);
+                idle(&session);
+                continue;
+            }
             send(&format!(r#"{{"type":"stream_event","session_id":{session},"event":{{"type":"message_start","message":{{"id":"msg-fixture"}}}}}}"#));
             send(&format!(r#"{{"type":"stream_event","session_id":{session},"event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"Fixture text"}}}}}}"#));
             if scenario == "streaming" { std::thread::sleep(std::time::Duration::from_millis(500)); }

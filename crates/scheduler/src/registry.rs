@@ -64,12 +64,7 @@ impl CredentialTable {
         let mut seen_ids: HashMap<String, usize> = HashMap::new();
         for (provider_index, provider) in config.providers.iter().enumerate() {
             let base_url = provider.effective_base_url();
-            let headers: IndexMap<String, String> = provider
-                .headers
-                .iter()
-                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-                .filter(|(k, v)| !k.is_empty() && !v.is_empty())
-                .collect();
+            let (headers, header_unusable) = resolved_headers(provider, resolve);
             let mut indexes = Vec::new();
             for (position, cred) in provider.all_credentials().iter().enumerate() {
                 let raw_key = cred.api_key.trim();
@@ -111,6 +106,9 @@ impl CredentialTable {
                     }
                     masked_key = String::new();
                     material = String::new();
+                }
+                if unusable.is_none() {
+                    unusable = header_unusable.clone();
                 }
 
                 let hash = credential_hash(&provider.name, provider.kind, &material, &base_url);
@@ -183,6 +181,41 @@ impl CredentialTable {
         }
         table
     }
+}
+
+/// A provider's extra headers with their secret references resolved, and why
+/// the provider's credentials are unusable when one cannot be: sent as
+/// written, the reference would only be refused upstream.
+fn resolved_headers(
+    provider: &ProviderConfig,
+    resolve: SecretResolver<'_>,
+) -> (IndexMap<String, String>, Option<String>) {
+    let mut headers = IndexMap::new();
+    let mut unusable = None;
+    for (name, value) in &provider.headers {
+        let (name, value) = (name.trim(), value.trim());
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        if !is_secret_reference(value) {
+            headers.insert(name.to_string(), value.to_string());
+            continue;
+        }
+        match resolve(value) {
+            Ok(resolved) if !resolved.trim().is_empty() => {
+                headers.insert(name.to_string(), resolved.trim().to_string());
+            }
+            Ok(_) => {
+                unusable.get_or_insert_with(|| format!("header `{name}` is empty"));
+            }
+            Err(variable) => {
+                unusable.get_or_insert_with(|| {
+                    format!("header `{name}`: environment variable {variable} is not set")
+                });
+            }
+        }
+    }
+    (headers, unusable)
 }
 
 /// What to show for a secret that could not be resolved: references are safe
@@ -827,10 +860,29 @@ impl AliasExpander<'_> {
                         ));
                         continue;
                     }
+                    let mut nested = Vec::new();
                     stack.push(next);
-                    self.expand(next, stack, pinned, Some(origin), out);
+                    self.expand(next, stack, pinned, Some(origin), &mut nested);
                     stack.pop();
-                    direct.push(Found::Alias(next));
+                    // An alias without a routable target is ignored, and its
+                    // name then stands for the real model of that name, as
+                    // it does for clients.
+                    let instead = nested
+                        .is_empty()
+                        .then(|| self.table.find(parsed.base))
+                        .flatten();
+                    match instead {
+                        Some(model) => {
+                            push(model, pinned);
+                            direct.push(Found::Model(model));
+                        }
+                        None => {
+                            for target in nested {
+                                push(target.model, target.pinned);
+                            }
+                            direct.push(Found::Alias(next));
+                        }
+                    }
                 }
                 Some(Found::Model(model)) => {
                     push(model, pinned);

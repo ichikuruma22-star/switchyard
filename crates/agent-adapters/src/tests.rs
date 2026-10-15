@@ -1096,3 +1096,76 @@ async fn antigravity_plan_run_streams_text_and_tools_to_completion() {
     }));
     manager.shutdown().await;
 }
+
+fn antigravity_request(project: &std::path::Path, continue_run_id: Option<&str>) -> StartRequest {
+    StartRequest {
+        adapter_id: "antigravity".into(),
+        project_path: project.to_path_buf(),
+        prompt: "Inspect the fixture.".into(),
+        command_id: uuid::Uuid::new_v4().to_string(),
+        continue_run_id: continue_run_id.map(Into::into),
+        profile: None,
+    }
+}
+
+fn launch_antigravity(
+    manager: &AdapterManager,
+    request: &StartRequest,
+    scenario: Option<&str>,
+) -> Result<AdapterRun> {
+    manager.start_process(
+        request.clone(),
+        request.project_path.clone(),
+        antigravity_fixture(),
+        scenario.into_iter().map(Into::into).collect(),
+    )
+}
+
+#[tokio::test]
+async fn antigravity_conversation_continues_after_restart_in_the_saved_conversation() {
+    let data = tempfile::tempdir().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().canonicalize().unwrap();
+    let manager = AdapterManager::open(data.path()).unwrap();
+    let first = launch_antigravity(&manager, &antigravity_request(&project, None), None).unwrap();
+    let first = finished(&manager, &first.id).await;
+    assert_eq!(first.state, RunState::Completed);
+    assert!(first.turn_id.is_some());
+    let args = std::fs::read_to_string(project.join("received-args.txt")).unwrap();
+    assert!(!args.contains("--conversation"));
+    manager.shutdown().await;
+    drop(manager);
+
+    let manager = AdapterManager::open(data.path()).unwrap();
+    assert_eq!(manager.run(&first.id).unwrap().turn_id, first.turn_id);
+    let second = launch_antigravity(
+        &manager,
+        &antigravity_request(&project, Some(&first.id)),
+        None,
+    )
+    .unwrap();
+    let second = finished(&manager, &second.id).await;
+    assert_eq!(second.state, RunState::Completed);
+    assert_eq!(second.conversation_id, first.conversation_id);
+    assert_eq!(second.thread_id, first.thread_id);
+    let args = std::fs::read_to_string(project.join("received-args.txt")).unwrap();
+    assert!(args.contains("--conversation\n123e4567-e89b-12d3-a456-426614174000"));
+    assert!(
+        all_events(&manager, &second.id)
+            .iter()
+            .any(|e| e.kind == "user_task" && e.payload["continued"] == true)
+    );
+
+    // A resume that agy moves to another conversation is not recorded as this one.
+    let forked = launch_antigravity(
+        &manager,
+        &antigravity_request(&project, Some(&second.id)),
+        Some("forked"),
+    )
+    .unwrap();
+    let forked = finished(&manager, &forked.id).await;
+    assert_eq!(forked.state, RunState::RecoveryRequired);
+    assert!(forked.thread_id.is_none());
+    assert!(forked.turn_id.is_none());
+    manager.shutdown().await;
+}

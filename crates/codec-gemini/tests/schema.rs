@@ -807,6 +807,86 @@ fn union_on_an_object_with_properties_merges_branch_properties() {
     );
 }
 
+/// A discriminated union (pydantic `Union[Click, Type]`, zod
+/// `discriminatedUnion`): every branch is an object. Standing in for the
+/// union, the first branch alone told the model that `kind` can only be
+/// `click` and hid `text`, so the `type` action could never be produced.
+#[test]
+fn union_of_object_variants_keeps_every_variant() {
+    let schema = json!({
+        "type": "object",
+        "properties": {"action": {"oneOf": [
+            {
+                "type": "object",
+                "properties": {"kind": {"const": "click"}, "x": {"type": "integer"}, "y": {"type": "integer"}},
+                "required": ["kind", "x", "y"]
+            },
+            {
+                "type": "object",
+                "properties": {"kind": {"const": "type"}, "text": {"type": "string"}},
+                "required": ["kind", "text"]
+            }
+        ]}}
+    });
+    let merged = json!({
+        "type": "object",
+        "properties": {
+            "kind": {"enum": ["click", "type"], "type": "string", "description": "Allowed: click, type"},
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+            "text": {"type": "string"}
+        },
+        // Only what every variant requires.
+        "required": ["kind"]
+    });
+    assert_eq!(
+        clean(schema.clone()),
+        json!({"type": "object", "properties": {"action": merged}})
+    );
+    assert_eq!(clean_legacy(schema)["properties"]["action"], merged);
+
+    // The same union written with references, next to a `null` branch and
+    // a branch of another type.
+    let schema = json!({
+        "$defs": {
+            "Click": {
+                "type": "object",
+                "properties": {"kind": {"const": "click"}, "x": {"type": "integer"}},
+                "required": ["kind", "x"]
+            },
+            "Type": {
+                "type": "object",
+                "properties": {"kind": {"const": "type"}, "text": {"type": "string"}},
+                "required": ["kind", "text"]
+            }
+        },
+        "type": "object",
+        "properties": {"action": {"anyOf": [
+            {"type": "string"},
+            {"$ref": "#/$defs/Click"},
+            {"$ref": "#/$defs/Type"},
+            {"type": "null"}
+        ]}},
+        "required": ["action"]
+    });
+    assert_eq!(
+        clean(schema),
+        json!({
+            "type": "object",
+            "properties": {"action": {
+                "type": "object",
+                "properties": {
+                    "kind": {"enum": ["click", "type"], "type": "string", "description": "Allowed: click, type"},
+                    "x": {"type": "integer"},
+                    "text": {"type": "string"}
+                },
+                "required": ["kind"],
+                "description": "Accepts: string | object (nullable)"
+            }}
+        })
+    );
+}
+
 #[test]
 fn union_of_required_groups_collapses_cleanly() {
     let schema = json!({

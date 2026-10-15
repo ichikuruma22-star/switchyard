@@ -21,7 +21,10 @@ To keep another sign-in in an isolated managed profile:
    profiles do not inspect existing CLI sign-ins.
 3. Once the profile is confirmed signed out, choose **Sign in** and complete
    the official provider flow. **Continue in browser** opens the recorded
-   official login URL. The app also shows that URL for manual use.
+   official login URL. The app also shows that URL for manual use. Only URLs
+   on the providers' exact official sign-in hosts are recorded; if a Claude
+   Console or SSO flow uses another host, no link appears and you complete
+   sign-in in the official Claude Code browser flow.
 4. Select **Use as default** for future runs, or choose a profile in the
    existing-agent run form. Running tasks retain their original account.
 
@@ -32,7 +35,17 @@ which suits machines where opening a browser is awkward. Claude profiles can
 use **Claude subscription** (`--claudeai`, the default), **Anthropic Console**
 (`--console`, API usage billing) or **Single sign-on (SSO)** (`--sso`). Choose
 the method next to **Sign in** in Accounts, or from the CLI:
-`switchya agent login --profile PROFILE_ID [--method device]`.
+`switchya agent login --profile PROFILE_ID [--method device]`. The CLI checks
+the profile's status first, so it works without the app open, and starts a
+sign-in only for a signed-out profile; an already signed-in profile is
+reported instead. It exits with an error unless the sign-in completes.
+Without `--launch-info`, the sign-in runs in the command's temporary host and
+Ctrl-C cancels it; with the app started with `--write-launch-info`, put
+`--launch-info PATH` before `agent` and the sign-in continues in the app after
+Ctrl-C (see
+[Use the CLI while the app stays open](SWITCHYA.md#use-the-cli-while-the-app-stays-open)
+and [the terminal guide](SWITCHYA.md#continue-an-agent-conversation-from-the-terminal)).
+Either way, a sign-in that is not completed within ten minutes times out.
 `switchya agent use --profile PROFILE_ID` makes a profile the default from
 the terminal. API keys remain a gateway/provider concern; none of these
 methods asks for one.
@@ -70,14 +83,15 @@ The **Existing Codex CLI** (`system-codex`), **Existing Claude CLI**
 (`system-claude`) and **Existing Antigravity CLI** (`system-antigravity`)
 entries use the installed CLIs' environment and configuration
 as inherited by the Switchya host, including an existing `CLAUDE_CONFIG_DIR`.
-Account management treats both as read-only for sign-in: they can be selected
+Account management treats all three as read-only for sign-in: they can be selected
 and explicitly inspected, but Switchya cannot start a replacement login for
 them. They may be used without first requesting account inspection. Manage
 their sign-ins through the official CLIs.
 
-Managed profiles require a successful signed-in status check before starting
-work. A status check is a snapshot, not a guarantee that the next request will
-succeed. After restarting the host, refresh managed profiles again.
+Managed Codex and Claude Code profiles require a successful signed-in status
+check before starting work. A status check is a snapshot, not a guarantee that
+the next request will succeed. After restarting the host, refresh managed
+profiles again.
 
 ## Concurrent work and switching
 
@@ -86,7 +100,7 @@ profiles. Each accepted run pins its account identity and private CLI home.
 Changing the selected default affects later runs only. Retrying the same
 command keeps the original binding, including after a default change; changing
 that command's profile, agent or request content returns a conflict.
-Continuation after a restart keeps the original profile, including either
+Continuation after a restart keeps the original profile, including a
 built-in CLI profile. For an existing CLI profile, keep that CLI's account and
 configuration consistent when continuing: Switchya saves the profile binding,
 not a snapshot of credentials or global settings.
@@ -164,7 +178,7 @@ parameters cannot select an arbitrary credential directory.
 | Method | Route | Body or effect |
 | --- | --- | --- |
 | GET | `/api/account-profiles` | Cached profiles and selected defaults |
-| POST | `/api/account-profiles` | `{ "agent_id": "codex", "name": "Work" }`; `claude` also supported |
+| POST | `/api/account-profiles` | `{ "agent_id": "codex", "name": "Work" }`; `claude` and `antigravity` also supported |
 | POST | `/api/account-profiles/{id}/refresh` | `{}`; queues a status check, returns 202 |
 | POST | `/api/account-profiles/{id}/login` | `{}` or `{ "method": "device" }`; queues sign-in, returns 202 |
 | GET | `/api/account-profiles/{id}/login` | Cached login state; does not start a process |
@@ -172,7 +186,7 @@ parameters cannot select an arbitrary credential directory.
 | POST | `/api/account-profiles/{id}/login/open` | `{}`; opens its recorded official login URL |
 | POST | `/api/account-profiles/{id}/select` | `{}`; saves the default for that agent |
 | POST | `/api/account-profiles/{id}/remove` | `{}`; removes a managed profile, deletes its private CLI home and returns the updated defaults |
-| POST | `/api/account-profiles/{id}/terminal` | `{ "project_id": "opened-project-id" }`; managed Claude only |
+| POST | `/api/account-profiles/{id}/terminal` | `{ "project_id": "opened-project-id" }`; managed Claude (signed in) and managed Antigravity profiles only |
 
 At most 32 managed profiles are supported. Names contain 1–64 characters after
 trimming, cannot contain control characters, and must be unique per agent
@@ -184,8 +198,10 @@ poll the cached login state. Host shutdown cancels owned account work.
 
 The account manager and scoped CLI environment support Windows, macOS and
 Linux. Browser continuation uses the platform browser launcher. External
-Claude terminals require a supported installed terminal and native CLI;
-headless systems may need the displayed login URL opened manually elsewhere.
+terminals for managed Claude Code and Antigravity profiles (**Open Claude
+Code**, **Open Antigravity**) open on Windows, macOS and Linux and require a
+supported installed terminal and native CLI; headless systems may need the
+displayed login URL opened manually elsewhere.
 
 Automated checks use controlled CLI fixtures and local metadata. They cover
 isolation, usage parsing, login state, cancellation, request retries and

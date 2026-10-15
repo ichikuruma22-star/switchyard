@@ -8,12 +8,12 @@
 // writes back as it was read: the parsed document can be shown, edited and
 // sent like any other, and api.put needs no special case.
 //
-// The shared client (lib/api.js) parses every answer, so the document is read
-// here, as text. Where the browser has no JSON.rawJSON (before Chrome 114,
+// The shared client (lib/api.js) reads the document and hands its text to
+// parseExact here. Where the browser has no JSON.rawJSON (before Chrome 114,
 // Firefox 135, Safari 18.4) numbers are parsed the plain way and
 // `inexactNumbers` says which of them would be rewritten.
 
-import { API_BASE, api, getToken } from '../../lib/api.js';
+import { api } from '../../lib/api.js';
 
 function hasSourceAccess() {
   let seen = false;
@@ -90,64 +90,24 @@ const lossOf = new WeakMap();
 /** The numbers a document from getExact() cannot send back unchanged ([] when it can). */
 export const lossIn = (data) => (data && typeof data === 'object' ? (lossOf.get(data) ?? []) : []);
 
-/** The Authorization value lib/api.js sends: non-ASCII secrets go out as their UTF-8 bytes. */
-function bearer(secret) {
-  const text = String(secret);
-  if (!/[^\u0000-\u007f]/.test(text)) return `Bearer ${text}`;
-  let bytes = '';
-  for (const byte of new TextEncoder().encode(text)) bytes += String.fromCharCode(byte);
-  return `Bearer ${bytes}`;
-}
-
-const TIMEOUT_MS = 30_000;
-
-async function readText(path, signal) {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  if (signal?.aborted) abort();
-  signal?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(abort, TIMEOUT_MS);
-  try {
-    const token = getToken();
-    const res = await fetch(`${API_BASE}${path}`, {
-      headers: { accept: 'application/json', ...(token ? { authorization: bearer(token) } : {}) },
-      cache: 'no-store',
-      credentials: 'same-origin',
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', abort);
-  }
-}
-
 /**
  * GET an admin API document with its numbers kept exact (see parseExact).
  *
- * Whatever goes wrong with the read (an error status, a 401, no connection,
- * a timeout, an abort) is handed to the shared client by asking again
- * through it: it words the error as everywhere else in the dashboard and
- * ends the session on a 401. Should that second read succeed, its plainly
- * parsed answer is used.
+ * The read goes through the shared client, which words errors as everywhere
+ * else in the dashboard and ends the session on a 401; only the parsing is
+ * done here. A failed read is an error, never a plainly parsed answer: that
+ * one would carry rounded numbers without a word in lossIn, and saving it
+ * would write them back.
  */
 export async function getExact(path, signal) {
-  let text;
-  try {
-    text = await readText(path, signal);
-  } catch {
-    return api.get(path, { signal });
-  }
-  let data;
-  try {
-    data = parseExact(text);
-  } catch {
-    return api.get(path, { signal });
-  }
-  if (!exact && data && typeof data === 'object') {
-    const lost = inexactNumbers(text);
-    if (lost.length > 0) lossOf.set(data, lost);
-  }
+  let lost = [];
+  const data = await api.get(path, {
+    signal,
+    parse(text) {
+      if (!exact) lost = inexactNumbers(text);
+      return parseExact(text);
+    },
+  });
+  if (lost.length > 0 && data && typeof data === 'object') lossOf.set(data, lost);
   return data;
 }

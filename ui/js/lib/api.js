@@ -326,6 +326,10 @@ async function send(method, path, { body, query, signal, timeout = DEFAULT_TIMEO
   throw error;
 }
 
+/**
+ * `options.parse` turns the body text into the answer (JSON.parse when not
+ * given); whatever it throws reads as a body that is not JSON.
+ */
 async function request(method, path, options) {
   const { res, link, timeout } = await send(method, path, options);
   let text;
@@ -339,7 +343,7 @@ async function request(method, path, options) {
   }
   if (!text) return null;
   try {
-    return JSON.parse(text);
+    return (options?.parse ?? JSON.parse)(text);
   } catch {
     throw new ApiError(res.status, 'The gateway sent a response that is not valid JSON.', { body: text.slice(0, 2000) });
   }

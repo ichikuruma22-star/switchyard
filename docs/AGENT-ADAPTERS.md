@@ -2,7 +2,7 @@
 
 Switchya's own durable engine and existing agent CLIs are separate execution backends. `switchyard-agent-adapters` implements a real Codex app-server integration over newline-delimited structured JSON on stdio. It creates a Codex thread, or resumes a saved one when the user explicitly continues a conversation, starts one user turn, streams its structured progress, hands supported approval requests to the human, and interrupts or stops its owned process tree. The caller must explicitly start a run. Discovery, reading a run, event polling and reconnecting never start or replay work.
 
-Claude Code is also a structured adapter, using its bidirectional `stream-json` CLI. It streams replies and tool activity, forwards permission requests, and resumes saved sessions in the selected existing CLI or managed Claude account. The optional **Open Claude Code** action still launches an independent terminal. Oh My Pi is discovery-only. The Claude workspace integration is newer than the published `preview.2` archive.
+Claude Code is also a structured adapter, using its bidirectional `stream-json` CLI. It streams replies and tool activity, forwards permission requests, and resumes saved sessions in the selected existing CLI or managed Claude account. The optional **Open Claude Code** action still launches an independent terminal. Oh My Pi is discovery-only. The Claude workspace integration is included since `preview.3`; the `preview.2` archive does not have it.
 
 ## Protocol evidence
 
@@ -49,7 +49,9 @@ The `switchya agent` CLI uses these same authenticated host routes for listing
 and showing runs, starting or continuing a conversation, reviewing recovery,
 and interrupting work. `--launch-info` attaches it to an existing app host;
 otherwise it starts and shuts down an owned host with the same durable stores.
-`agent run --agent claude` selects Claude Code; the default remains Codex.
+`agent run --agent claude` selects Claude Code and `--agent antigravity`
+Antigravity; the default remains Codex. As in the host, managed Antigravity
+profiles are not gated on a status check.
 `agent continue` retains the stored agent, account and project.
 See [terminal examples](SWITCHYA.md#continue-an-agent-conversation-from-the-terminal).
 An uncertain start is reported with its command UUID and is never automatically
@@ -107,8 +109,12 @@ answer, but plan mode cannot apply edits, so this adapter receives no
 approval requests and `Decide` calls are rejected. Streamed `step_update`
 events become assistant deltas, completed messages and tool items; the
 `init` event's conversation ID is saved as the thread and `--conversation`
-resumes it. Interruption terminates the process tree and marks the run
-interrupted; an exit without a `result` event is `recovery_required`.
+resumes it. A successful `result` records the confirmed turn, which a later
+continuation requires. If a resumed run's `init` or `result` reports a
+different conversation ID, the run stops as `recovery_required` instead of
+silently continuing in a new thread. Interruption terminates the process
+tree and marks the run interrupted; an exit without a `result` event is
+`recovery_required`.
 Prompts travel as a command-line argument, so a single message is limited
 to 24,000 bytes. A managed profile redirects the child's `HOME` and
 `USERPROFILE` to its private directory, scoping the CLI's
@@ -136,7 +142,7 @@ Windows processes start suspended, join a kill-on-close Job Object, then resume.
 
 ## Saved conversations
 
-The app host saves runs, their bounded event windows and each run's trusted profile binding in `adapter-runs.sqlite3` inside its data directory. The file is created private to the user on Unix, and SQLite's exclusive locking keeps a second host from opening it. If saving fails, the run is not started. Streamed assistant fragments are replaced by the completed message once Codex reports it. Codex keeps the model-side thread in the selected profile's own Codex home; Switchya stores only the thread ID, never Codex's internal databases or tokens. A durable host sends `ephemeral=false`; an in-memory manager sends `ephemeral=true`. The external CLI may also maintain its own diagnostics, cache and integration state.
+The app host saves runs, their bounded event windows and each run's trusted profile binding in `adapter-runs.sqlite3` inside its data directory. The file is created private to the user on Unix, and SQLite's exclusive locking keeps a second host from opening it. If saving fails, the run is not started. Streamed assistant fragments are replaced by the completed message once the CLI reports it; a completed Claude Code text block is matched to its fragments by the block's streamed index, which differs from its position in the completed message when a thinking block came first. Codex keeps the model-side thread in the selected profile's own Codex home; Switchya stores only the thread ID, never Codex's internal databases or tokens. A durable host sends `ephemeral=false`; an in-memory manager sends `ephemeral=true`. The external CLI may also maintain its own diagnostics, cache and integration state.
 
 When the host starts, a run left active by a previous host is never resumed. If its input might have been sent, the run becomes `recovery_required`; otherwise it becomes `failed`. Both receive an `adapter_error` event stating that nothing was replayed. Claude's chosen session ID is saved before writing the prompt so a crash during delivery is treated as uncertain.
 
@@ -167,7 +173,7 @@ CI and has no production authentication bypass.
 
 ### Account profiles
 
-`AccountRuntime` provides explicit `inspect`, `start_login`, `login`, `cancel_login`, and `shutdown` operations. Status snapshots expose only typed sign-in, email, plan and usage fields, plus observation time. Raw protocol objects, tokens and stderr never reach the API. A managed Codex child gets its own `CODEX_HOME` and `cli_auth_credentials_store="file"`; a managed Claude child gets its own `CLAUDE_CONFIG_DIR`. Credential/provider/internal routing environment overrides are cleared only in that child. The built-in `system-codex` and `system-claude` profiles preserve their existing environment/auth/configuration and cannot log in through this runtime. Only these exact unmanaged ID/agent pairs are accepted. Parent Codex internal routing variables are still removed from every child. Both built-ins remain pinned through saved conversation continuation; changing the default cannot move a conversation to another profile. No credential copying, global environment mutation, logout or removal is implemented.
+`AccountRuntime` provides explicit `inspect`, `start_login`, `login`, `cancel_login`, and `shutdown` operations. Status snapshots expose only typed sign-in, email, plan and usage fields, plus observation time. Raw protocol objects, tokens and stderr never reach the API. A managed Codex child gets its own `CODEX_HOME` and `cli_auth_credentials_store="file"`; a managed Claude child gets its own `CLAUDE_CONFIG_DIR`; a managed Antigravity child gets its own `HOME` and `USERPROFILE` (see [Antigravity](#antigravity)). Credential/provider/internal routing environment overrides are cleared only in that child. The built-in `system-codex`, `system-claude` and `system-antigravity` profiles preserve their existing environment/auth/configuration and cannot log in through this runtime. Only these exact unmanaged ID/agent pairs are accepted. Parent Codex internal routing variables are still removed from every child. The built-ins remain pinned through saved conversation continuation; changing the default cannot move a conversation to another profile. `AccountRuntime` performs no credential copying, global environment mutation, logout or removal. The app's account manager can remove a managed profile (`POST /api/account-profiles/{id}/remove` or `switchya agent remove --profile ID`): removal deletes the profile's private CLI home, including its stored sign-in, and cannot be undone. It is refused for built-ins and while the profile has an active run, refresh, sign-in or terminal launch. Logout and in-place credential replacement are not implemented.
 
 Codex initialize must confirm the canonical selected `codexHome` before account methods or model runs. Inspection uses `account/read` with `refreshToken=false`, then `account/rateLimits/read` with reset-credit details excluded. Named limit snapshots take precedence over the legacy snapshot. Missing limits and `ordinaryUsageAllowed=null` remain unavailable; usage percentages are used percentages, and remaining percentage is clamped `100 - used`. Account metadata is not proof that a token remains valid.
 
@@ -175,11 +181,11 @@ Claude inspection uses the official `auth status --json` command. Recognized `lo
 
 Claude's current official [credential-management documentation](https://code.claude.com/docs/en/authentication#credential-management) explicitly states that `CLAUDE_CONFIG_DIR` also scopes the macOS Keychain entry, in addition to relocating credential files and the macOS file fallback. This supports the profile design on macOS; actual macOS sign-in and simultaneous account operation have not been tested here.
 
-Sign-in requires a managed, confirmed signed-out profile; the worker rechecks the effective account before initiating it. This prevents a stale UI status from replacing existing credentials. Codex uses public `account/login/start` with `type=chatgpt` and matching completion/cancel messages. Claude uses `auth login --claudeai`; Console authentication is excluded because it does not provide the same profile-isolation guarantee. Browser-login jobs are serialized because Codex's documented callback uses localhost port 1455. Multiple completed profiles may remain signed in and be used concurrently. Jobs expose only recorded HTTPS URLs on exact official allowlisted hosts; the host opens a stored job URL only on an explicit action.
+Sign-in requires a managed, confirmed signed-out profile; the worker rechecks the effective account before initiating it. This prevents a stale UI status from replacing existing credentials. Codex uses public `account/login/start` with `type=chatgpt` (browser, the default) or `type=chatgptDeviceCode` (device code, which returns a `verificationUrl` and `userCode`), with matching completion/cancel messages. Claude uses `auth login --claudeai` (the default), `--console` (Anthropic Console) or `--sso`, always inside the profile's own `CLAUDE_CONFIG_DIR`. The live Windows sign-in above used `--claudeai`; Console and SSO profile isolation relies on the same `CLAUDE_CONFIG_DIR` scoping and has not been verified separately. Antigravity has no sign-in job; it signs in through the CLI's own terminal. Sign-in jobs are serialized, one at a time, because Codex's documented browser callback uses localhost port 1455. Multiple completed profiles may remain signed in and be used concurrently. Jobs expose only recorded HTTPS URLs on exact official allowlisted hosts (`auth.openai.com` and `chatgpt.com` for Codex, `claude.ai` for Claude); the host opens a stored job URL only on an explicit action. A Claude sign-in URL printed on any other host, as a Console or SSO flow may do, is not recorded, so that job offers no browser continuation link.
 
 At most four inspections/sign-ins run simultaneously. Inspection has a 7.5-second deadline plus bounded cleanup, sign-in a ten-minute deadline, account output a 256 KiB frame / 2 MiB per stream limit, and at most 64 retained login jobs. Owned account processes use the same Windows Job Object / Unix process-group cleanup as model adapters.
 
-`launch_profile_terminal` starts an interactive Claude Code terminal on an explicit user action, with the immutable selected profile and project. Such external sessions are user-owned and are not tracked or stopped by Switchya. A successful return means the terminal launch was requested, not that Claude authenticated or became ready. The account manager must prevent credential replacement while such sessions may exist; this version does so by refusing to log in an already signed-in profile.
+`launch_profile_terminal` starts an interactive Claude Code or Antigravity terminal for a managed profile on an explicit user action, with the immutable selected profile and project. Such external sessions are user-owned and are not tracked or stopped by Switchya. A successful return means the terminal launch was requested, not that the CLI authenticated or became ready. The account manager must prevent credential replacement while such sessions may exist; this version does so by refusing to log in an already signed-in profile.
 
 Official references: [Codex authentication and credential storage](https://developers.openai.com/codex/auth), [Codex profiles](https://developers.openai.com/codex/config-advanced#profiles), [Claude authentication](https://code.claude.com/docs/en/authentication), and [Claude status-line usage fields](https://code.claude.com/docs/en/statusline).
 

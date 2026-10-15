@@ -18,6 +18,14 @@ configuration. A process environment variable referenced by configuration can
 be sent to the configured provider; do not give the gateway unrelated host
 secrets.
 
+A request that reaches the admin API directly over loopback (not relayed by a
+reverse proxy on this machine) must be addressed to `localhost`, a loopback
+address, `server.host` or the listener's own address, in its `Host` (or HTTP/2 authority) and any `Origin`. Others get
+403 and are not counted as sign-in failures, so a web page that points its
+own host name at 127.0.0.1 (DNS rebinding) cannot lock the operator out with
+wrong secrets. If you reach a loopback gateway through a hosts-file alias,
+set `server.host` to that name.
+
 The dashboard keeps the admin secret in this tab's `sessionStorage`. Selecting
 **Remember on this device** also stores it in `localStorage`; this is off by
 default. These are bearer credentials accessible to scripts on the dashboard

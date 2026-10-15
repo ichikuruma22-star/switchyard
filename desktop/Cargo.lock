@@ -4142,7 +4142,7 @@ dependencies = [
 
 [[package]]
 name = "switchya-desktop"
-version = "0.1.0-preview.3"
+version = "0.1.0-preview.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -4155,7 +4155,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anstyle-query",
  "clap",
@@ -4181,7 +4181,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-admin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4212,7 +4212,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parking_lot",
  "rusqlite",
@@ -4230,7 +4230,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-agent-adapters"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "parking_lot",
@@ -4248,7 +4248,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-agent-tools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "rustix",
@@ -4264,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-app"
-version = "0.1.0-preview.3"
+version = "0.1.0-preview.4"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4299,7 +4299,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-codec-anthropic"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "serde_json",
@@ -4308,7 +4308,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-codec-chat"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4317,7 +4317,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-codec-gemini"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "serde_json",
@@ -4326,7 +4326,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-codec-responses"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4335,7 +4335,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-codecs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "switchyard-codec-anthropic",
@@ -4347,7 +4347,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-config-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "notify",
@@ -4364,7 +4364,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "indexmap 2.14.2",
@@ -4379,7 +4379,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-gateway"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
@@ -4408,7 +4408,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-scheduler"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "indexmap 2.14.2",
  "parking_lot",
@@ -4422,7 +4422,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "brotli",
@@ -4454,7 +4454,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-telemetry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "hdrhistogram",
@@ -4471,7 +4471,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-translate"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parking_lot",
  "serde",
@@ -4482,7 +4482,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-upstream"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-stream",
  "base64 0.22.1",

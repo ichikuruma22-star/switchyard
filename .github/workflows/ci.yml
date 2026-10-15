@@ -33,6 +33,10 @@ jobs:
         run: node ui/tests/check.mjs
       - name: Workspace UI checks
         run: node --test app-ui/tests/*.test.mjs
+      - name: Release packaging checks
+        run: node --test scripts/tests/*.test.mjs
+      - name: Website checks
+        run: node site/check.mjs
 
   test:
     name: Test (${{ matrix.os }})

@@ -200,7 +200,6 @@ fn explain(path: &str) -> &'static str {
             | "commercial-mode"
             | "nonstream-keepalive-interval"
             | "save-cooldown-status"
-            | "max-retry-credentials"
             | "session-affinity-subagents"
             | "error-logs-max-files"
             | "redis-usage-queue-retention-seconds"

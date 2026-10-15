@@ -20,6 +20,7 @@
 //! | 403 / 404 from Google about a File or CachedContent the request refers to | `Request` |
 //! | any other 403 | `Auth` |
 //! | 400 from Google with `API_KEY_INVALID` (Google answers bad keys with 400) | `Auth` |
+//! | 400 saying the vendor disabled, deactivated, suspended or restricted the organisation or account (`organization_restricted`, "This organization has been disabled.") | `Auth` |
 //! | 400 / 422 whose body says the model does not exist or is unsupported | `ModelNotFound` |
 //! | 404 | `ModelNotFound`, unless the body carries a request-fault code |
 //! | 400 from Anthropic for a spend limit or an empty credit balance | `Quota` |
@@ -127,6 +128,18 @@ const QUOTA_PHRASES: &[&str] = &[
     "billing hard limit",
     "reached your specified api usage limits",
     "reached your specified workspace api usage limits",
+];
+
+/// Body codes / types that mean "the vendor switched the account off".
+const ACCOUNT_CODES: &[&str] = &[
+    "organization_disabled",
+    "organization_deactivated",
+    "organization_suspended",
+    "organization_restricted",
+    "account_disabled",
+    "account_deactivated",
+    "account_suspended",
+    "account_restricted",
 ];
 
 /// Which vendor's error envelope a body is written in.
@@ -836,6 +849,36 @@ fn is_bad_key_body(parsed: &Parsed) -> bool {
         || parsed.says("api key was reported as leaked")
 }
 
+/// The vendor has switched off the organisation or account behind the
+/// credential. Anthropic ("This organization has been disabled.") and Groq
+/// (`organization_restricted`) say so with a 400 `invalid_request_error`,
+/// yet no request can succeed on that credential while another one can
+/// serve the very same call.
+///
+/// A code is the vendor's own word. A wording counts only when the message
+/// opens with it: a 400 may quote what the client wrote ("Tool choice '…'
+/// not found"), and a client must not be able to word a request so that
+/// the credential is rested.
+fn is_account_disabled(parsed: &Parsed) -> bool {
+    if parsed.has_code(ACCOUNT_CODES) {
+        return true;
+    }
+    let message = parsed.message_lower.trim_start();
+    let message = ["this ", "your "]
+        .iter()
+        .find_map(|det| message.strip_prefix(det))
+        .unwrap_or(message);
+    ["organization ", "organisation ", "account "]
+        .iter()
+        .find_map(|subject| message.strip_prefix(subject))
+        .and_then(|rest| rest.strip_prefix("has been "))
+        .is_some_and(|state| {
+            ["disabled", "deactivated", "suspended", "restricted"]
+                .iter()
+                .any(|s| state.starts_with(s))
+        })
+}
+
 /// Anthropic rejects `speed: "fast"` without credits with a 429 that every
 /// key of the account would repeat; treating it as a quota failure would
 /// cool the whole pool because of one request's option.
@@ -915,7 +958,10 @@ fn decide(status: u16, parsed: &Parsed, headers: &HeaderMap) -> FailureClass {
         };
     }
     if status == 400 {
-        if is_bad_key_body(parsed) || parsed.says("location is not supported") {
+        if is_bad_key_body(parsed)
+            || is_account_disabled(parsed)
+            || parsed.says("location is not supported")
+        {
             return FailureClass::Auth;
         }
         if is_quota_body(parsed) {
@@ -1740,6 +1786,91 @@ mod tests {
             429,
             &[],
             &json!({"type": "error", "error": {"type": "rate_limit_error", "message": "Fast request rejected: usage credits are required for fast mode."}}),
+        );
+        assert_eq!(e.class, FailureClass::Request);
+    }
+
+    #[test]
+    fn switched_off_organisations_are_auth_failures() {
+        // Anthropic words it as an ordinary request fault.
+        let e = anthropic(
+            400,
+            &[],
+            &json!({"type": "error", "error": {"type": "invalid_request_error", "message": "This organization has been disabled."}}),
+        );
+        assert_eq!(e.class, FailureClass::Auth);
+        assert_eq!(e.info.message, "This organization has been disabled.");
+
+        // Groq: the code says it, whatever the wording.
+        for message in [
+            "Organization has been restricted. Please reach out to support if you believe this was in error.",
+            "Access denied.",
+        ] {
+            let e = run(
+                ProviderKind::OpenaiCompat,
+                Protocol::OpenaiChat,
+                400,
+                &[JSON],
+                &json!({"error": {"message": message, "type": "invalid_request_error", "code": "organization_restricted"}})
+                    .to_string(),
+            );
+            assert_eq!(e.class, FailureClass::Auth, "{message}");
+            assert_eq!(e.info.code.as_deref(), Some("organization_restricted"));
+        }
+
+        for message in [
+            "Your account has been deactivated. Contact support for help.",
+            "Your organisation has been suspended",
+        ] {
+            let e = openai(
+                400,
+                &[],
+                &json!({"error": {"message": message, "type": "invalid_request_error", "param": null, "code": null}}),
+            );
+            assert_eq!(e.class, FailureClass::Auth, "{message}");
+        }
+    }
+
+    #[test]
+    fn quoted_or_per_request_refusals_do_not_rest_the_credential() {
+        for (message, param, code) in [
+            // The client's own words quoted back: only an opening statement
+            // is the vendor speaking.
+            (
+                "Tool choice 'This organization has been disabled.' not found in 'tools' parameter.",
+                "tool_choice",
+                "invalid_value",
+            ),
+            (
+                "Invalid 'metadata.note': string too long. Expected a string with maximum length 512, but got 'your account has been suspended …'.",
+                "metadata.note",
+                "string_above_max_length",
+            ),
+            // Refusals of one request's option: another request on the same
+            // credential, without that option, succeeds.
+            (
+                "Your organization must be verified to stream this model. Please go to: https://platform.openai.com/settings/organization/general and click on Verify Organization.",
+                "stream",
+                "unsupported_value",
+            ),
+            (
+                "Your organization must be verified to generate reasoning summaries. Please go to: https://platform.openai.com/settings/organization/general and click on Verify Organization.",
+                "reasoning.summary",
+                "unsupported_value",
+            ),
+        ] {
+            let e = openai(
+                400,
+                &[],
+                &json!({"error": {"message": message, "type": "invalid_request_error", "param": param, "code": code}}),
+            );
+            assert_eq!(e.class, FailureClass::Request, "{message}");
+        }
+
+        let e = anthropic(
+            400,
+            &[],
+            &json!({"type": "error", "error": {"type": "invalid_request_error", "message": "messages.0.content.0: the organization has been disabled is not a valid tool name"}}),
         );
         assert_eq!(e.class, FailureClass::Request);
     }

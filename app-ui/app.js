@@ -206,6 +206,8 @@ function App() {
       if(!target){
         const created=await api.request('/sessions',{method:'POST',body:{project_id:projectId,model}});
         target=created.session.id;setSessions(old=>sortSessions([created.session,...old]));setSessionId(target);setView({session:created.session,project,pending_operation:null,events:[]});setEvents([]);
+        // The draft now belongs to the created session; New session must not offer it again.
+        draftMap.current.delete(`new:${projectId}`);
       }
       const turn=retry?journalRef.current[target]:{session_id:target,command_id:crypto.randomUUID(),text};
       if(!turn)throw new Error('The pending request is no longer available. Refresh this session.');

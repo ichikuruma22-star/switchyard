@@ -202,10 +202,8 @@ impl Importer<'_> {
         if let Some(force) = self.pick_bool("routing.force-model-prefix", "force-model-prefix") {
             config.routing.force_model_prefix = force;
         }
-        if let Some(retry) = self.pick_int("routing.retry.request-retry", "request-retry") {
-            // Extra rounds there; attempts in total here.
-            config.routing.max_attempts = clamp_u32(retry).saturating_add(1).max(1);
-        }
+        // `request-retry` is read once the credentials are known; see
+        // `attempts`.
         if let Some(wait) = self.pick_int("routing.retry.max-retry-interval", "max-retry-interval")
         {
             config.routing.max_wait_secs = clamp_u64(wait);
@@ -224,6 +222,46 @@ impl Importer<'_> {
                 config.routing.cooldown.transient_secs = clamp_u64(secs);
             }
         }
+    }
+
+    /// `routing.max_attempts`, once the providers are imported.
+    ///
+    /// `request-retry` counts rounds there: each round tries every
+    /// credential that serves the model (or `max-retry-credentials` of
+    /// them), and the extra rounds follow a wait. Here the setting counts
+    /// upstream calls in total, across credentials, so one attempt per
+    /// round would end the failover between keys after the first. A round
+    /// is counted as all the imported credentials: no model has more.
+    pub(super) fn attempts(&mut self, config: &mut Config) {
+        let retry = self.pick_int("routing.retry.request-retry", "request-retry");
+        let cap = self.pick_int(
+            "routing.retry.max-retry-credentials",
+            "max-retry-credentials",
+        );
+        let credentials: usize = config
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled)
+            .map(|provider| provider.all_credentials().len())
+            .sum();
+        let mut per_round = u32::try_from(credentials).unwrap_or(u32::MAX).max(1);
+        // 0 means every credential there.
+        if let Some(cap) = cap.filter(|cap| *cap > 0) {
+            per_round = per_round.min(clamp_u32(cap));
+        }
+        let rounds = retry.map_or(1, |retry| clamp_u32(retry).saturating_add(1));
+        let default = config.routing.max_attempts;
+        let attempts = rounds.saturating_mul(per_round).max(default);
+        if retry.is_none() && attempts == default {
+            return;
+        }
+        config.routing.max_attempts = attempts;
+        self.notes.push(format!(
+            "routing.max_attempts is {attempts}: request-retry counts extra rounds over every \
+             credential (or max-retry-credentials of them) in CLIProxyAPI, max_attempts the \
+             upstream calls of one request in total here; {rounds} rounds of {per_round} \
+             credentials, and never fewer than the default {default}"
+        ));
     }
 
     pub(super) fn requests(&mut self, config: &mut Config) {
