@@ -1317,7 +1317,11 @@ mod tests {
         for (profile, (id, name, agent)) in profiles.iter().zip([
             (SYSTEM_CODEX, "Existing Codex CLI", "codex"),
             (SYSTEM_CLAUDE, "Existing Claude CLI", "claude"),
-            (SYSTEM_ANTIGRAVITY, "Existing Antigravity CLI", "antigravity"),
+            (
+                SYSTEM_ANTIGRAVITY,
+                "Existing Antigravity CLI",
+                "antigravity",
+            ),
         ]) {
             assert_eq!(profile.id, id);
             assert_eq!(profile.name, name);

@@ -4142,7 +4142,7 @@ dependencies = [
 
 [[package]]
 name = "switchya-desktop"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4264,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "switchyard-app"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "axum",
  "base64 0.22.1",

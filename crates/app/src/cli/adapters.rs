@@ -31,7 +31,7 @@ pub(super) enum AgentCommand {
     },
     /// List cached account profile IDs; listing does not inspect credentials.
     Accounts,
-    /// Create a managed account profile for Codex or Claude Code.
+    /// Create a managed account profile for Codex, Claude Code or Antigravity.
     Add {
         #[arg(long, default_value = "codex", value_parser = ["codex", "claude", "antigravity"])]
         agent: String,
@@ -56,7 +56,7 @@ pub(super) enum AgentCommand {
         #[arg(long, value_parser = ["browser", "device", "claudeai", "console", "sso"])]
         method: Option<String>,
     },
-    /// Start a Codex or Claude Code conversation using its installed CLI.
+    /// Start a Codex, Claude Code or Antigravity conversation using its installed CLI.
     Run {
         #[arg(long, default_value = "codex", value_parser = ["codex", "claude", "antigravity"])]
         agent: String,
