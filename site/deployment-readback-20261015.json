@@ -1,19 +1,19 @@
 {
-  "checkedAt": "2026-10-15T04:40:50.850Z",
-  "versionId": "f03989c3-678f-4eb0-b781-6004c9eb15ee",
-  "change": "Model-access section corrected for in-workspace Claude Code, plus a Switch accounts workspace bullet covering named profiles and browser/device/Console/SSO sign-in methods.",
+  "checkedAt": "2026-10-15T05:22:48.775Z",
+  "versionId": "3206b649-2467-4cde-90ea-b8c40a8ed1f7",
+  "change": "Downloads updated to Switchya 0.1.0-preview.3 (release switchya-v0.1.0-preview.3, asset sha256 5b32faced261321728b04d2b14d1e481cf1725f2c7dc8a1832cbd42a73fff503, anonymous download verified byte-for-byte).",
   "results": [
     {
       "url": "https://switchya.com/",
       "status": 200,
-      "bytes": 16121,
-      "sha256": "2cc191a24e5c2091e19da0b26242364829ab6076d4c26f2d109277e49a08943d"
+      "bytes": 16196,
+      "sha256": "5d195596c7e2632afd2243ee174b90b3758d9039e52f4beff8242f9667f6cb25"
     },
     {
       "url": "https://www.switchya.com/",
       "status": 200,
-      "bytes": 16121,
-      "sha256": "2cc191a24e5c2091e19da0b26242364829ab6076d4c26f2d109277e49a08943d"
+      "bytes": 16196,
+      "sha256": "5d195596c7e2632afd2243ee174b90b3758d9039e52f4beff8242f9667f6cb25"
     },
     {
       "url": "https://switchya.com/site.css",
