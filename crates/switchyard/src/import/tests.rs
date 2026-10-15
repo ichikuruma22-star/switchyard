@@ -602,6 +602,82 @@ fn a_pool_member_whose_name_another_model_took_is_left_out() {
     assert!(shared.not_imported.is_empty(), "{:?}", shared.not_imported);
 }
 
+/// Nor may a pool member's target be another pool's name: that virtual
+/// model answers before the model, so the pool would route to the other
+/// pool's members. Whichever pool comes first, with or without
+/// force-model-prefix, the member is left out and reported.
+#[test]
+fn a_pool_member_named_like_another_pool_is_left_out() {
+    const CHAT: &str = "      - {name: deepseek-chat, alias: deepseek-v3.1}\n      - {name: deepseek-v3.1-fast, alias: deepseek-v3.1}\n";
+    const FAST: &str =
+        "      - {name: deepseek-v3.1, alias: fast}\n      - {name: glm-5, alias: fast}\n";
+    let aliases = |config: &Config| {
+        let mut aliases: Vec<(String, Vec<String>)> = config
+            .aliases
+            .iter()
+            .map(|a| (a.name.clone(), a.targets.clone()))
+            .collect();
+        aliases.sort();
+        aliases
+    };
+    let alias = |name: &str, targets: &[&str]| {
+        (
+            name.to_string(),
+            targets.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+        )
+    };
+    for force in [false, true] {
+        for models in [format!("{CHAT}{FAST}"), format!("{FAST}{CHAT}")] {
+            let imported = import(&format!(
+                "force-model-prefix: {force}\nopenai-compatibility:\n  - name: pools\n    base-url: https://pools.example/v1\n    prefix: or\n    models:\n{models}"
+            ));
+            let config = &imported.config;
+            assert!(config.validate().is_empty());
+            let chat = ["or/deepseek-chat", "or/deepseek-v3.1-fast"];
+            let mut expected = vec![
+                alias("or/deepseek-v3.1", &chat),
+                alias("or/fast", &["or/glm-5"]),
+            ];
+            if !force {
+                expected.push(alias("deepseek-v3.1", &chat));
+                expected.push(alias("fast", &["or/glm-5"]));
+            }
+            expected.sort();
+            assert_eq!(aliases(config), expected, "force-model-prefix: {force}");
+            let mut ids: Vec<&str> = provider(config, "pools")
+                .models
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect();
+            ids.sort_unstable();
+            assert_eq!(ids, ["deepseek-chat", "deepseek-v3.1-fast", "glm-5"]);
+            let report = imported.not_imported.join("\n");
+            assert!(
+                report.contains(
+                    "provider `pools`: the model `deepseek-v3.1` of the pool `fast`: another \
+                     pool is named `or/deepseek-v3.1`"
+                ),
+                "{report}"
+            );
+        }
+    }
+
+    // Without a prefix the target is the bare upstream name.
+    let imported = import(
+        "openai-compatibility:\n  - name: pools\n    base-url: https://pools.example/v1\n    models:\n      - {name: a, alias: x}\n      - {name: b, alias: x}\n      - {name: x, alias: fast}\n      - {name: c, alias: fast}\n",
+    );
+    assert!(imported.config.validate().is_empty());
+    assert_eq!(
+        aliases(&imported.config),
+        [alias("fast", &["c"]), alias("x", &["a", "b"])]
+    );
+    let report = imported.not_imported.join("\n");
+    assert!(
+        report.contains("the model `x` of the pool `fast`: another pool is named `x`"),
+        "{report}"
+    );
+}
+
 #[test]
 fn generated_file_validates_and_reads_back() {
     for fixture in [FLAT, NESTED] {
