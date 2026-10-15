@@ -494,12 +494,22 @@ mod tests {
         let path = dir.path().join("switchyard.toml");
         fs::write(&path, "old").unwrap();
         // Opened without sharing: nobody else can open the file meanwhile.
+        // A virus scanner may still be reading the file just written, so
+        // its brief hold is waited out rather than failing the test.
         let exclusive = || {
-            OpenOptions::new()
-                .read(true)
-                .share_mode(0)
-                .open(&path)
-                .unwrap()
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match OpenOptions::new().read(true).share_mode(0).open(&path) {
+                    Ok(file) => return file,
+                    Err(error)
+                        if is_held_by_another_process(&error)
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("cannot hold {}: {error}", path.display()),
+                }
+            }
         };
 
         let held = exclusive();
