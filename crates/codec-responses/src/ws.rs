@@ -4,7 +4,7 @@
 //! serve incremental turns (see `docs/DESIGN.md` §10). Everything here works
 //! on raw input items and has no connection state of its own.
 
-use crate::common::{non_empty, type_of, usage_to_wire};
+use crate::common::{BlobKind, non_empty, signature_from_client, type_of, usage_to_wire};
 use crate::error::redact_secrets;
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
@@ -123,15 +123,40 @@ pub fn is_transcript_replacement(input: &[Value]) -> bool {
     })
 }
 
+/// Whether an item is output of a model turn, the kind of item a reasoning
+/// item has to be followed by: an assistant message (in the short form too)
+/// or a call of any kind.
+fn is_turn_output(item: &Value) -> bool {
+    match type_of(item) {
+        "message" | "" => non_empty(item, "role") == Some("assistant"),
+        kind => kind.ends_with("_call"),
+    }
+}
+
+/// Whether a reasoning item is the gateway's carrier of the signature of the
+/// tool call directly behind it rather than reasoning of its own.
+fn is_call_carrier(item: &Value) -> bool {
+    non_empty(item, "encrypted_content")
+        .is_some_and(|blob| signature_from_client(blob).1 == BlobKind::Call)
+}
+
 /// Makes tool calls and tool outputs pair up, the way a stateless Responses
 /// upstream insists: a `function_call` / `custom_tool_call` without an output
 /// in the same input is dropped, and so is an output whose call is missing.
 ///
 /// Calls without a `call_id` are dropped. An output without a `call_id` is
 /// kept only when it is a `function_call_output` carrying a `name` (a
-/// standalone named result some clients send on purpose). Items sharing an
-/// `id` are then collapsed as in [`merge_transcript`]. All other items pass
-/// through untouched.
+/// standalone named result some clients send on purpose).
+///
+/// The upstream also rejects a `reasoning` item that is not followed by
+/// output of its turn, so reasoning that a dropped item leaves without one
+/// is dropped too. Reasoning still followed by a call that stays (a
+/// parallel call that was answered) is kept, but the gateway's carrier of a
+/// call's signature always goes with its call: the next call would take the
+/// signature otherwise.
+///
+/// Items sharing an `id` are then collapsed as in [`merge_transcript`]. All
+/// other items pass through untouched.
 pub fn repair_tool_pairs(input: Vec<Value>) -> Vec<Value> {
     let mut calls: HashSet<String> = HashSet::new();
     let mut outputs: HashSet<String> = HashSet::new();
@@ -146,9 +171,9 @@ pub fn repair_tool_pairs(input: Vec<Value>) -> Vec<Value> {
             outputs.insert(id.to_string());
         }
     }
-    let kept: Vec<Value> = input
-        .into_iter()
-        .filter(|item| {
+    let mut keep: Vec<bool> = input
+        .iter()
+        .map(|item| {
             let id = call_id(item);
             if is_tool_output(item) {
                 if id.is_empty() {
@@ -162,6 +187,32 @@ pub fn repair_tool_pairs(input: Vec<Value>) -> Vec<Value> {
                 true
             }
         })
+        .collect();
+    // Backwards, so that what follows a reasoning item once the dropped
+    // items are gone is known when it is reached, and whether anything in
+    // between was dropped.
+    let mut follower_is_output = false;
+    let mut dropped_before_follower = false;
+    for index in (0..input.len()).rev() {
+        let item = &input[index];
+        if type_of(item) == "reasoning" {
+            let carries_dropped_call = is_call_carrier(item)
+                && input.get(index + 1).is_some_and(is_tool_call)
+                && !keep[index + 1];
+            if (dropped_before_follower && !follower_is_output) || carries_dropped_call {
+                keep[index] = false;
+            }
+        } else if keep[index] {
+            follower_is_output = is_turn_output(item);
+            dropped_before_follower = false;
+        } else {
+            dropped_before_follower = true;
+        }
+    }
+    let kept: Vec<Value> = input
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(item, keep)| keep.then_some(item))
         .collect();
     dedupe_by_id(kept)
 }
