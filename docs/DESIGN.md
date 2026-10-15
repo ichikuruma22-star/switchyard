@@ -548,8 +548,11 @@ from `ui/`, embedded with rust-embed; `/admin` redirects).
 **Auth.** `Authorization: Bearer <secret>` where the secret is
 `SWITCHYARD_ADMIN_SECRET` or `admin.secret`. No secret configured → every
 admin route is 404. Non-loopback peers are refused (403) unless
-`admin.allow_remote` (or the environment variable
-`SWITCHYARD_ADMIN_ALLOW_REMOTE` is `1`/`true`, which the container image sets). Five consecutive bad secrets from one IP → 30 min
+`admin.allow_remote` is set or the environment variable
+`SWITCHYARD_ADMIN_ALLOW_REMOTE` is `1`, `true` or `yes` (case-insensitive).
+Neither container recipe (`Dockerfile`, `docker/Dockerfile.release`) sets it:
+pass `-e SWITCHYARD_ADMIN_ALLOW_REMOTE=true` at run time to reach the
+dashboard across the container boundary. Five consecutive bad secrets from one IP → 30 min
 lockout (429 with `Retry-After`). Constant-time comparison. Browsers cannot
 set headers on WebSockets, so `POST /admin/api/ws-ticket` returns a
 single-use ticket valid 30 s.

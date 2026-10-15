@@ -26,7 +26,7 @@ and Microsoft Edge WebView2 Runtime; WebView2 is required for the desktop
 shell. Extract the ZIP and open `switchya-desktop.exe`, or run `switchya.exe serve`
 for the browser workspace. The first run guides you through provider setup.
 No macOS app binary is available, and separate Linux checks do not constitute
-a Linux desktop release. See [the preview verification status](docs/SWITCHYA.md#preview-verification-status)
+a Linux desktop release. See [the preview verification status](docs/SWITCHYA.md#published-preview-verification-status)
 for the tested scope and remaining limits.
 
 The gateway release includes a Windows x64 ZIP and Linux x64 musl archive with

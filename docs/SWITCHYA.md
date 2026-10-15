@@ -29,7 +29,8 @@ separates current source checks from the earlier preview's runtime observations.
 The release notes bundled with the ZIP record checks of the published binaries.
 Later development work used real Codex and Claude Code to edit and check Switchya
 through its own CLI and workspace. See the [current adapter evidence](AGENT-ADAPTERS.md#protocol-evidence).
-Those development changes are newer than the published preview archive.
+Those development changes are newer than the `preview.2` archive and ship in
+`preview.3`.
 
 | Area | Evidence and limits |
 |---|---|
@@ -134,10 +135,10 @@ Saved built-in sessions persist locally across app restarts. Keep the session
 data directory on local storage. Only one host may own it at a time; connect
 the CLI to that host for concurrent app/terminal access, as described below.
 
-## Project workbench (current source)
+## Project workbench
 
-These additions are newer than the published `preview.2` archive. Build the
-current source to use them.
+These additions are included since `preview.3`; the `preview.2` archive does
+not have them.
 
 The top bar keeps **Conversation**, **Files**, **Changes** and **Handoffs** in
 one project workspace. Your selected project, conversation, view and appearance
@@ -305,7 +306,9 @@ tools run with your OS permissions. See [the adapter contract](AGENT-ADAPTERS.md
 Preview 2 provides `switchya agent` commands for the same saved Codex
 conversations shown in **Existing agents**. Update both the CLI and its host
 when moving from preview 1, which does not include these commands.
-Current source also supports `--agent claude`; omitting `--agent` selects Codex.
+Since preview 3, `--agent claude` and `--agent antigravity` are also supported,
+along with the `add`, `login`, `use` and `remove` account commands; omitting
+`--agent` selects Codex.
 
 ```powershell
 switchya agent accounts
@@ -438,7 +441,7 @@ automatic update service. The selected `switchya.com` domain does not itself pro
 those services. Do not treat the product roadmap as a list of shipped features.
 
 This guide describes current source behavior and the limited checks recorded
-in [Preview verification status](#preview-verification-status). It does not
+in [Published preview verification status](#published-preview-verification-status). It does not
 establish live-model coding quality or that a detected CLI is authenticated.
 See [APP-API.md](APP-API.md) for the
 local host contract and [APP-ROADMAP.md](APP-ROADMAP.md) for proposed work and

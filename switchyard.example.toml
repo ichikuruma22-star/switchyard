@@ -39,6 +39,7 @@ required = true           # false: accept requests without a key (local use only
 # [[auth.keys]]
 # key = "sy-change-me"
 # name = "laptop"
+# enabled = true                   # false: refuse this key without deleting it
 # models = ["gpt-*", "claude-*"]   # optional allow-list; empty = every model
 # rate_limit_rpm = 120             # optional requests-per-minute cap
 
@@ -145,6 +146,8 @@ retention_days = 30
 # wire_api = "auto"           # auto | chat | responses
 # legacy_max_tokens = true    # send max_tokens instead of max_completion_tokens
 # stream_usage = true         # ask for usage in Chat Completions streams (stream_options)
+# project = ""                # vertex only: Google Cloud project id; empty = service account's project
+# location = ""               # vertex only: region, e.g. "us-central1"; empty = "global"
 #
 # [[providers.credentials]]   # credentials that need more than a key
 # api_key = "sk-another-…"
@@ -160,7 +163,7 @@ retention_days = 30
 # display_name = "Nice name"
 # context_window = 200000
 # max_output_tokens = 32000
-# thinking = { levels = ["low", "medium", "high"] }   # or { min = 1024, max = 32000, zero_allowed = true }
+# thinking = { levels = ["low", "medium", "high"] }   # or { min = 1024, max = 32000, zero_allowed = true, dynamic_allowed = true }
 
 # The built-in mock provider needs no key — handy for trying the dashboard:
 # [[providers]]
@@ -174,6 +177,7 @@ retention_days = 30
 # [[aliases]]
 # name = "smart"
 # targets = ["claude-opus-4-5", "gpt-5(high)"]
+# hide_targets = false         # true: list only the alias, not its targets (they stay routable)
 
 # Clients can also choose the reasoning effort themselves by appending a
 # suffix to any model name: "gpt-5(high)", "claude-sonnet-4-5(16000)",

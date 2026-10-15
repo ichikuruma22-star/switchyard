@@ -1,8 +1,9 @@
 # Shared project context through MCP
 
-The current source includes a stdio MCP server in the `switchya` executable.
+The `switchya` executable includes a stdio MCP server.
 It gives a compatible client current project context and durable handoffs.
-These features are newer than the published `0.1.0-preview.2` archive.
+These features are included since `0.1.0-preview.3`; the `0.1.0-preview.2`
+archive does not have them.
 MCP support belongs to the client/harness; the model name alone does not
 establish that its official application can connect.
 

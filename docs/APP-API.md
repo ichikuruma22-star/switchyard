@@ -39,7 +39,7 @@ After inspecting the affected files or command results, a user can acknowledge r
 
 ## Existing-agent runs
 
-These routes drive the Codex and Claude Code adapters described in [the adapter contract](AGENT-ADAPTERS.md). They use the same authentication, Origin and JSON body rules. `adapter_id` is `codex` or `claude`; Claude requires a selected profile for that agent: built-in `system-claude` (Existing Claude CLI) or a managed profile with a confirmed sign-in. The built-in `system-codex` and `system-claude` accounts are selectable and inspectable, but reject login actions.
+These routes drive the Codex, Claude Code and Antigravity adapters described in [the adapter contract](AGENT-ADAPTERS.md). They use the same authentication, Origin and JSON body rules. `adapter_id` is `codex`, `claude` or `antigravity`. Claude requires a selected profile for that agent: built-in `system-claude` (Existing Claude CLI) or a managed profile with a confirmed sign-in. Antigravity also requires a selected profile: built-in `system-antigravity` (Existing Antigravity CLI) or any managed Antigravity profile. Antigravity profiles are never gated on sign-in, because the CLI has no account-status command. The built-in `system-codex`, `system-claude` and `system-antigravity` accounts are selectable and inspectable, but reject login actions.
 
 | Method and path | Input | Response |
 |---|---|---|
@@ -54,7 +54,7 @@ These routes drive the Codex and Claude Code adapters described in [the adapter 
 
 Runs are saved by the host and survive restarts. `continue_run_id` continues the saved agent conversation of that run with only the new prompt; it must name the conversation's latest run that attached to its CLI session, and the run keeps that conversation's agent and account profile. A different `profile_id` is a conflict, and `profile_changed` means the original profile is no longer available unchanged. A run that was active when a host stopped is `recovery_required` if its input might have been sent; it cannot be continued until `/recovery` records the human review. Acknowledgement never replays or certifies the uncertain work. Each `AdapterRun` reports `conversation_id`, `continued_from`, `title`, `ephemeral` and, when saved history cannot be read or written, `history_error`.
 
-## Workspace inspection and handoffs (current source)
+## Workspace inspection and handoffs
 
 These routes share the same host authentication, Origin and strict JSON/query
 rules. None starts a model or approves an agent operation.
@@ -80,7 +80,7 @@ The workspace `tool` values are `conversation`, `files`, `changes` and
 approval records or independent verification evidence. Conversation context
 pages cap payloads and report truncation explicitly. See [MCP](MCP.md).
 
-## Interactive terminals (current source)
+## Interactive terminals
 
 These authenticated routes control a user-operated shell with the current
 OS account's permissions. Opening a workspace view does not start a shell.
