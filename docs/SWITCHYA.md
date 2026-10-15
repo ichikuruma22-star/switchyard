@@ -5,8 +5,8 @@ desktop shell use the same built-in agent and saved project sessions. The
 independently installable [Switchyard Gateway](../README.md#switchyard-gateway)
 provides model access and routing.
 
-The [**Windows x64 portable preview**](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.2)
-is tagged `switchya-v0.1.0-preview.2`. Its archive contains the native desktop
+The [**Windows x64 portable preview**](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.3)
+is tagged `switchya-v0.1.0-preview.3`. Its archive contains the native desktop
 shell and `switchya` CLI, targeting Windows 10/11 x64. It is unsigned and has
 no installer or bundled runtime DLLs. Install the
 [Microsoft Visual C++ v14 x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)
@@ -263,13 +263,13 @@ Use the current `revision` from `sessions`; recovery never reruns an action.
 
 ## Existing agents and accounts
 
-**Existing agents** runs installed Codex or Claude Code CLIs with their own
-model, account and configuration. Select the agent and account, then choose
-**Start new conversation**. Starting a turn may consume that account's usage.
-Review its tool activity and exact permission requests in **Agent review**.
-Claude's in-app integration is available in current source and is newer than
-the published `preview.2` archive; select **Existing Claude CLI** to use the
-installed CLI's sign-in and configuration, or choose a signed-in managed profile.
+**Existing agents** runs installed Codex, Claude Code or Antigravity CLIs with
+their own model, account and configuration. Select the agent and account, then
+choose **Start new conversation**. Starting a turn may consume that account's
+usage. Review its tool activity and exact permission requests in **Agent
+review**. Antigravity runs in plan mode: it can inspect and answer but cannot
+apply edits, and Switchya cannot check its sign-in status (see
+[Accounts](ACCOUNTS.md#antigravity-accounts)).
 
 Existing-agent conversations are saved on this computer and remain after
 Switchya restarts. They are separate from built-in Switchya sessions. Choose

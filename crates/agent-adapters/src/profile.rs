@@ -3,7 +3,7 @@ use serde_json::Value;
 use tokio::process::Command;
 
 pub(crate) fn validate(profile: &ProfileBinding, agent: &str) -> Result<()> {
-    if profile.agent_id != agent || !matches!(agent, "codex" | "claude") {
+    if profile.agent_id != agent || !matches!(agent, "codex" | "claude" | "antigravity") {
         return Err(AdapterError::Invalid(
             "Account profile does not match the selected agent.".into(),
         ));
@@ -16,7 +16,9 @@ pub(crate) fn validate(profile: &ProfileBinding, agent: &str) -> Result<()> {
     if !profile.managed
         && !matches!(
             (profile.id.as_str(), agent),
-            ("system-codex", "codex") | ("system-claude", "claude")
+            ("system-codex", "codex")
+                | ("system-claude", "claude")
+                | ("system-antigravity", "antigravity")
         )
     {
         return Err(AdapterError::Invalid(
@@ -40,6 +42,8 @@ pub(crate) fn configure(command: &mut Command, profile: Option<&ProfileBinding>)
                 "CHATGPT_",
                 "AZURE_OPENAI_",
                 "ANTHROPIC_",
+                "ANTIGRAVITY_",
+                "GEMINI_",
                 "CLAUDE_",
                 "AWS_",
                 "GOOGLE_",
@@ -58,16 +62,21 @@ pub(crate) fn configure(command: &mut Command, profile: Option<&ProfileBinding>)
         }
     }
     if let Some(profile) = profile.filter(|p| p.managed) {
-        command.env(
-            if profile.agent_id == "codex" {
-                "CODEX_HOME"
-            } else {
-                "CLAUDE_CONFIG_DIR"
-            },
-            &profile.home,
-        );
-        if profile.agent_id == "codex" {
-            command.args(["-c", "cli_auth_credentials_store=\"file\""]);
+        match profile.agent_id.as_str() {
+            "codex" => {
+                command.env("CODEX_HOME", &profile.home);
+                command.args(["-c", "cli_auth_credentials_store=\"file\""]);
+            }
+            "antigravity" => {
+                // The CLI keeps its state under ~/.gemini/antigravity-cli;
+                // redirecting the child home scopes that state (including
+                // saved conversations) to this profile.
+                command.env("HOME", &profile.home);
+                command.env("USERPROFILE", &profile.home);
+            }
+            _ => {
+                command.env("CLAUDE_CONFIG_DIR", &profile.home);
+            }
         }
     }
 }

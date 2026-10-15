@@ -33,7 +33,7 @@ pub(super) enum AgentCommand {
     Accounts,
     /// Create a managed account profile for Codex or Claude Code.
     Add {
-        #[arg(long, default_value = "codex", value_parser = ["codex", "claude"])]
+        #[arg(long, default_value = "codex", value_parser = ["codex", "claude", "antigravity"])]
         agent: String,
         #[arg(long)]
         name: String,
@@ -58,7 +58,7 @@ pub(super) enum AgentCommand {
     },
     /// Start a Codex or Claude Code conversation using its installed CLI.
     Run {
-        #[arg(long, default_value = "codex", value_parser = ["codex", "claude"])]
+        #[arg(long, default_value = "codex", value_parser = ["codex", "claude", "antigravity"])]
         agent: String,
         #[arg(long)]
         project: Option<PathBuf>,
@@ -143,6 +143,8 @@ struct Profiles {
 struct ProfileDefaults {
     codex: Option<String>,
     claude: Option<String>,
+    #[serde(default)]
+    antigravity: Option<String>,
 }
 
 impl ProfileDefaults {
@@ -150,6 +152,7 @@ impl ProfileDefaults {
         match agent {
             "codex" => self.codex.as_deref(),
             "claude" => self.claude.as_deref(),
+            "antigravity" => self.antigravity.as_deref(),
             _ => None,
         }
     }

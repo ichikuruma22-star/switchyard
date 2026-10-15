@@ -157,10 +157,13 @@ pub type Result<T> = std::result::Result<T, AdapterError>;
 pub const PERMISSION_BOUNDARY: &str = "Codex uses its read-only shell sandbox with network disabled, on-request approvals and human review. Read-only operations may run without prompting; writes or elevation require CLI approval. Codex enforces that policy; Switchya does not add an OS security sandbox. Allow once may permit the displayed command or file change with your OS permissions. The selected profile stays bound to this run and to any continuation of its conversation; configured integrations may have separate permissions. Saved history is never replayed: continuing sends only your new message, and interrupted work requires review first.";
 
 pub const CLAUDE_PERMISSION_BOUNDARY: &str = "Claude Code uses default permission mode and the selected account's CLI settings. Read-only tools and tools allowed by existing permission rules may run without prompting. Switchya displays the permission requests Claude sends; Allow once approves only the displayed tool input and does not save a permission rule. Tools, hooks and integrations run with your OS permissions; Switchya does not add an OS security sandbox. The account and project remain bound to this conversation. Continuing sends only your new message, and uncertain work requires review first.";
+pub const ANTIGRAVITY_PERMISSION_BOUNDARY: &str = "Antigravity runs in plan mode: it can inspect the project and answer, but cannot apply edits. Tool activity runs with your OS permissions inside the CLI's own plan-mode policy; Switchya does not add an OS security sandbox and shows the activity Antigravity reports. Antigravity does not expose an account-status command, so Switchya cannot confirm sign-in before a run; the CLI reports authentication failures itself. The account and project remain bound to this conversation. Continuing sends only your new message, and uncertain work requires review first.";
 
 pub(crate) fn permission_boundary(agent: &str) -> &'static str {
     if agent == "claude" {
         CLAUDE_PERMISSION_BOUNDARY
+    } else if agent == "antigravity" {
+        ANTIGRAVITY_PERMISSION_BOUNDARY
     } else {
         PERMISSION_BOUNDARY
     }

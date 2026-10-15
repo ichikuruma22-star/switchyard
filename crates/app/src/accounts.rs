@@ -27,11 +27,13 @@ use tokio_util::sync::CancellationToken;
 
 const SYSTEM_CODEX: &str = "system-codex";
 const SYSTEM_CLAUDE: &str = "system-claude";
+const SYSTEM_ANTIGRAVITY: &str = "system-antigravity";
 
 fn system_profile(id: &str) -> Option<(&'static str, &'static str)> {
     match id {
         SYSTEM_CODEX => Some(("Existing Codex CLI", "codex")),
         SYSTEM_CLAUDE => Some(("Existing Claude CLI", "claude")),
+        SYSTEM_ANTIGRAVITY => Some(("Existing Antigravity CLI", "antigravity")),
         _ => None,
     }
 }
@@ -43,6 +45,8 @@ const MAX_MANIFEST: u64 = 128 * 1024;
 pub(crate) struct Defaults {
     codex: Option<String>,
     claude: Option<String>,
+    #[serde(default)]
+    antigravity: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -70,6 +74,7 @@ impl Default for Manifest {
             defaults: Defaults {
                 codex: Some(SYSTEM_CODEX.into()),
                 claude: Some(SYSTEM_CLAUDE.into()),
+                antigravity: Some(SYSTEM_ANTIGRAVITY.into()),
             },
         }
     }
@@ -172,7 +177,7 @@ fn active_login(job: &LoginJob) -> bool {
 }
 
 fn valid_agent(agent: &str) -> bool {
-    matches!(agent, "codex" | "claude")
+    matches!(agent, "codex" | "claude" | "antigravity")
 }
 
 fn checked_name(name: &str) -> Result<String> {
@@ -196,6 +201,7 @@ fn selected<'a>(defaults: &'a Defaults, agent: &str) -> Option<&'a str> {
     match agent {
         "codex" => defaults.codex.as_deref(),
         "claude" => defaults.claude.as_deref(),
+        "antigravity" => defaults.antigravity.as_deref(),
         _ => None,
     }
 }
@@ -224,7 +230,7 @@ impl AccountManager {
             crate::startup::private_directory(&home)?;
         }
         let mut cache = BTreeMap::new();
-        for id in [SYSTEM_CODEX, SYSTEM_CLAUDE] {
+        for id in [SYSTEM_CODEX, SYSTEM_CLAUDE, SYSTEM_ANTIGRAVITY] {
             cache.insert(id.into(), CachedProfile::default());
         }
         for profile in &manifest.profiles {
@@ -335,7 +341,7 @@ impl AccountManager {
 
     pub(crate) fn cached(&self) -> (Vec<ProfileView>, Defaults) {
         let state = lock(&self.inner.state);
-        let profiles = [SYSTEM_CODEX, SYSTEM_CLAUDE]
+        let profiles = [SYSTEM_CODEX, SYSTEM_CLAUDE, SYSTEM_ANTIGRAVITY]
             .into_iter()
             .chain(
                 state
@@ -512,7 +518,10 @@ impl AccountManager {
                 "Finish this account's sign-in or terminal launch before starting a run.",
             ));
         }
-        if binding.managed && cached.account.auth_status != "signed_in" {
+        if binding.managed
+            && binding.agent_id != "antigravity"
+            && cached.account.auth_status != "signed_in"
+        {
             return Err(AppError::new(
                 StatusCode::CONFLICT,
                 "profile_not_signed_in",
@@ -531,6 +540,7 @@ impl AccountManager {
         match binding.agent_id.as_str() {
             "codex" => manifest.defaults.codex = Some(id.into()),
             "claude" => manifest.defaults.claude = Some(id.into()),
+            "antigravity" => manifest.defaults.antigravity = Some(id.into()),
             _ => return Err(AppError::invalid("Unknown profile agent.")),
         }
         self.persist(&mut state, manifest)?;
@@ -591,10 +601,12 @@ impl AccountManager {
         let system_default = match binding.agent_id.as_str() {
             "codex" => SYSTEM_CODEX,
             "claude" => SYSTEM_CLAUDE,
+            "antigravity" => SYSTEM_ANTIGRAVITY,
             _ => return Err(AppError::invalid("Unknown profile agent.")),
         };
         let defaults = match binding.agent_id.as_str() {
             "codex" => &mut manifest.defaults.codex,
+            "antigravity" => &mut manifest.defaults.antigravity,
             _ => &mut manifest.defaults.claude,
         };
         if defaults.as_deref() == Some(id) {
@@ -683,6 +695,13 @@ impl AccountManager {
                     StatusCode::CONFLICT,
                     "system_profile_read_only",
                     "Existing CLI accounts are read-only here. Create a managed profile to sign in.",
+                ));
+            }
+            if binding.agent_id == "antigravity" {
+                return Err(AppError::new(
+                    StatusCode::CONFLICT,
+                    "profile_sign_in_not_allowed",
+                    "Antigravity sign-in happens in its own terminal. Use Open Antigravity for this profile, sign in there, then start a run.",
                 ));
             }
             let method = method
@@ -841,19 +860,19 @@ impl AccountManager {
                 .cache
                 .get_mut(id)
                 .ok_or_else(|| AppError::local("Account cache is unavailable."))?;
-            if !binding.managed || binding.agent_id != "claude" {
+            if !binding.managed || !matches!(binding.agent_id.as_str(), "claude" | "antigravity") {
                 return Err(AppError::invalid(
-                    "External terminals are available here for managed Claude profiles.",
+                    "External terminals are available here for managed Claude and Antigravity profiles.",
                 ));
             }
             if cached.login_busy
                 || cached.terminal_busy
-                || cached.account.auth_status != "signed_in"
+                || (binding.agent_id == "claude" && cached.account.auth_status != "signed_in")
             {
                 return Err(AppError::new(
                     StatusCode::CONFLICT,
                     "profile_not_ready",
-                    "Refresh and sign in to this Claude profile before opening its terminal.",
+                    "Refresh and sign in to this profile before opening its terminal.",
                 ));
             }
             cached.terminal_busy = true;
@@ -921,7 +940,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
             ));
         }
     }
-    for agent in ["codex", "claude"] {
+    for agent in ["codex", "claude", "antigravity"] {
         if let Some(id) = selected(&manifest.defaults, agent) {
             let valid = system_profile(id).is_some_and(|(_, profile_agent)| profile_agent == agent)
                 || manifest
@@ -1264,7 +1283,7 @@ pub(crate) async fn launch_terminal(
             AppError::new(
                 StatusCode::NOT_FOUND,
                 "project_not_found",
-                "Open the project in this workspace before launching Claude Code.",
+                "Open the project in this workspace before launching the agent terminal.",
             )
         })?;
     state
@@ -1274,7 +1293,7 @@ pub(crate) async fn launch_terminal(
     Ok((
         StatusCode::ACCEPTED,
         Json(
-            json!({"launched":true,"message":"Claude Code was requested in an external terminal. This app does not track that session."}),
+            json!({"launched":true,"message":"The agent was requested in an external terminal. This app does not track that session."}),
         ),
     ))
 }
@@ -1294,10 +1313,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let manager = AccountManager::open(temp.path()).unwrap();
         let (profiles, defaults) = manager.cached();
-        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles.len(), 3);
         for (profile, (id, name, agent)) in profiles.iter().zip([
             (SYSTEM_CODEX, "Existing Codex CLI", "codex"),
             (SYSTEM_CLAUDE, "Existing Claude CLI", "claude"),
+            (SYSTEM_ANTIGRAVITY, "Existing Antigravity CLI", "antigravity"),
         ]) {
             assert_eq!(profile.id, id);
             assert_eq!(profile.name, name);
@@ -1438,7 +1458,7 @@ mod tests {
         };
         assert_eq!(error.code, "profile_metadata_changed");
         assert_eq!(std::fs::read(&path).unwrap(), externally_changed);
-        assert_eq!(manager.cached().0.len(), 2);
+        assert_eq!(manager.cached().0.len(), 3);
         assert!(AccountManager::open(temp.path()).is_err());
     }
 
@@ -1562,13 +1582,13 @@ mod tests {
         assert_eq!(defaults.codex.as_deref(), Some(SYSTEM_CODEX));
         assert!(!home.exists());
         let (profiles, _) = manager.cached();
-        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles.len(), 3);
         assert!(profiles.iter().all(|item| item.id != profile.id));
         let error = manager.remove_profile(&profile.id, &adapters).unwrap_err();
         assert_eq!(error.code, "profile_not_found");
         drop(manager);
         let reopened = AccountManager::open(temp.path()).unwrap();
-        assert_eq!(reopened.cached().0.len(), 2);
+        assert_eq!(reopened.cached().0.len(), 3);
         assert_eq!(reopened.cached().1.codex.as_deref(), Some(SYSTEM_CODEX));
         reopened.shutdown().await;
         adapters.shutdown().await;

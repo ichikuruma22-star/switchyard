@@ -99,6 +99,29 @@ stdin and gives the CLI time to flush its saved conversation before process-tree
 cleanup. An interruption acknowledgement alone is not completion. Missing or
 malformed confirmation becomes `recovery_required`, never an automatic retry.
 
+### Antigravity
+
+The child runs `agy --print` with `--output-format stream-json` and
+`--mode plan` (verified against agy 1.3.5): it can inspect the project and
+answer, but plan mode cannot apply edits, so this adapter receives no
+approval requests and `Decide` calls are rejected. Streamed `step_update`
+events become assistant deltas, completed messages and tool items; the
+`init` event's conversation ID is saved as the thread and `--conversation`
+resumes it. Interruption terminates the process tree and marks the run
+interrupted; an exit without a `result` event is `recovery_required`.
+Prompts travel as a command-line argument, so a single message is limited
+to 24,000 bytes. A managed profile redirects the child's `HOME` and
+`USERPROFILE` to its private directory, scoping the CLI's
+`~/.gemini/antigravity-cli` state (including saved conversations) to that
+profile, and clears inherited `ANTIGRAVITY_`, `GEMINI_`, `GOOGLE_` and other
+provider credential overrides. The CLI provides no account-status command
+and its model list does not prove sign-in, so account status stays
+`unknown`: Switchya does not gate Antigravity runs on a status check, and
+authentication failures surface from the run itself. Sign-in happens in the
+CLI's own terminal (see Accounts). Antigravity may still write its own
+internal artifacts (for example its `brain` scratch directory) inside the
+active profile home; plan mode's no-edit boundary applies to the project.
+
 ## Events, cancellation and bounds
 
 Public events contain `schema_version`, `run_id`, `seq`, `at_ms`, `kind`, and `payload`. Supported event kinds are `state_changed`, `user_task`, `assistant_delta`, `item_started`, `item_completed`, `approval_requested`, `approval_resolved`, `notice`, `adapter_error`, and `turn_completed`. A `user_task` is `{text}` and records the explicitly submitted prompt. An `assistant_delta` is `{item_id,text}`; item events are `{item}`; approval-request events are `{approval}`. UI output, exact approval previews and diffs must be rendered as untrusted text. Do not insert generated HTML into the page. A final agent-message item can repeat text already delivered in deltas; associate them by item ID.

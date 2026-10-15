@@ -141,6 +141,20 @@ impl AccountRuntime {
                 "Install this agent's native CLI before checking its account.".into(),
             )
         })?;
+        if binding.agent_id == "antigravity" {
+            // The CLI exposes no account-status command and its model list
+            // does not prove sign-in. Report unknown without spawning it;
+            // authentication failures surface from the run itself.
+            let message = "Antigravity does not provide an account status check. Sign-in is verified by the CLI when a run starts.";
+            return Ok(AccountSnapshot {
+                auth_status: "unknown".into(),
+                email: None,
+                plan: None,
+                usage: unavailable_usage("Antigravity does not expose account usage."),
+                checked_at_ms: now_ms(),
+                message: Some(message.into()),
+            });
+        }
         let mut process = AccountProcess::spawn(
             executable,
             if binding.agent_id == "codex" {
@@ -166,6 +180,11 @@ impl AccountRuntime {
         if !binding.managed {
             return Err(AdapterError::Invalid(
                 "Existing CLI profiles are read-only. Create a managed profile to sign in.".into(),
+            ));
+        }
+        if binding.agent_id == "antigravity" {
+            return Err(AdapterError::Invalid(
+                "Antigravity sign-in happens in its own terminal. Open Antigravity for this profile, sign in there, then start a run.".into(),
             ));
         }
         if !valid_login_method(&binding.agent_id, method) {

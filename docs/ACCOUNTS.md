@@ -51,8 +51,24 @@ entries cannot be removed or signed out here; manage those sign-ins through
 the official CLIs. There is still no in-place credential replacement: remove
 the profile and create a new one to start over.
 
-The **Existing Codex CLI** (`system-codex`) and **Existing Claude CLI**
-(`system-claude`) entries use the installed CLIs' environment and configuration
+## Antigravity accounts
+
+Antigravity (`agy`) profiles work differently from Codex and Claude Code
+because the CLI exposes no account-status command. **Existing Antigravity
+CLI** uses the installed CLI as-is. A managed profile redirects the child's
+home to its private directory, so that profile's Antigravity state and saved
+conversations stay separate. Status always reads unknown: **Refresh account**
+records that no check exists rather than probing the CLI, and runs are not
+gated on sign-in — the CLI reports authentication failures itself. To sign
+in to a managed profile, choose **Open Antigravity** on its card, complete
+sign-in in that terminal, then start work. There is no browser, device-code
+or SSO sign-in job for Antigravity, and no usage display. Antigravity runs
+in plan mode (read-only); see
+[the adapter contract](AGENT-ADAPTERS.md#antigravity).
+
+The **Existing Codex CLI** (`system-codex`), **Existing Claude CLI**
+(`system-claude`) and **Existing Antigravity CLI** (`system-antigravity`)
+entries use the installed CLIs' environment and configuration
 as inherited by the Switchya host, including an existing `CLAUDE_CONFIG_DIR`.
 Account management treats both as read-only for sign-in: they can be selected
 and explicitly inspected, but Switchya cannot start a replacement login for

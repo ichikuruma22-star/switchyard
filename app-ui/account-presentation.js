@@ -1,4 +1,4 @@
-export const agentName=id=>({codex:'Codex',claude:'Claude Code'}[id]||id);
+export const agentName=id=>({codex:'Codex',claude:'Claude Code',antigravity:'Antigravity'}[id]||id);
 export const authLabel=status=>({signed_in:'Signed in',signed_out:'Signed out',unknown:'Sign-in status unknown'}[status]||'Sign-in status unknown');
 export const activeLogin=login=>['starting','awaiting_user'].includes(login?.status);
 export function mergeLoginState(previous,incoming){
@@ -17,6 +17,6 @@ export function chosenProfile(profiles,defaults,agentId,explicitId){
   const id=explicitId||defaults?.[agentId];
   return profiles.find(profile=>profile.id===id&&profile.agent_id===agentId)||null;
 }
-export const canStartProfile=profile=>Boolean(profile)&&(profile.managed?profile.account?.auth_status==='signed_in':profile.account?.auth_status!=='signed_out');
+export const canStartProfile=profile=>Boolean(profile)&&(profile.agent_id==='antigravity'?true:profile.managed?profile.account?.auth_status==='signed_in':profile.account?.auth_status!=='signed_out');
 export const foldProfileName=value=>String(value||'').trim().replace(/[A-Z]/g,letter=>letter.toLowerCase());
 export function validProfileName(value){const name=String(value||'').trim();return name.length>0&&[...name].length<=64&&!/\p{Cc}/u.test(name);}

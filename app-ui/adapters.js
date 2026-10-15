@@ -171,6 +171,8 @@ function AdapterReview({run,onDecision,busy,error,connected}) {
   const approvals=run?.pending_approvals||[],agent=agentName(run?.adapter_id)||'Agent';
   const scope=run?.adapter_id==='claude'
     ?"Allow once approves only the tool input shown. Existing CLI permission rules still apply. Tools run with your OS permissions."
+    :run?.adapter_id==='antigravity'
+    ?"Antigravity runs in plan mode: it inspects and answers but cannot apply edits, so there are no approval requests. Tools run with your OS permissions."
     :"Allow once permits the displayed command or file change with your OS permissions. The CLI enforces its own sandbox.";
   return html`<header class="review-header"><h2>Agent review</h2><span class="field-hint">${approvals.length?`${approvals.length} pending`:'No pending decisions'}</span></header><div class="review-content">
     ${error&&html`<${Notice} title="Decision could not be confirmed" tone="stop">${error}<//>`}

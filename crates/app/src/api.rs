@@ -786,7 +786,7 @@ mod tests {
         let harness = Harness::new().await;
         let (status, initial) = harness.request("GET", "/api/account-profiles", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(initial["profiles"].as_array().unwrap().len(), 2);
+        assert_eq!(initial["profiles"].as_array().unwrap().len(), 3);
         assert_eq!(initial["profiles"][0]["id"], "system-codex");
         assert_eq!(initial["profiles"][0]["read_only"], true);
         assert_eq!(initial["profiles"][0]["refreshing"], false);
@@ -903,7 +903,7 @@ mod tests {
         assert_eq!(removed["defaults"]["codex"], "system-codex");
         let (status, after) = harness.request("GET", "/api/account-profiles", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(after["profiles"].as_array().unwrap().len(), 2);
+        assert_eq!(after["profiles"].as_array().unwrap().len(), 3);
         let (status, missing) = harness
             .request(
                 "POST",

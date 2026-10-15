@@ -1029,3 +1029,70 @@ async fn live_codex_resume_of_a_saved_thread_in_a_signed_out_home() {
     }));
     manager.shutdown().await;
 }
+
+fn antigravity_fixture() -> PathBuf {
+    static FIXTURE: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
+        let dir = tempfile::tempdir().unwrap().keep();
+        let binary = dir.join(if cfg!(windows) {
+            "antigravity-fixture.exe"
+        } else {
+            "antigravity-fixture"
+        });
+        let source =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/antigravity_child.rs");
+        let result = std::process::Command::new("rustc")
+            .arg("--edition=2024")
+            .arg(source)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "antigravity fixture compile failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        binary
+    });
+    FIXTURE.clone()
+}
+
+#[tokio::test]
+async fn antigravity_plan_run_streams_text_and_tools_to_completion() {
+    let manager = AdapterManager::new();
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().canonicalize().unwrap();
+    let run = manager
+        .start_process(
+            StartRequest {
+                adapter_id: "antigravity".into(),
+                project_path: project.clone(),
+                prompt: "Inspect the fixture.".into(),
+                command_id: uuid::Uuid::new_v4().to_string(),
+                continue_run_id: None,
+                profile: None,
+            },
+            project,
+            antigravity_fixture(),
+            Vec::new(),
+        )
+        .unwrap();
+    let finished = wait_until(&manager, &run.id, |run| !run.state.is_active()).await;
+    assert_eq!(finished.state, RunState::Completed);
+    assert_eq!(
+        finished.thread_id.as_deref(),
+        Some("123e4567-e89b-12d3-a456-426614174000")
+    );
+    let events = all_events(&manager, &run.id);
+    assert!(events.iter().any(|event| {
+        event.kind == "item_completed"
+            && event.payload["item"]["type"] == "agentMessage"
+            && event.payload["item"]["text"] == "Fixture answer"
+    }));
+    assert!(events.iter().any(|event| {
+        event.kind == "item_completed"
+            && event.payload["item"]["name"] == "view_file"
+            && event.payload["item"]["output"] == "2 lines, 12 bytes"
+    }));
+    manager.shutdown().await;
+}
