@@ -3,9 +3,11 @@
 //!
 //! Two things no layer above notices:
 //!
-//! * A client that connects and then **sends nothing**. HTTP's own header
-//!   timeout only starts once the first bytes have told the server which
-//!   HTTP version it is dealing with; until then the connection would wait
+//! * A client that connects and then **sends nothing** — or nothing past
+//!   the start of the HTTP/2 preface. HTTP's own timeouts only start once
+//!   the opening bytes have told the server which HTTP version it is
+//!   dealing with: HTTP/2 once all of [`H2_PREFACE`] has arrived, HTTP/1 as
+//!   soon as a byte departs from it. Until then the connection would wait
 //!   forever.
 //! * A client that keeps its connection open but **never reads** from it.
 //!   Every write then waits forever: the response is never finished, the
@@ -14,12 +16,12 @@
 //!   never times such a connection out (the peer is alive, its window is
 //!   just closed).
 //!
-//! [`StallGuard`] fails the first read when nothing has arrived by a
-//! deadline, and fails a write that has made no progress at all for a set
-//! time; either ends the connection like any other I/O error. Neither is a
-//! limit on how long a request or a response may take: after its first
-//! byte a client may be as quiet as it likes, and every byte the peer
-//! accepts starts the write clock afresh.
+//! [`StallGuard`] fails a read when the peer has not made its HTTP version
+//! known by a deadline, and fails a write that has made no progress at all
+//! for a set time; either ends the connection like any other I/O error.
+//! Neither is a limit on how long a request or a response may take: once
+//! its version is known a client may be as quiet as it likes, and every
+//! byte the peer accepts starts the write clock afresh.
 
 use std::future::Future;
 use std::io;
@@ -29,26 +31,54 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::time::Sleep;
 
+/// How an HTTP/2 connection opens. The server reads until the peer's bytes
+/// either depart from it (HTTP/1) or include all of it (HTTP/2), with no
+/// timeout of its own.
+const H2_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
 /// See the module documentation.
 pub(crate) struct StallGuard<S> {
     inner: S,
     write_timeout: Duration,
     /// Armed while a write is waiting for the peer.
     stalled_since: Option<Pin<Box<Sleep>>>,
-    /// Until the peer's first byte: when to stop waiting for it.
-    silent_until: Option<Pin<Box<Sleep>>>,
+    /// Until the peer's HTTP version is known: when to stop waiting for it.
+    undecided_until: Option<Pin<Box<Sleep>>>,
+    /// How much of [`H2_PREFACE`] the peer has sent so far.
+    preface_matched: usize,
 }
 
 impl<S> StallGuard<S> {
-    /// Wraps `inner`. The peer has `first_byte` to send anything at all; a
-    /// write blocked for `write_timeout` fails. Both failures are
+    /// Wraps `inner`. The peer has `opening` to make its HTTP version
+    /// known; a write blocked for `write_timeout` fails. Both failures are
     /// [`io::ErrorKind::TimedOut`].
-    pub(crate) fn new(inner: S, first_byte: Duration, write_timeout: Duration) -> Self {
+    pub(crate) fn new(inner: S, opening: Duration, write_timeout: Duration) -> Self {
         StallGuard {
             inner,
             write_timeout,
             stalled_since: None,
-            silent_until: Some(Box::pin(tokio::time::sleep(first_byte))),
+            undecided_until: Some(Box::pin(tokio::time::sleep(opening))),
+            preface_matched: 0,
+        }
+    }
+
+    /// Follows the peer's opening bytes; disarms the opening deadline once
+    /// they tell which HTTP version the peer speaks.
+    fn opened_with(&mut self, fresh: &[u8]) {
+        if self.undecided_until.is_none() {
+            return;
+        }
+        let expected = &H2_PREFACE[self.preface_matched..];
+        let compared = fresh.len().min(expected.len());
+        if fresh[..compared] != expected[..compared] {
+            // HTTP/1: its header timeout takes over.
+            self.undecided_until = None;
+            return;
+        }
+        self.preface_matched += compared;
+        if self.preface_matched == H2_PREFACE.len() {
+            // HTTP/2: its keep-alive pings take over.
+            self.undecided_until = None;
         }
     }
 
@@ -91,20 +121,18 @@ impl<S: AsyncRead + Unpin> AsyncRead for StallGuard<S> {
         let before = buf.filled().len();
         match Pin::new(&mut self.inner).poll_read(cx, buf) {
             Poll::Ready(result) => {
-                if buf.filled().len() > before {
-                    // The peer has spoken; from here on, quiet is allowed.
-                    self.silent_until = None;
-                }
+                // Once the peer's version is known, quiet is allowed.
+                self.opened_with(&buf.filled()[before..]);
                 Poll::Ready(result)
             }
             Poll::Pending => {
-                if let Some(deadline) = self.silent_until.as_mut()
+                if let Some(deadline) = self.undecided_until.as_mut()
                     && deadline.as_mut().poll(cx).is_ready()
                 {
-                    self.silent_until = None;
+                    self.undecided_until = None;
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "the peer connected and sent nothing",
+                        "the peer connected and never said which HTTP version it speaks",
                     )));
                 }
                 Poll::Pending
@@ -152,11 +180,11 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    const FIRST_BYTE: Duration = Duration::from_secs(120);
+    const OPENING: Duration = Duration::from_secs(120);
     const TIMEOUT: Duration = Duration::from_secs(60);
 
     fn guard<S>(inner: S) -> StallGuard<S> {
-        StallGuard::new(inner, FIRST_BYTE, TIMEOUT)
+        StallGuard::new(inner, OPENING, TIMEOUT)
     }
 
     #[tokio::test(start_paused = true)]
@@ -228,7 +256,7 @@ mod tests {
             .await
             .expect_err("the read must give up");
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert_eq!(started.elapsed(), FIRST_BYTE);
+        assert_eq!(started.elapsed(), OPENING);
     }
 
     #[tokio::test(start_paused = true)]
@@ -237,15 +265,89 @@ mod tests {
         let mut guarded = guard(ours);
         let writer = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(100)).await;
+            // Not the HTTP/2 preface: HTTP/1, from the first byte.
             theirs.write_all(b"G").await.unwrap();
-            // Ten times the first-byte allowance of silence, then more.
-            tokio::time::sleep(FIRST_BYTE * 10).await;
+            // Ten times the opening allowance of silence, then more.
+            tokio::time::sleep(OPENING * 10).await;
             theirs.write_all(b"E").await.unwrap();
             theirs
         });
         let mut got = [0u8; 2];
         guarded.read_exact(&mut got).await.unwrap();
         assert_eq!(&got, b"GE");
+        drop(writer.await.unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_that_stops_inside_the_h2_preface_is_dropped() {
+        let (ours, mut theirs) = tokio::io::duplex(64);
+        let mut guarded = guard(ours);
+        // Bytes that could still be HTTP/2 do not tell the version, and
+        // more of them do not buy more time.
+        let writer = tokio::spawn(async move {
+            theirs.write_all(b"P").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(100)).await;
+            theirs.write_all(b"RI * HT").await.unwrap();
+            // Long after the deadline, hang up: a read that gets this far
+            // was never given up.
+            tokio::time::sleep(OPENING * 10).await;
+            drop(theirs);
+        });
+        let started = tokio::time::Instant::now();
+        // Read the way the server tells the version: up to the preface's
+        // length, until the bytes depart from it.
+        let mut opening = [0u8; H2_PREFACE.len()];
+        let mut filled = 0;
+        let error = loop {
+            match guarded.read(&mut opening[filled..]).await {
+                Ok(read) => {
+                    assert_ne!(read, 0, "the read must give up before the peer hangs up");
+                    filled += read;
+                }
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(&opening[..filled], b"PRI * HT");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(started.elapsed(), OPENING);
+        writer.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_the_whole_h2_preface_a_peer_may_be_quiet() {
+        let (ours, mut theirs) = tokio::io::duplex(64);
+        let mut guarded = guard(ours);
+        let writer = tokio::spawn(async move {
+            theirs.write_all(&H2_PREFACE[..3]).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(100)).await;
+            theirs.write_all(&H2_PREFACE[3..]).await.unwrap();
+            tokio::time::sleep(OPENING * 10).await;
+            theirs.write_all(b"!").await.unwrap();
+            theirs
+        });
+        let mut got = [0u8; H2_PREFACE.len() + 1];
+        guarded.read_exact(&mut got).await.unwrap();
+        assert_eq!(&got[..H2_PREFACE.len()], H2_PREFACE);
+        assert_eq!(got[H2_PREFACE.len()], b'!');
+        drop(writer.await.unwrap());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_byte_off_the_h2_preface_makes_it_http1() {
+        let (ours, mut theirs) = tokio::io::duplex(64);
+        let mut guarded = guard(ours);
+        let writer = tokio::spawn(async move {
+            // `POST` starts like the preface and departs from it at `O`.
+            theirs.write_all(b"P").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(100)).await;
+            theirs.write_all(b"O").await.unwrap();
+            tokio::time::sleep(OPENING * 10).await;
+            theirs.write_all(b"ST").await.unwrap();
+            theirs
+        });
+        let mut got = [0u8; 4];
+        guarded.read_exact(&mut got).await.unwrap();
+        assert_eq!(&got, b"POST");
         drop(writer.await.unwrap());
     }
 
