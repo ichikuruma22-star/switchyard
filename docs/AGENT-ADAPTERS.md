@@ -49,7 +49,9 @@ The `switchya agent` CLI uses these same authenticated host routes for listing
 and showing runs, starting or continuing a conversation, reviewing recovery,
 and interrupting work. `--launch-info` attaches it to an existing app host;
 otherwise it starts and shuts down an owned host with the same durable stores.
-`agent run --agent claude` selects Claude Code; the default remains Codex.
+`agent run --agent claude` selects Claude Code and `--agent antigravity`
+Antigravity; the default remains Codex. As in the host, managed Antigravity
+profiles are not gated on a status check.
 `agent continue` retains the stored agent, account and project.
 See [terminal examples](SWITCHYA.md#continue-an-agent-conversation-from-the-terminal).
 An uncertain start is reported with its command UUID and is never automatically
@@ -107,8 +109,12 @@ answer, but plan mode cannot apply edits, so this adapter receives no
 approval requests and `Decide` calls are rejected. Streamed `step_update`
 events become assistant deltas, completed messages and tool items; the
 `init` event's conversation ID is saved as the thread and `--conversation`
-resumes it. Interruption terminates the process tree and marks the run
-interrupted; an exit without a `result` event is `recovery_required`.
+resumes it. A successful `result` records the confirmed turn, which a later
+continuation requires. If a resumed run's `init` or `result` reports a
+different conversation ID, the run stops as `recovery_required` instead of
+silently continuing in a new thread. Interruption terminates the process
+tree and marks the run interrupted; an exit without a `result` event is
+`recovery_required`.
 Prompts travel as a command-line argument, so a single message is limited
 to 24,000 bytes. A managed profile redirects the child's `HOME` and
 `USERPROFILE` to its private directory, scoping the CLI's
@@ -136,7 +142,7 @@ Windows processes start suspended, join a kill-on-close Job Object, then resume.
 
 ## Saved conversations
 
-The app host saves runs, their bounded event windows and each run's trusted profile binding in `adapter-runs.sqlite3` inside its data directory. The file is created private to the user on Unix, and SQLite's exclusive locking keeps a second host from opening it. If saving fails, the run is not started. Streamed assistant fragments are replaced by the completed message once Codex reports it. Codex keeps the model-side thread in the selected profile's own Codex home; Switchya stores only the thread ID, never Codex's internal databases or tokens. A durable host sends `ephemeral=false`; an in-memory manager sends `ephemeral=true`. The external CLI may also maintain its own diagnostics, cache and integration state.
+The app host saves runs, their bounded event windows and each run's trusted profile binding in `adapter-runs.sqlite3` inside its data directory. The file is created private to the user on Unix, and SQLite's exclusive locking keeps a second host from opening it. If saving fails, the run is not started. Streamed assistant fragments are replaced by the completed message once the CLI reports it; a completed Claude Code text block is matched to its fragments by the block's streamed index, which differs from its position in the completed message when a thinking block came first. Codex keeps the model-side thread in the selected profile's own Codex home; Switchya stores only the thread ID, never Codex's internal databases or tokens. A durable host sends `ephemeral=false`; an in-memory manager sends `ephemeral=true`. The external CLI may also maintain its own diagnostics, cache and integration state.
 
 When the host starts, a run left active by a previous host is never resumed. If its input might have been sent, the run becomes `recovery_required`; otherwise it becomes `failed`. Both receive an `adapter_error` event stating that nothing was replayed. Claude's chosen session ID is saved before writing the prompt so a crash during delivery is treated as uncertain.
 

@@ -273,7 +273,10 @@ streaming or not):
 
 * an upstream `401` / `403` is never the client's status and its body is
   never forwarded. A rejected credential (also a service-account file that
-  cannot be loaded, or Google's `400 API_KEY_INVALID`) is a 502
+  cannot be loaded, Google's `400 API_KEY_INVALID`, or a `400` saying the
+  vendor disabled or restricted the organisation or account behind the key,
+  such as Anthropic's "This organization has been disabled." or Groq's
+  `organization_restricted`) is a 502
   `upstream_auth_error`, "the upstream provider rejected the gateway's
   credential". A `403` the transport files under another class so that the
   scheduler rests the model rather than the key ("project … does not have

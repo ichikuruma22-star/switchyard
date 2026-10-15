@@ -140,7 +140,7 @@ retention_days = 30
 # prefix = ""
 # priority = 0                # higher is tried first; lower only when higher is unavailable
 # proxy = ""                  # overrides [upstream].proxy
-# headers = { "X-Title" = "switchyard" }
+# headers = { "X-Title" = "switchyard", "X-Team-Token" = "env:TEAM_TOKEN" }   # values may be env:NAME, like api_keys
 # exclude = ["*-preview"]     # hide models by wildcard
 # discover = true             # ask the provider for its model list when `models` is empty
 # wire_api = "auto"           # auto | chat | responses

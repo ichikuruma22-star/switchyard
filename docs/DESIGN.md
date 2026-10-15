@@ -124,6 +124,16 @@ first protocol).
   stored reasoning → `U.encode_request` → payload rules → upstream →
   `U.decode_response`/`U.stream_decoder` → `C.encode_response`/`C.stream_encoder`.
 
+Over HTTP the gateway keeps no stored responses of its own. A Responses
+request that carries `previous_response_id` or `conversation` refers to state
+only a Responses upstream can look up, so when the upstream picked for it
+speaks another protocol it is refused before anything is sent: 400
+`invalid_request_error` with `param` naming the field (code
+`previous_response_not_found` for `previous_response_id`). The client then
+resends the full conversation in `input`. Other client protocols define no
+such fields and are not checked. The WebSocket endpoint keeps a transcript
+per connection instead (§10).
+
 ---------------------------------------------------------------------------
 
 ## 3. Codecs (`codec-chat`, `codec-responses`, `codec-anthropic`, `codec-gemini`)
@@ -278,8 +288,11 @@ Decides *which credential serves which model*.
 * **Outcome reporting** — success resets the failure streak and updates the
   latency EWMA; failures start a cooldown by `FailureClass`
   (`config::CooldownConfig`; upstream `Retry-After` wins; rate-limit backoff
-  doubles per consecutive failure up to the cap; 404 cools only that model on
-  that credential; request faults cool nothing).
+  doubles once per consecutive rate-limit window up to the cap — a 429 that
+  lands while that model already rests on the credential, whether after an
+  earlier 429 (from a request that was in flight when the window opened), a
+  5xx, a transport error or a 404, does not escalate it; 404 cools only that
+  model on that credential; request faults cool nothing).
 * **Errors** — unknown model; no credential configured; all cooling down (with
   the soonest recovery time, surfaced as `Retry-After`).
 * **Introspection** for the admin API: credential states, per-credential
@@ -401,7 +414,7 @@ authentication.
 | GET, HEAD | `/healthz` | `{"status":"ok"}` |
 | GET | `/v1/models`, `/v1/models/{id}` | OpenAI shape; Anthropic shape when the request has an `anthropic-version` header |
 | POST | `/v1/chat/completions` | |
-| POST | `/v1/completions` | legacy shim over chat |
+| POST | `/v1/completions` | legacy shim over chat; text prompts only (token-id prompts → 400 on `prompt`); logprobs in the legacy shape, `text_offset` counted from the start of the completion (the prompt is never echoed) |
 | POST | `/v1/responses` | |
 | GET | `/v1/responses` | WebSocket upgrade (§10) |
 | POST | `/v1/responses/input_tokens` | token count |
@@ -428,7 +441,9 @@ authentication.
   off, foreign browser origins are rejected for authenticated requests too.
 * **Bodies**: limit `server.body_limit_mb`; gzip / br / zstd request bodies
   are decoded. Raw JSON side endpoints serialize the same parsed body used
-  to authorize its model, including requests labeled text/plain.
+  to authorize its model, including requests labeled text/plain, and
+  forward it as `application/json`, so the `model` rewrite applies whatever
+  the client's label.
 * **Headers out**: `x-request-id` on every response; `Retry-After` from
   errors; when `upstream.passthrough_headers`, the upstream's rate-limit and
   request-id headers.
@@ -504,7 +519,11 @@ serve incremental turns:
 * `type`, `generate`, `previous_response_id` never reach a stateless upstream;
   `stream` is forced true;
 * orphaned tool calls / outputs in the reconstructed input are repaired
-  (dropped) so the upstream does not reject the transcript.
+  (dropped) so the upstream does not reject the transcript; a `reasoning`
+  item that the repair leaves without a following output item (an assistant
+  message or a call) is dropped as well, and so is a `reasoning` item the
+  gateway emitted only to carry the signature of the call behind it, when
+  that call is dropped.
 
 Validation errors are sent as
 `{"type":"error","status":<n>,"error":{"message","type","code"?,"param"?}}`
@@ -552,7 +571,15 @@ admin route is 404. Non-loopback peers are refused (403) unless
 `SWITCHYARD_ADMIN_ALLOW_REMOTE` is `1`, `true` or `yes` (case-insensitive).
 Neither container recipe (`Dockerfile`, `docker/Dockerfile.release`) sets it:
 pass `-e SWITCHYARD_ADMIN_ALLOW_REMOTE=true` at run time to reach the
-dashboard across the container boundary. Five consecutive bad secrets from one IP → 30 min
+dashboard across the container boundary. A direct loopback request must also
+be addressed to the machine by one of its own names: its `Host`, HTTP/2
+authority and every `Origin` must name `localhost`, a loopback address,
+`server.host` or the listener's address (any IP literal for a wildcard
+listener), else 403 before the lockout table is consulted, so a page that
+points its own name at 127.0.0.1 (DNS rebinding) cannot lock the operator
+out with wrong secrets. Relayed requests count as remote and are not held to
+this. Reaching a loopback listener through a hosts-file alias needs that name
+in `server.host`. Five consecutive bad secrets from one IP → 30 min
 lockout (429 with `Retry-After`). Constant-time comparison. Browsers cannot
 set headers on WebSockets, so `POST /admin/api/ws-ticket` returns a
 single-use ticket valid 30 s.
@@ -672,7 +699,21 @@ dashboard URL of that run. Logs go to stderr (pretty when a
 terminal, JSON otherwise).
 
 The CLIProxyAPI importer leaves out source secrets written as `env:NAME` or
-`${NAME}` and lists them in its not-imported report. These are literal text
+`${NAME}`, provider header values included, and lists them in its
+not-imported report. These are literal text
 in the source format but environment lookups in Switchyard; importing must
 not silently grant a foreign file access to the gateway's environment.
 An operator can add an intentional reference after reviewing the output.
+
+CLIProxyAPI's `request-retry` counts extra rounds over every credential (or
+`max-retry-credentials` of them); `routing.max_attempts` counts upstream calls
+in total. The importer therefore sets `max_attempts` to `request-retry` + 1
+rounds (one round when `request-retry` is absent) times the credentials one
+round tries (every credential of an enabled imported provider, or
+`max-retry-credentials` when that is above 0 and lower), never below the
+default, and its report says how the value was derived. A model pool of a prefixed
+OpenAI-compatible provider becomes the virtual model `prefix/pool`, plus the
+bare pool name unless `force-model-prefix` is on. A pool member whose name an
+earlier entry already gives to another upstream model, or that another pool of
+the same provider is named after (earlier or later in the list), is left out
+of the pool and reported.

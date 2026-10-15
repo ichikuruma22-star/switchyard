@@ -327,13 +327,29 @@ switchya agent watch --run RUN_ID
 `continue` takes the latest finished run ID from `agent sessions` and preserves
 its agent, project and account. It sends only the new prompt. A managed account must
 already be signed in — in the app, or with `agent login` above; starting a run checks
-its status when needed. Listing accounts shows cached status and does not inspect credentials.
+its status when needed. Managed Antigravity profiles are not gated on a status
+check, because the Antigravity CLI has none; it reports a missing sign-in itself.
+Listing accounts shows cached status and does not inspect credentials.
 
 While the app stays open, put `--launch-info PATH_TO_PRIVATE_LAUNCH_FILE` before
 `agent` to connect to its host. Without that option the CLI owns a temporary
 host using the same configured data directory, and shuts it down on exit. Close
 the app first if it owns that directory. Reading saved runs never starts a
 model turn.
+
+`agent login` first checks a managed Codex or Claude Code profile's status
+unless it is already known to be signed out, and starts a sign-in only for a
+signed-out profile. An already signed-in profile is reported, not signed in
+again. The command exits with an error unless the sign-in completes. Without
+`--launch-info`, the sign-in runs in the command's temporary host, so Ctrl-C
+cancels it. With the app started with `--write-launch-info` (see
+[Use the CLI while the app stays open](#use-the-cli-while-the-app-stays-open)),
+use `--launch-info` to sign in through its host: Ctrl-C then only stops
+watching, and the sign-in continues there. Either way, a sign-in that is not
+completed within ten minutes times out. `agent login` refuses managed
+Antigravity profiles: choose **Open Antigravity** on the profile's card in the
+app and sign in in that terminal (see
+[Accounts](ACCOUNTS.md#antigravity-accounts)).
 
 `watch` attaches to a run the app or another terminal already owns, using the
 same host, saved events and approval handling. It only reads activity and

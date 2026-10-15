@@ -65,7 +65,7 @@ rules. None starts a model or approves an agent operation.
 | `POST /api/workspace` | `{project_id, session_id, conversation_id, mode, tool, theme}` | `{selection}` after project membership validation |
 | `GET /api/projects/:id/files?path=.` | Relative folder | Bounded entries, omissions and truncation |
 | `GET /api/projects/:id/file?path=...` | Relative file | Content, hash and truncation |
-| `GET /api/projects/:id/search?query=...&path=.&limit=30` | Literal query, optional folder/count | Bounded matches and scan statistics |
+| `GET /api/projects/:id/search?query=...&path=.&limit=30` | Literal query, optional folder/count | Bounded `matches` and scan statistics: `files_searched`, `bytes_read`, `omitted` (entries skipped because they could not be validated or read) and `truncated` |
 | `GET /api/projects/:id/changes` | — | Current Git branch and file states |
 | `GET /api/projects/:id/diff?path=...&scope=unstaged` | Exact relative tracked path; staged or unstaged | Bounded diff |
 | `GET /api/projects/:id/checkpoints?limit=20&before=...` | Optional prior page's cursor | `{checkpoints, next_before}` |

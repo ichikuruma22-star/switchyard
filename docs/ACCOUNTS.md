@@ -35,7 +35,17 @@ which suits machines where opening a browser is awkward. Claude profiles can
 use **Claude subscription** (`--claudeai`, the default), **Anthropic Console**
 (`--console`, API usage billing) or **Single sign-on (SSO)** (`--sso`). Choose
 the method next to **Sign in** in Accounts, or from the CLI:
-`switchya agent login --profile PROFILE_ID [--method device]`.
+`switchya agent login --profile PROFILE_ID [--method device]`. The CLI checks
+the profile's status first, so it works without the app open, and starts a
+sign-in only for a signed-out profile; an already signed-in profile is
+reported instead. It exits with an error unless the sign-in completes.
+Without `--launch-info`, the sign-in runs in the command's temporary host and
+Ctrl-C cancels it; with the app started with `--write-launch-info`, put
+`--launch-info PATH` before `agent` and the sign-in continues in the app after
+Ctrl-C (see
+[Use the CLI while the app stays open](SWITCHYA.md#use-the-cli-while-the-app-stays-open)
+and [the terminal guide](SWITCHYA.md#continue-an-agent-conversation-from-the-terminal)).
+Either way, a sign-in that is not completed within ten minutes times out.
 `switchya agent use --profile PROFILE_ID` makes a profile the default from
 the terminal. API keys remain a gateway/provider concern; none of these
 methods asks for one.
@@ -78,9 +88,10 @@ and explicitly inspected, but Switchya cannot start a replacement login for
 them. They may be used without first requesting account inspection. Manage
 their sign-ins through the official CLIs.
 
-Managed profiles require a successful signed-in status check before starting
-work. A status check is a snapshot, not a guarantee that the next request will
-succeed. After restarting the host, refresh managed profiles again.
+Managed Codex and Claude Code profiles require a successful signed-in status
+check before starting work. A status check is a snapshot, not a guarantee that
+the next request will succeed. After restarting the host, refresh managed
+profiles again.
 
 ## Concurrent work and switching
 
@@ -187,8 +198,10 @@ poll the cached login state. Host shutdown cancels owned account work.
 
 The account manager and scoped CLI environment support Windows, macOS and
 Linux. Browser continuation uses the platform browser launcher. External
-Claude terminals require a supported installed terminal and native CLI;
-headless systems may need the displayed login URL opened manually elsewhere.
+terminals for managed Claude Code and Antigravity profiles (**Open Claude
+Code**, **Open Antigravity**) open on Windows, macOS and Linux and require a
+supported installed terminal and native CLI; headless systems may need the
+displayed login URL opened manually elsewhere.
 
 Automated checks use controlled CLI fixtures and local metadata. They cover
 isolation, usage parsing, login state, cancellation, request retries and

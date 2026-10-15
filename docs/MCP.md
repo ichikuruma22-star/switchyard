@@ -36,7 +36,11 @@ With the current CLI on PATH, configure your MCP client to start:
 switchya mcp --project /absolute/path/to/project
 ```
 
-For a Windows project, pass its absolute Windows path as one argument. Normal
+For a Windows project, pass its absolute Windows path as one argument. A
+relative path such as `.` is resolved against the MCP process's own working
+directory, also when the server joins a running app's host. That directory
+is whatever the client starts the server in, so an absolute path is still
+recommended. Normal
 global `--config` and `--data-dir` options select an isolated workspace. The
 server discovers a live host for that data directory; otherwise it starts
 its own. The first process that starts a host owns its lifetime. Closing its
@@ -61,7 +65,7 @@ message. All tools except saving a checkpoint are read-only.
 | `switchya_project_context` | Project metadata, root entries, current Git state, five recent checkpoint summaries, and root AGENTS.md/README.md/CLAUDE.md previews of at most 12,000 characters each. Individual unavailable sections are reported. Read nested instructions before changing a subfolder. |
 | `switchya_list_files` | One relative folder. Scans at most 2,000 entries; reports omissions and truncation. Follow subfolders or a known path when a broad listing is incomplete. |
 | `switchya_read_file` | UTF-8 content and hash, optionally starting at a line and returning 1–1,000 lines. The underlying file preview is capped at 256 KiB; a truncated preview is not the complete file. |
-| `switchya_search` | Literal, case-sensitive text and filename search. Query is 1–512 UTF-8 bytes, limit is 1–100 matches. Scan budgets and truncation are explicit; narrow the folder when incomplete. |
+| `switchya_search` | Literal, case-sensitive text and filename search. Query is 1–512 UTF-8 bytes, limit is 1–100 matches. Scan budgets and truncation are explicit; narrow the folder when incomplete. Entries inside the searched folder that cannot be validated or read (an unreadable subfolder, a reserved name such as `aux`) are skipped and counted in `omitted` instead of failing the search; the requested folder itself must still be readable. |
 | `switchya_git_changes` | Current branch and staged, unstaged and untracked paths. Reports when the project is not in a repository. |
 | `switchya_git_diff` | One tracked path's staged or unstaged diff, capped at 256 KiB. Read an untracked file through `switchya_read_file`. |
 | `switchya_list_conversations` | Project's native sessions and external turns, 1–100 at a time. Pass `next_before` for an older page. External turns use `conversation_id` and `continued_from` to link their conversation. |
