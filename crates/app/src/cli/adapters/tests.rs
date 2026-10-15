@@ -33,6 +33,35 @@ fn fixture_run(state: RunState) -> AdapterRun {
     }
 }
 
+#[test]
+fn completed_reply_compaction_does_not_claim_that_history_was_lost() {
+    let completed = AdapterEvent {
+        schema_version: 1,
+        run_id: "runone".into(),
+        seq: 22,
+        at_ms: 0,
+        kind: "item_completed".into(),
+        payload: json!({"item":{"id":"message","type":"agentMessage","text":"Complete reply"}}),
+    };
+    // The live Claude run replaced deltas 19..21 with completion 22 while its
+    // retained-history boundary stayed at 1. The full reply remains available.
+    assert!(!history_was_trimmed(
+        18,
+        std::slice::from_ref(&completed),
+        1
+    ));
+    // Genuine retention past the reader's cursor still needs a warning.
+    assert!(history_was_trimmed(
+        18,
+        std::slice::from_ref(&completed),
+        22
+    ));
+    // A batch already delivered to this reader has not been lost even if the
+    // server's retention boundary advances while the response is in flight.
+    assert!(!history_was_trimmed(21, &[completed], 30));
+    assert!(!history_was_trimmed(18, &[], 22));
+}
+
 fn fixture_approval() -> AdapterApproval {
     AdapterApproval {
         id: "approvalone".into(),
@@ -57,6 +86,10 @@ struct Data {
     invalid_start_reply: bool,
     submission_wait: Option<(Arc<Notify>, Arc<Notify>)>,
     event_reads: Vec<u64>,
+    /// Remaining run reads answered with an undecodable body, as a temporary
+    /// transport failure appears to this client.
+    read_failures: usize,
+    run_reads: usize,
 }
 
 impl Data {
@@ -83,6 +116,8 @@ impl Data {
             invalid_start_reply: false,
             submission_wait: None,
             event_reads: vec![],
+            read_failures: 0,
+            run_reads: 0,
         }
     }
 }
@@ -173,7 +208,14 @@ async fn handle(State(data): State<Arc<Mutex<Data>>>, request: Request) -> Respo
             Json(json!({"project":data.project})).into_response()
         }
         (Method::GET, "/api/adapter-runs") => Json(json!({"runs":[data.run]})).into_response(),
-        (Method::GET, "/api/adapter-runs/runone") => Json(json!({"run":data.run})).into_response(),
+        (Method::GET, "/api/adapter-runs/runone") => {
+            data.run_reads += 1;
+            if data.read_failures > 0 {
+                data.read_failures -= 1;
+                return Response::new(Body::from("not-json"));
+            }
+            Json(json!({"run":data.run})).into_response()
+        }
         (Method::GET, "/api/adapter-runs/runone/events") => {
             let after = url::form_urlencoded::parse(query.as_bytes())
                 .find(|(k, _)| k == "after_seq")
@@ -312,6 +354,125 @@ fn a_corrected_final_message_is_displayed_in_full() {
     assert_eq!(assistant_output(&event, &mut streamed).unwrap(), "");
 }
 
+#[test]
+fn a_completed_command_reads_as_status_and_bounded_unescaped_output() {
+    let summary = item_summary(
+        &json!({"id":"item_7","type":"commandExecution","command":"cargo test -p switchyard-app",
+            "cwd":"E:\\projects\\switchyard-app","status":"completed","exitCode":0,
+            "aggregatedOutput":"running 2 tests\ntest result: ok. 2 passed\n"}),
+        "runone",
+    )
+    .unwrap();
+    assert_eq!(
+        summary,
+        "$ cargo test -p switchyard-app\n  in E:\\projects\\switchyard-app\n  completed, exit code 0\nrunning 2 tests\ntest result: ok. 2 passed"
+    );
+    // A single file read must not become tens of thousands of escaped characters.
+    let long = (0..5000).fold(String::new(), |mut text, line| {
+        use std::fmt::Write;
+        let _ = writeln!(text, "line {line} of a long file");
+        text
+    });
+    let bounded = item_summary(
+        &json!({"type":"commandExecution","command":"type big.txt","status":"failed","exitCode":1,
+            "aggregatedOutput":long}),
+        "runone",
+    )
+    .unwrap();
+    assert!(bounded.len() < 4400, "summary length {}", bounded.len());
+    assert!(bounded.contains("failed, exit code 1"));
+    assert!(bounded.contains("line 4999 of a long file"));
+    assert!(bounded.contains("switchya agent show --run runone"));
+    assert!(!bounded.contains("\\n"));
+}
+
+#[test]
+fn a_very_long_completed_command_keeps_its_start_status_and_output() {
+    let long = format!(
+        "pwsh -Command Set-Content -Path big.rs -Value @'\n{}\n'@",
+        "x".repeat(60_000)
+    );
+    let summary = item_summary(
+        &json!({"id":"item_11","type":"commandExecution","command":long,"cwd":"E:\\projects",
+            "status":"completed","exitCode":0,"aggregatedOutput":"wrote big.rs\n"}),
+        "runone",
+    )
+    .unwrap();
+    assert!(summary.len() < 1200, "summary length {}", summary.len());
+    assert!(summary.starts_with("$ pwsh -Command Set-Content -Path big.rs -Value @'"));
+    assert!(summary.contains("… command shortened; `switchya agent show --run runone`"));
+    assert!(summary.contains("  completed, exit code 0"));
+    assert!(summary.ends_with("wrote big.rs"));
+    let tool = item_summary(
+        &json!({"id":"item_12","type":"claudeTool","name":"PowerShell","status":"completed",
+            "input":{"command":"x".repeat(50_000)},"output":"done"}),
+        "runone",
+    )
+    .unwrap();
+    assert!(tool.len() < 700, "summary length {}", tool.len());
+    assert!(tool.starts_with("PowerShell xxx"));
+    assert!(tool.contains("… tool input shortened; `switchya agent show --run runone`"));
+    assert!(tool.ends_with("done"));
+}
+
+#[test]
+fn completed_items_report_file_paths_tool_status_and_unknown_activity() {
+    let files = item_summary(
+        &json!({"id":"item_8","type":"fileChange","status":"completed","changes":[
+            {"path":"app-ui/adapters.js","kind":{"type":"update"},"diff":"@@ -1 +1 @@\n-old\n+new\n"},
+            {"path":"docs/old.md","kind":{"type":"update","move_path":"docs/new.md"}},
+            {"path":"notes.txt","kind":{"type":"delete"}}]}),
+        "runone",
+    )
+    .unwrap();
+    assert_eq!(
+        files,
+        "Edited 3 files (completed)\n  edit app-ui/adapters.js\n  edit docs/old.md → docs/new.md\n  delete notes.txt"
+    );
+    let tool = item_summary(
+        &json!({"id":"toolone","type":"claudeTool","name":"Edit","status":"failed",
+            "input":{"file_path":"crates/app/src/cli/adapters.rs","old_string":"a"},"output":"String to replace not found"}),
+        "runone",
+    )
+    .unwrap();
+    assert_eq!(
+        tool,
+        "Edit crates/app/src/cli/adapters.rs (failed)\nString to replace not found"
+    );
+    // Unknown items stay visible rather than silently disappearing.
+    let unknown = item_summary(
+        &json!({"id":"item_9","type":"webSearch","status":"completed","query":"switchya"}),
+        "runone",
+    )
+    .unwrap();
+    assert!(unknown.starts_with("Web search (completed), item item_9"));
+    assert!(unknown.contains("switchya"));
+}
+
+#[test]
+fn lifecycle_only_items_are_not_rendered_as_activity() {
+    for item in [
+        json!({"id":"item_1","type":"reasoning"}),
+        json!({"id":"item_2","type":"userMessage","status":"completed"}),
+        json!({"id":"item_3","type":"agentMessage","text":""}),
+        json!({"id":"item_4","type":"fileChange","status":null,"changes":[]}),
+    ] {
+        assert!(lifecycle_only(&item), "{item} reports no activity");
+        assert_eq!(item_summary(&item, "runone"), None);
+    }
+    assert!(!lifecycle_only(
+        &json!({"id":"item_5","type":"reasoning","text":"Checking the event renderer"})
+    ));
+    assert_eq!(
+        item_summary(
+            &json!({"id":"item_5","type":"reasoning","text":"Checking the renderer"}),
+            "runone"
+        )
+        .unwrap(),
+        "Reasoning (status not reported), item item_5\n{\"text\":\"Checking the renderer\"}"
+    );
+}
+
 #[tokio::test]
 async fn continuation_uses_the_saved_project_and_account_despite_a_new_default() {
     let fixture = Harness::new(Data::new(RunState::Completed)).await;
@@ -335,6 +496,66 @@ async fn continuation_uses_the_saved_project_and_account_despite_a_new_default()
 }
 
 #[tokio::test]
+async fn claude_starts_select_its_default_and_continuations_keep_its_original_account() {
+    let project = tempfile::tempdir().unwrap();
+    let mut data = Data::new(RunState::Completed);
+    data.run.adapter_id = "claude".into();
+    data.profiles["profiles"][0]["agent_id"] = json!("claude");
+    data.profiles["profiles"][0]["managed"] = json!(true);
+    data.profiles["profiles"][0]["account"]["auth_status"] = json!("signed_in");
+    data.profiles["defaults"]["claude"] = json!("claude-default");
+    data.profiles["profiles"].as_array_mut().unwrap().push(json!({"id":"claude-default","name":"Claude default","agent_id":"claude","managed":true,"refreshing":false,"account":{"auth_status":"signed_in"}}));
+    let fixture = Harness::new(data).await;
+    let message = MessageArgs {
+        prompt: "A new message".into(),
+        command_id: None,
+    };
+    let continued = prepare(
+        &fixture.remote,
+        Selection::Continue("runone".into()),
+        &message,
+    )
+    .await
+    .unwrap();
+    assert_eq!(continued["adapter_id"], "claude");
+    assert_eq!(continued["profile_id"], "original");
+    let started = prepare(
+        &fixture.remote,
+        Selection::New {
+            agent: "claude".into(),
+            project: Some(project.path().into()),
+            profile: None,
+        },
+        &message,
+    )
+    .await
+    .unwrap();
+    assert_eq!(started["adapter_id"], "claude");
+    assert_eq!(started["profile_id"], "claude-default");
+    let wrong = prepare(
+        &fixture.remote,
+        Selection::New {
+            agent: "claude".into(),
+            project: Some(project.path().into()),
+            profile: Some("newdefault".into()),
+        },
+        &message,
+    )
+    .await;
+    assert!(wrong.is_err());
+    assert!(
+        !fixture
+            .data
+            .lock()
+            .unwrap()
+            .mutations
+            .iter()
+            .any(|path| path.ends_with("/refresh"))
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn accepted_retry_keeps_its_original_managed_profile_without_an_auth_refresh() {
     let project = tempfile::tempdir().unwrap();
     let mut data = Data::new(RunState::Completed);
@@ -344,6 +565,7 @@ async fn accepted_retry_keeps_its_original_managed_profile_without_an_auth_refre
     let body = prepare(
         &fixture.remote,
         Selection::New {
+            agent: "codex".into(),
             project: Some(project.path().to_owned()),
             profile: None,
         },
@@ -408,6 +630,149 @@ async fn interactive_decision_names_the_exact_approval_and_sends_its_hash_once()
             json!({"approval_id":"approvalone","expected_hash":"exact-preview-hash","decision":"allow_once"})
         ]
     );
+    fixture.stop().await;
+}
+
+#[test]
+fn watch_attaches_by_run_id_and_accepts_no_prompt_or_account_arguments() {
+    assert!(Cli::try_parse_from(["switchya", "agent", "watch", "--run", "runone"]).is_ok());
+    for flag in ["--prompt", "--project", "--profile"] {
+        assert!(
+            Cli::try_parse_from([
+                "switchya", "agent", "watch", "--run", "runone", flag, "value"
+            ])
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn attaching_to_an_active_run_submits_no_work_and_binds_the_exact_approval() {
+    let mut data = Data::new(RunState::AwaitingApproval);
+    data.run.pending_approvals.push(fixture_approval());
+    let fixture = Harness::new(data).await;
+    let (sender, receiver) = mpsc::channel(1);
+    sender
+        .send(Ok("allow_once approvalone".into()))
+        .await
+        .unwrap();
+    let mut input = Some(super::super::TerminalInput::new(receiver));
+    view(
+        &fixture.remote,
+        "runone",
+        &mut input,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    {
+        let data = fixture.data.lock().unwrap();
+        // Attaching reads the run and answers its exact approval. It never starts
+        // or continues a turn, and it never interrupts the agent it attached to.
+        assert_eq!(
+            data.decisions,
+            [
+                json!({"approval_id":"approvalone","expected_hash":"exact-preview-hash","decision":"allow_once"})
+            ]
+        );
+        assert!(data.starts.is_empty());
+        assert_eq!(data.mutations, ["/api/adapter-runs/runone/decisions"]);
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn a_noninteractive_or_detached_viewer_leaves_the_run_running() {
+    let mut data = Data::new(RunState::AwaitingApproval);
+    data.run.pending_approvals.push(fixture_approval());
+    let fixture = Harness::new(data).await;
+    let pending = view(
+        &fixture.remote,
+        "runone",
+        &mut None,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(pending.code, "approval_required");
+    assert!(pending.message.contains("still pending"));
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let detached = view(&fixture.remote, "runone", &mut None, &cancelled)
+        .await
+        .unwrap_err();
+    assert_eq!(detached.code, "detached");
+    {
+        let data = fixture.data.lock().unwrap();
+        // Neither path approved, denied, interrupted or started anything.
+        assert!(data.mutations.is_empty());
+        assert!(data.decisions.is_empty() && data.starts.is_empty());
+        assert_eq!(data.run.state, RunState::AwaitingApproval);
+        assert_eq!(data.run.pending_approvals.len(), 1);
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn a_viewer_can_detach_while_its_initial_run_read_is_stalled() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let remote = Remote::new(LaunchInfo::new(listener.local_addr().unwrap().port())).unwrap();
+    let cancelled = CancellationToken::new();
+    let cancel_on_read = cancelled.clone();
+    let server_done = CancellationToken::new();
+    let finish_server = server_done.clone();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = BufReader::new(socket);
+        let mut request_line = String::new();
+        socket.read_line(&mut request_line).await.unwrap();
+        // Model a reachable host that accepted the read but never answered it.
+        // Keep the socket open until the test has observed detachment.
+        cancel_on_read.cancel();
+        finish_server.cancelled().await;
+        request_line
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        view(&remote, "runone", &mut None, &cancelled),
+    )
+    .await;
+    server_done.cancel();
+    let request_line = server.await.unwrap();
+    assert_eq!(request_line, "GET /api/adapter-runs/runone HTTP/1.1\r\n");
+    assert_eq!(
+        result
+            .expect("detaching must not wait for the HTTP timeout or its retries")
+            .unwrap_err()
+            .code,
+        "detached"
+    );
+}
+
+#[tokio::test]
+async fn read_only_run_reads_recover_from_temporary_failures_a_bounded_number_of_times() {
+    let mut data = Data::new(RunState::Running);
+    data.read_failures = READ_ATTEMPTS - 1;
+    let fixture = Harness::new(data).await;
+    assert_eq!(
+        read_run(&fixture.remote, "runone").await.unwrap().id,
+        "runone"
+    );
+    assert_eq!(fixture.data.lock().unwrap().run_reads, READ_ATTEMPTS);
+    fixture.data.lock().unwrap().read_failures = READ_ATTEMPTS + 5;
+    fixture.data.lock().unwrap().run_reads = 0;
+    let error = read_run(&fixture.remote, "runone").await.unwrap_err();
+    assert_eq!(error.code, "invalid_response");
+    {
+        let data = fixture.data.lock().unwrap();
+        // Retries are bounded, and no read ever became a write.
+        assert_eq!(data.run_reads, READ_ATTEMPTS);
+        assert!(data.mutations.is_empty() && data.starts.is_empty());
+    }
     fixture.stop().await;
 }
 
@@ -491,6 +856,7 @@ async fn an_uncertain_start_is_not_resubmitted_and_retains_its_command_id() {
     let error = start(
         &fixture.remote,
         Selection::New {
+            agent: "codex".into(),
             project: Some(project.path().to_owned()),
             profile: None,
         },
@@ -524,6 +890,7 @@ async fn cancellation_during_submission_stops_the_accepted_run_without_replaying
     let operation = start(
         &fixture.remote,
         Selection::New {
+            agent: "codex".into(),
             project: Some(project.path().to_owned()),
             profile: None,
         },

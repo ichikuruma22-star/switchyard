@@ -16,8 +16,25 @@ test('future run profile uses exact agent default or explicit selection',()=>{
   assert.equal(chosenProfile(profiles,{codex:'a'},'codex','c'),null);assert.equal(chosenProfile(profiles,{},'codex',''),null);
 });
 
+test('existing CLI profiles can be selected for their own agent without managed sign-in',()=>{
+  const profiles=[
+    {id:'system-codex',agent_id:'codex',managed:false,account:{auth_status:'unknown'}},
+    {id:'system-claude',agent_id:'claude',managed:false,account:{auth_status:'unknown'}},
+    {id:'managed-claude',agent_id:'claude',managed:true,account:{auth_status:'signed_in'}},
+  ];
+  const defaults={codex:'system-codex',claude:'system-claude'};
+  assert.equal(chosenProfile(profiles,defaults,'claude','').id,'system-claude');
+  assert.equal(chosenProfile(profiles,{...defaults,claude:'managed-claude'},'claude','system-claude').id,'system-claude');
+  assert.equal(chosenProfile(profiles,defaults,'codex','system-claude'),null);
+  assert.equal(canStartProfile(profiles[1]),true);
+});
+
 test('managed run profiles require confirmed sign-in and system unknown preserves CLI integration',()=>{
   assert.equal(canStartProfile(null),false);assert.equal(canStartProfile({managed:true,account:{auth_status:'unknown'}}),false);assert.equal(canStartProfile({managed:true,account:{auth_status:'signed_out'}}),false);assert.equal(canStartProfile({managed:true,account:{auth_status:'signed_in'}}),true);assert.equal(canStartProfile({managed:false,account:{auth_status:'unknown'}}),true);assert.equal(canStartProfile({managed:false,account:{auth_status:'signed_out'}}),false);
+});
+test('antigravity profiles can start without a verifiable sign-in status',()=>{
+  assert.equal(canStartProfile({agent_id:'antigravity',managed:true,account:{auth_status:'unknown'}}),true);
+  assert.equal(canStartProfile({agent_id:'antigravity',managed:false,account:{auth_status:'unknown'}}),true);
 });
 test('profile names accept Unicode limits and reject controls',()=>{
   assert.equal(validProfileName(' Work '),true);assert.equal(validProfileName('😀'.repeat(64)),true);assert.equal(validProfileName('😀'.repeat(65)),false);assert.equal(validProfileName('bad\nname'),false);assert.equal(validProfileName('bad\u0085name'),false);assert.equal(validProfileName('  '),false);

@@ -8,11 +8,14 @@ independent API gateway for other tools and applications.
 
 The current source also includes a persistent project workbench with file
 previews, Git diffs, a real terminal, and [shared agent context over MCP](docs/MCP.md).
-These additions are newer than the published `preview.2` archive.
+Codex, Claude Code and Antigravity can run inside the conversation view with
+saved history, streamed output, tool activity and their own approval policies
+(Antigravity is read-only plan mode). These additions are newer than the
+published `preview.2` archive; they ship in `preview.3`.
 
 | Start here | Purpose | Availability |
 |---|---|---|
-| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.2) |
+| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.3) |
 | [Native desktop build](desktop/README.md) | Build the separate desktop shell | Separate Cargo workspace; operating-system runtime verification is distinct from gateway verification |
 | [Switchyard Gateway](#switchyard-gateway) | Protocol translation, routing, credential pools, and its operations dashboard | [v0.1.0 Windows x64 and Linux x64 downloads](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.0) |
 
