@@ -104,6 +104,14 @@ enum Role {
     Viewer,
 }
 
+/// Whether this command started the host it uses. A host the command started
+/// stops when the command ends, cancelling any sign-in it was still running.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HostScope {
+    Command,
+    Shared,
+}
+
 #[derive(Args)]
 pub(super) struct MessageArgs {
     #[arg(long)]
@@ -171,6 +179,8 @@ struct Profile {
 #[derive(Deserialize)]
 struct AccountState {
     auth_status: String,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 enum Selection {
@@ -194,13 +204,13 @@ pub(super) async fn execute(
             ));
         }
         let remote = Remote::new(LaunchInfo::read(path)?)?;
-        return dispatch(&remote, command, cancelled).await;
+        return dispatch(&remote, command, HostScope::Shared, cancelled).await;
     }
     // An owned host uses exactly the app's durable stores and account manager.
     // It is always shut down, including on input/output errors or cancellation.
     let host = start_host(options(cli)?).await?;
     let result = match Remote::new(host.launch.clone()) {
-        Ok(remote) => dispatch(&remote, command, cancelled).await,
+        Ok(remote) => dispatch(&remote, command, HostScope::Command, cancelled).await,
         Err(error) => Err(error),
     };
     let shutdown = host.shutdown().await;
@@ -210,6 +220,7 @@ pub(super) async fn execute(
 async fn dispatch(
     remote: &Remote,
     command: AgentCommand,
+    host: HostScope,
     cancelled: &CancellationToken,
 ) -> Result<()> {
     match command {
@@ -285,7 +296,7 @@ async fn dispatch(
             print_json(&result)
         }
         AgentCommand::Login { profile, method } => {
-            login(remote, &profile, method.as_deref(), cancelled).await
+            login(remote, &profile, method.as_deref(), host, cancelled).await
         }
         AgentCommand::Run {
             agent,
@@ -435,15 +446,118 @@ struct LoginResponse {
     login: Option<LoginView>,
 }
 
+/// Requests one account inspection and waits for its result. The host joins an
+/// inspection already in progress instead of starting another.
+async fn refresh_account(
+    remote: &Remote,
+    id: &str,
+    unfinished: &'static str,
+) -> Result<AccountState> {
+    remote
+        .request::<Value>(
+            Method::POST,
+            &format!("account-profiles/{}/refresh", segment(id)),
+            Some(json!({})),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let profiles: Profiles = remote
+                .request(Method::GET, "account-profiles", None)
+                .await?;
+            let profile = profiles
+                .profiles
+                .into_iter()
+                .find(|p| p.id == id)
+                .ok_or_else(|| {
+                    AppError::invalid("The selected account profile is no longer available.")
+                })?;
+            if !profile.refreshing {
+                return Ok(profile.account);
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    })
+    .await
+    .map_err(|_| AppError::local(unfinished))?
+}
+
+/// The host starts a sign-in only after a refresh confirms the profile is
+/// signed out, and a newly started host knows no status yet. Profiles the host
+/// never signs in here (existing CLIs, Antigravity) are left to its refusal.
+async fn confirm_signed_out(remote: &Remote, id: &str) -> Result<()> {
+    let profiles: Profiles = remote
+        .request(Method::GET, "account-profiles", None)
+        .await?;
+    let Some(profile) = profiles.profiles.iter().find(|p| p.id == id) else {
+        return Ok(());
+    };
+    if !profile.managed
+        || profile.agent_id == "antigravity"
+        || (!profile.refreshing && profile.account.auth_status == "signed_out")
+    {
+        return Ok(());
+    }
+    let account = refresh_account(
+        remote,
+        id,
+        "The account status check did not finish; no sign-in was started.",
+    )
+    .await?;
+    match account.auth_status.as_str() {
+        "signed_out" => Ok(()),
+        "signed_in" => Err(AppError::new(
+            StatusCode::CONFLICT,
+            "profile_sign_in_not_allowed",
+            "This profile is already signed in. Create another profile to sign in to another account.",
+        )),
+        _ => Err(AppError::new(
+            StatusCode::CONFLICT,
+            "profile_sign_in_not_allowed",
+            format!(
+                "Could not confirm that this profile is signed out, so no sign-in was started. {}",
+                account
+                    .message
+                    .as_deref()
+                    .unwrap_or("Check the profile in the app's Accounts view.")
+            ),
+        )),
+    }
+}
+
+/// Only a completed sign-in succeeds. The printed job still reports any other
+/// final state to callers that read it.
+fn login_outcome(job: &LoginView) -> Result<()> {
+    if job.status == "completed" {
+        return Ok(());
+    }
+    Err(AppError::new(
+        StatusCode::CONFLICT,
+        "sign_in_not_completed",
+        job.message
+            .clone()
+            .unwrap_or_else(|| format!("Sign-in ended with status {}.", job.status)),
+    ))
+}
+
 /// Starts one official sign-in and follows its cached state. The URL and
-/// device code are printed as soon as the CLI provides them; cancelling this
-/// command detaches from polling without cancelling the sign-in itself.
+/// device code are printed as soon as the CLI provides them. Cancelling this
+/// command detaches from a shared host's sign-in; a host this command started
+/// stops with it, which cancels the sign-in.
 async fn login(
     remote: &Remote,
     profile: &str,
     method: Option<&str>,
+    host: HostScope,
     cancelled: &CancellationToken,
 ) -> Result<()> {
+    tokio::select! {
+        biased;
+        () = cancelled.cancelled() => {
+            return Err(AppError::new(StatusCode::CONFLICT, "interrupted", "Cancelled before a sign-in was started."));
+        }
+        result = confirm_signed_out(remote, profile) => result?,
+    }
     let body = match method {
         Some(method) => json!({ "method": method }),
         None => json!({}),
@@ -472,18 +586,29 @@ async fn login(
             }
         }
         if !matches!(job.status.as_str(), "starting" | "awaiting_user") {
-            return print_json(&job);
+            print_json(&job)?;
+            return login_outcome(job);
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(AppError::local(
-                "Sign-in is still pending. Check its status in the app's Accounts view.",
-            ));
+            return Err(AppError::local(match host {
+                HostScope::Shared => {
+                    "Sign-in is still pending. Check its status in the app's Accounts view."
+                }
+                HostScope::Command => {
+                    "Sign-in did not finish in time and stops with this command's temporary host. Run the command again to sign in."
+                }
+            }));
         }
         tokio::select! {
             () = cancelled.cancelled() => {
-                return Err(AppError::local(
-                    "Stopped watching this sign-in. It continues in the host; check Accounts in the app.",
-                ));
+                return Err(AppError::local(match host {
+                    HostScope::Shared => {
+                        "Stopped watching this sign-in. It continues in the host; check Accounts in the app."
+                    }
+                    HostScope::Command => {
+                        "Sign-in cancelled: it stops with this command's temporary host. Run the command again to sign in."
+                    }
+                }));
             }
             () = tokio::time::sleep(Duration::from_secs(1)) => {}
         }
@@ -570,27 +695,24 @@ async fn prepare(remote: &Remote, selection: Selection, message: &MessageArgs) -
         })?;
     // The host performs the authoritative complete-request idempotency check.
     // An accepted retry must not be made dependent on a new auth inspection.
-    if profile.managed && profile.account.auth_status != "signed_in" && accepted.is_none() {
-        remote
-            .request::<Value>(
-                Method::POST,
-                &format!("account-profiles/{}/refresh", segment(&profile_id)),
-                Some(json!({})),
-            )
-            .await?;
-        tokio::time::timeout(Duration::from_secs(15), async {
-            loop {
-                let profiles: Profiles = remote.request(Method::GET, "account-profiles", None).await?;
-                let profile = profiles.profiles.iter().find(|p| p.id == profile_id)
-                    .ok_or_else(|| AppError::invalid("The selected account profile is no longer available."))?;
-                if !profile.refreshing {
-                    return if profile.account.auth_status == "signed_in" { Ok(()) } else {
-                        Err(AppError::invalid("Complete this managed profile's sign-in in the app before starting a run."))
-                    };
-                }
-                tokio::time::sleep(Duration::from_millis(150)).await;
-            }
-        }).await.map_err(|_| AppError::local("The account status check did not finish; no run was submitted."))??;
+    // Antigravity has no status command, so, as in the host, its runs are not
+    // gated on sign-in; its CLI reports authentication failures itself.
+    if profile.managed
+        && agent != "antigravity"
+        && profile.account.auth_status != "signed_in"
+        && accepted.is_none()
+    {
+        let account = refresh_account(
+            remote,
+            &profile_id,
+            "The account status check did not finish; no run was submitted.",
+        )
+        .await?;
+        if account.auth_status != "signed_in" {
+            return Err(AppError::invalid(
+                "Complete this managed profile's sign-in in the app before starting a run.",
+            ));
+        }
     }
     Ok(
         json!({"adapter_id":agent,"project_id":project.id,"profile_id":profile_id,

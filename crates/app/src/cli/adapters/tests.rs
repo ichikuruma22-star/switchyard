@@ -90,6 +90,14 @@ struct Data {
     /// transport failure appears to this client.
     read_failures: usize,
     run_reads: usize,
+    /// The status an account refresh reports; `None` leaves it unchanged.
+    refreshed_status: Option<String>,
+    /// Successive sign-in states; the last one repeats.
+    logins: Vec<Value>,
+    login_reads: usize,
+    login_bodies: Vec<Value>,
+    /// Cancelled once the host has accepted a sign-in.
+    cancel_on_login: Option<CancellationToken>,
 }
 
 impl Data {
@@ -118,6 +126,11 @@ impl Data {
             event_reads: vec![],
             read_failures: 0,
             run_reads: 0,
+            refreshed_status: None,
+            logins: vec![],
+            login_reads: 0,
+            login_bodies: vec![],
+            cancel_on_login: None,
         }
     }
 }
@@ -240,6 +253,42 @@ async fn handle(State(data): State<Arc<Mutex<Data>>>, request: Request) -> Respo
         (Method::POST, "/api/adapter-runs/runone/recovery") => {
             data.run.state = RunState::Interrupted;
             Json(json!({"run":data.run})).into_response()
+        }
+        (Method::POST, route)
+            if route.starts_with("/api/account-profiles/") && route.ends_with("/refresh") =>
+        {
+            let id = &route["/api/account-profiles/".len()..route.len() - "/refresh".len()];
+            let status = data.refreshed_status.clone();
+            let profile = data.profiles["profiles"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|profile| profile["id"] == id)
+                .unwrap();
+            if let Some(status) = status {
+                profile["account"]["auth_status"] = json!(status);
+            }
+            (StatusCode::ACCEPTED, Json(json!({"profile":profile}))).into_response()
+        }
+        (method, "/api/account-profiles/original/login") => {
+            if method == Method::POST {
+                // Like the host, start a sign-in only once a refresh has
+                // confirmed that the profile is signed out.
+                if data.profiles["profiles"][0]["account"]["auth_status"] != "signed_out" {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(json!({"error":{"message":"Sign-in is available only after a refresh confirms this profile is signed out."}})),
+                    )
+                        .into_response();
+                }
+                data.login_bodies.push(input);
+                if let Some(cancelled) = &data.cancel_on_login {
+                    cancelled.cancel();
+                }
+            }
+            let index = data.login_reads.min(data.logins.len() - 1);
+            data.login_reads += 1;
+            Json(json!({"login":data.logins[index]})).into_response()
         }
         _ => (
             StatusCode::NOT_FOUND,
@@ -578,6 +627,232 @@ async fn accepted_retry_keeps_its_original_managed_profile_without_an_auth_refre
     .unwrap();
     assert_eq!(body["profile_id"], "original");
     assert_eq!(fixture.data.lock().unwrap().mutations, ["/api/projects"]);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn managed_antigravity_profiles_start_and_continue_without_a_sign_in_gate() {
+    let project = tempfile::tempdir().unwrap();
+    let mut data = Data::new(RunState::Completed);
+    data.run.adapter_id = "antigravity".into();
+    data.run.profile_id = Some("agy-work".into());
+    data.profiles["defaults"]["antigravity"] = json!("agy-work");
+    // Antigravity has no status command, so its status always stays unknown.
+    data.profiles["profiles"].as_array_mut().unwrap().push(json!({"id":"agy-work","name":"Work","agent_id":"antigravity","managed":true,"refreshing":false,"account":{"auth_status":"unknown"}}));
+    let fixture = Harness::new(data).await;
+    let message = MessageArgs {
+        prompt: "Explain this project".into(),
+        command_id: None,
+    };
+    let continued = prepare(
+        &fixture.remote,
+        Selection::Continue("runone".into()),
+        &message,
+    )
+    .await
+    .unwrap();
+    assert_eq!(continued["adapter_id"], "antigravity");
+    assert_eq!(continued["profile_id"], "agy-work");
+    for profile in [Some("agy-work".to_owned()), None] {
+        let started = prepare(
+            &fixture.remote,
+            Selection::New {
+                agent: "antigravity".into(),
+                project: Some(project.path().into()),
+                profile,
+            },
+            &message,
+        )
+        .await
+        .unwrap();
+        assert_eq!(started["adapter_id"], "antigravity");
+        assert_eq!(started["profile_id"], "agy-work");
+    }
+    assert!(
+        !fixture
+            .data
+            .lock()
+            .unwrap()
+            .mutations
+            .iter()
+            .any(|path| path.ends_with("/refresh"))
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn managed_codex_profiles_are_still_refreshed_and_refused_until_signed_in() {
+    let project = tempfile::tempdir().unwrap();
+    let mut data = Data::new(RunState::Completed);
+    data.profiles["profiles"][0]["managed"] = json!(true);
+    let fixture = Harness::new(data).await;
+    let selection = || Selection::New {
+        agent: "codex".into(),
+        project: Some(project.path().into()),
+        profile: Some("original".into()),
+    };
+    let message = MessageArgs {
+        prompt: "Explain this project".into(),
+        command_id: None,
+    };
+    let error = prepare(&fixture.remote, selection(), &message)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("Complete this managed profile's sign-in")
+    );
+    assert_eq!(
+        fixture.data.lock().unwrap().mutations,
+        ["/api/projects", "/api/account-profiles/original/refresh"]
+    );
+    fixture.data.lock().unwrap().refreshed_status = Some("signed_in".into());
+    let body = prepare(&fixture.remote, selection(), &message)
+        .await
+        .unwrap();
+    assert_eq!(body["profile_id"], "original");
+    fixture.stop().await;
+}
+
+fn managed_sign_in_fixture(status: &str, logins: Vec<Value>) -> Data {
+    let mut data = Data::new(RunState::Completed);
+    data.profiles["profiles"][0]["managed"] = json!(true);
+    data.profiles["profiles"][0]["account"]["auth_status"] = json!(status);
+    data.logins = logins;
+    data
+}
+
+#[tokio::test]
+async fn sign_in_refreshes_an_unknown_status_before_it_starts() {
+    // A newly started host knows no status, and the host starts a sign-in
+    // only after a refresh confirms that the profile is signed out.
+    let mut data = managed_sign_in_fixture(
+        "unknown",
+        vec![
+            json!({"status":"awaiting_user","auth_url":"https://auth.openai.com/codex/device","user_code":"ABCD-1234"}),
+            json!({"status":"completed"}),
+        ],
+    );
+    data.refreshed_status = Some("signed_out".into());
+    let fixture = Harness::new(data).await;
+    login(
+        &fixture.remote,
+        "original",
+        Some("device"),
+        HostScope::Command,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    {
+        let mut data = fixture.data.lock().unwrap();
+        assert_eq!(
+            data.mutations,
+            [
+                "/api/account-profiles/original/refresh",
+                "/api/account-profiles/original/login"
+            ]
+        );
+        assert_eq!(data.login_bodies, [json!({"method":"device"})]);
+        data.mutations.clear();
+        data.profiles["profiles"][0]["account"]["auth_status"] = json!("unknown");
+        data.refreshed_status = Some("signed_in".into());
+    }
+    // A signed-in profile is reported without starting another sign-in.
+    let error = login(
+        &fixture.remote,
+        "original",
+        None,
+        HostScope::Command,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.message.contains("already signed in"), "{error}");
+    {
+        let data = fixture.data.lock().unwrap();
+        assert_eq!(data.mutations, ["/api/account-profiles/original/refresh"]);
+        assert_eq!(data.login_bodies.len(), 1);
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn only_a_completed_sign_in_succeeds() {
+    let fixture = Harness::new(managed_sign_in_fixture("signed_out", vec![])).await;
+    for (status, message, expected) in [
+        (
+            "failed",
+            Some("Codex sign-in was not completed. Start a new sign-in to try again."),
+            Some("Codex sign-in was not completed. Start a new sign-in to try again."),
+        ),
+        (
+            "cancelled",
+            Some("Sign-in was cancelled."),
+            Some("Sign-in was cancelled."),
+        ),
+        ("failed", None, Some("Sign-in ended with status failed.")),
+        ("completed", None, None),
+    ] {
+        {
+            let mut data = fixture.data.lock().unwrap();
+            data.logins = vec![json!({"status":status,"message":message})];
+            data.login_reads = 0;
+        }
+        let result = login(
+            &fixture.remote,
+            "original",
+            None,
+            HostScope::Shared,
+            &CancellationToken::new(),
+        )
+        .await;
+        match expected {
+            Some(expected) => {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, "sign_in_not_completed");
+                assert_eq!(error.message, expected);
+            }
+            None => result.unwrap(),
+        }
+    }
+    // The cached signed-out status already allowed each sign-in.
+    assert!(
+        !fixture
+            .data
+            .lock()
+            .unwrap()
+            .mutations
+            .iter()
+            .any(|path| path.ends_with("/refresh"))
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn cancelling_a_sign_in_says_whether_it_stops_with_this_commands_host() {
+    let fixture = Harness::new(managed_sign_in_fixture(
+        "signed_out",
+        vec![
+            json!({"status":"awaiting_user","auth_url":"https://auth.openai.com/codex/device","user_code":"ABCD-1234"}),
+        ],
+    ))
+    .await;
+    for (host, expected) in [
+        (
+            HostScope::Command,
+            "stops with this command's temporary host",
+        ),
+        (HostScope::Shared, "It continues in the host"),
+    ] {
+        let cancelled = CancellationToken::new();
+        fixture.data.lock().unwrap().cancel_on_login = Some(cancelled.clone());
+        let error = login(&fixture.remote, "original", None, host, &cancelled)
+            .await
+            .unwrap_err();
+        assert!(error.message.contains(expected), "{error}");
+    }
     fixture.stop().await;
 }
 
@@ -971,6 +1246,7 @@ async fn showing_saved_history_is_read_only_and_drains_more_than_one_page() {
         AgentCommand::Show {
             run: "runone".into(),
         },
+        HostScope::Shared,
         &CancellationToken::new(),
     )
     .await
