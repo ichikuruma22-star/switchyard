@@ -6,7 +6,9 @@ mod support;
 use futures::SinkExt;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
-use support::{KEY, Received, TestServer, UPSTREAM_KEY, WsClient, eventually, http, ws_connect};
+use support::{
+    KEY, Received, Settings, TestServer, UPSTREAM_KEY, WsClient, eventually, http, ws_connect,
+};
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
@@ -165,6 +167,44 @@ async fn browser_clients_authenticate_with_a_subprotocol() {
     let seen = server.fake.on("/v1/realtime");
     assert_eq!(seen[1].query, "model=rt-up");
     assert_eq!(seen[1].subprotocols, None);
+}
+
+#[tokio::test]
+async fn a_subprotocol_key_counts_next_to_an_authorization_header_that_holds_none() {
+    // Keys are optional, but a browser that offers one is that key's
+    // client — also behind a reverse proxy with Basic auth, which hands on
+    // its own credentials and its public host name.
+    let server = TestServer::with(Settings {
+        auth_required: false,
+        ..Settings::default()
+    })
+    .await;
+    let open = async |key: &str| {
+        let offered = format!("realtime, openai-insecure-api-key.{key}");
+        ws_connect(
+            &server.ws_url("/v1/realtime?model=rt"),
+            &[
+                ("host", "gw.example"),
+                ("authorization", "Basic dXNlcjpwYXNz"),
+                ("sec-websocket-protocol", offered.as_str()),
+            ],
+        )
+        .await
+    };
+    let mut client = open(KEY)
+        .await
+        .expect("the key in the subprotocol must authenticate");
+    let id = request_id(&client);
+    assert!(matches!(client.receive().await, Received::Json(_)));
+    client.socket.close(None).await.unwrap();
+    let record = server.record(&id).await;
+    assert_eq!(record.status, 101);
+    assert_eq!(record.client.key_name.as_deref(), Some("tester"));
+
+    // A wrong key leaves the client anonymous, and an anonymous one is not
+    // served under a name that is not this listener's own.
+    let refused = open("sy-wrong").await;
+    assert!(matches!(refused, Err(WsError::Http(response)) if response.status() == 403));
 }
 
 #[tokio::test]
