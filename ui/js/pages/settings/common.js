@@ -821,6 +821,10 @@ export function fieldId(path) {
  *   changed      the value differs from what is saved
  *   kind         "switch" keeps the control beside the text on phones too;
  *                "wide" puts the control under the text at every width
+ *
+ * The description and the badge carry ids, `${id}-desc` and `${id}-restart`,
+ * for the control's aria-describedby (rowDescribedBy): the label names the
+ * control, they describe it.
  */
 export function SettingRow({ id, label, description, restart = false, changed = false, kind, children }) {
   return html`
@@ -828,10 +832,10 @@ export function SettingRow({ id, label, description, restart = false, changed = 
       <div class="settings-row-text">
         <div class="settings-row-head">
           <label class="settings-row-label" id=${`${id}-label`} for=${id}>${label}</label>
-          ${restart && html`<${Badge} outline title="Takes effect after the gateway restarts">Needs restart<//>`}
+          ${restart && html`<${Badge} outline id=${`${id}-restart`} title="Takes effect after the gateway restarts">Needs restart<//>`}
           ${changed && html`<span class="settings-row-edited">Edited</span>`}
         </div>
-        ${description != null && html`<div class="settings-row-desc">${description}</div>`}
+        ${description != null && html`<div class="settings-row-desc" id=${`${id}-desc`}>${description}</div>`}
       </div>
       <div class="settings-row-control">${children}</div>
     </div>
@@ -847,6 +851,12 @@ function rowProps({ form, issues, path, label, description, restart, kind }) {
   return { id: fieldId(path), label, description, restart, kind, changed: form.changed(path) };
 }
 
+/** The ids a row's control is described by: its description, then the restart badge. */
+export function rowDescribedBy(path, { description, restart }) {
+  const id = fieldId(path);
+  return [description != null && `${id}-desc`, restart && `${id}-restart`].filter(Boolean);
+}
+
 // A row's control has no label of its own (the row has it), and most have no
 // hint. The shared controls put such a control in a field wrapper only once
 // it has an error to show, which builds the input anew: it loses the focus,
@@ -859,7 +869,15 @@ const NO_HINT = '';
 export function TextRow({ form, issues, path, label, description, restart, hint, error, ...rest }) {
   return html`
     <${SettingRow} ...${rowProps({ form, issues, path, label, description, restart })}>
-      <${Input} id=${fieldId(path)} value=${form.value(path) ?? ''} onChange=${form.set(path)} hint=${hint ?? NO_HINT} error=${error ?? issues.at(path)} ...${rest} />
+      <${Input}
+        id=${fieldId(path)}
+        value=${form.value(path) ?? ''}
+        onChange=${form.set(path)}
+        hint=${hint ?? NO_HINT}
+        error=${error ?? issues.at(path)}
+        describedBy=${rowDescribedBy(path, { description, restart })}
+        ...${rest}
+      />
     <//>
   `;
 }
@@ -883,6 +901,7 @@ export function NumberRow({ form, issues, path, label, description, restart, hin
         max=${Number.MAX_SAFE_INTEGER}
         hint=${value === null ? "Empty: saving puts this back to the gateway's default." : (hint ?? NO_HINT)}
         error=${error ?? issues.at(path)}
+        describedBy=${rowDescribedBy(path, { description, restart })}
         ...${rest}
       />
     <//>
@@ -897,7 +916,14 @@ export function SecondsRow({ zero, hint, form, path, ...rest }) {
 export function SwitchRow({ form, issues, path, label, description, restart, disabled }) {
   return html`
     <${SettingRow} ...${rowProps({ form, issues, path, label, description, restart, kind: 'switch' })}>
-      <${Switch} id=${fieldId(path)} checked=${!!form.value(path)} onChange=${form.set(path)} disabled=${disabled} error=${issues.at(path)} />
+      <${Switch}
+        id=${fieldId(path)}
+        checked=${!!form.value(path)}
+        onChange=${form.set(path)}
+        disabled=${disabled}
+        error=${issues.at(path)}
+        describedBy=${rowDescribedBy(path, { description, restart })}
+      />
     <//>
   `;
 }
@@ -906,7 +932,16 @@ export function SwitchRow({ form, issues, path, label, description, restart, dis
 export function SelectRow({ form, issues, path, label, description, options, ...rest }) {
   return html`
     <${SettingRow} ...${rowProps({ form, issues, path, label, description })}>
-      <${Select} id=${fieldId(path)} value=${form.value(path)} onChange=${form.set(path)} options=${options} hint=${NO_HINT} error=${issues.at(path)} ...${rest} />
+      <${Select}
+        id=${fieldId(path)}
+        value=${form.value(path)}
+        onChange=${form.set(path)}
+        options=${options}
+        hint=${NO_HINT}
+        error=${issues.at(path)}
+        describedBy=${rowDescribedBy(path, { description })}
+        ...${rest}
+      />
     <//>
   `;
 }

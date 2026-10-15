@@ -15,7 +15,7 @@ import { Button, ErrorState, IconButton, LoadMore, Notice, Page, Panel, StatusLa
 import { useCommands } from '../lib/commands.js';
 import { loadStyles, prefersReducedMotion } from '../lib/dom.js';
 import { formatNumber, formatTime, plural, sentence } from '../lib/format.js';
-import { usePresence, useResource } from '../lib/hooks.js';
+import { useHold, usePresence, useResource } from '../lib/hooks.js';
 import { useLive } from '../lib/live.js';
 import { navigate, routeStore } from '../lib/router.js';
 import { COLUMNS, HoverTips, memo } from './requests/cells.js';
@@ -130,20 +130,36 @@ export default function Requests({ route }) {
   // of columns, without the client key when that is a squeeze, or cards.
   const fit = width >= FIT_FULL ? 'full' : width >= FIT_TIGHT ? 'tight' : width >= FIT_CARDS ? 'cards' : 'slim';
   const layout = width >= FIT_TIGHT ? 'rows' : 'cards';
+
+  // The list holds still while the reader is on it (the mouse over it, the
+  // keyboard focus in it): a row that arrives at the top would move the one
+  // under the pointer, and the click would open another request. Arrivals
+  // wait behind "N new requests" meanwhile, and come in when the reader
+  // leaves the list, if its top is on screen.
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const revealRef = useRef(null);
+  const hold = useHold({
+    onChange: (held) => {
+      if (!held && liveRef.current) revealRef.current?.();
+    },
+  });
   const atTop = useCallback(() => {
+    if (hold.heldRef.current) return false;
     const el = top.current;
     return !el || el.getBoundingClientRect().top >= 0;
   }, []);
   const log = useRequestLog(filters, { live, atTop });
+  revealRef.current = () => {
+    if (atTop()) log.reveal();
+  };
 
   // Scrolling back up to the first row shows what was held back meanwhile.
-  const liveRef = useRef(live);
-  liveRef.current = live;
   useEffect(() => {
     const el = top.current;
     if (!el || typeof IntersectionObserver === 'undefined') return undefined;
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting) && liveRef.current) log.reveal();
+      if (entries.some((entry) => entry.isIntersecting) && liveRef.current && !hold.heldRef.current) log.reveal();
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -182,8 +198,20 @@ export default function Requests({ route }) {
     top.current?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
   }, [log.reveal]);
 
-  const inFlight = useMemo(() => (live ? log.inFlight.filter((record) => matchesFilters(record, filters, true)) : []), [live, log.inFlight, filters]);
-  const rows = useMemo(() => (inFlight.length > 0 ? [...inFlight, ...log.rows] : log.rows), [inFlight, log.rows]);
+  const liveInFlight = useMemo(() => (live ? log.inFlight.filter((record) => matchesFilters(record, filters, true)) : []), [live, log.inFlight, filters]);
+  // While held, the requests in flight are the ones there when the hold
+  // began: a request that starts does not push a row in above the pointer.
+  const frozen = useRef(null);
+  if (!hold.held) frozen.current = null;
+  else if (frozen.current == null) frozen.current = liveInFlight;
+  const inFlight = frozen.current ?? liveInFlight;
+  const rows = useMemo(() => {
+    if (inFlight.length === 0) return log.rows;
+    // A request that ended meanwhile and was put on screen anyway (Refresh)
+    // is listed once.
+    const listed = new Set(log.rows.map((row) => row.id));
+    return [...inFlight.filter((record) => !listed.has(record.id)), ...log.rows];
+  }, [inFlight, log.rows]);
 
   // The first of the rows a page of older requests adds stands where the
   // button was.
@@ -368,14 +396,16 @@ export default function Requests({ route }) {
         `}
       >
         <div class="req-top" ref=${top}></div>
-        <${NewRequests} count=${log.pending} overflow=${log.pendingOverflow} onShow=${showNew} />
-        ${failed
-          ? html`<${ErrorState} title="Could not load requests" error=${log.error} onRetry=${retry} retrying=${log.refreshing} />`
-          : html`
-              <${HoverTips} class="req-tips">
-                <${LogTable} rows=${rows} loading=${log.loading} freshKeys=${log.fresh} selectedKey=${id || null} onOpen=${open} empty=${empty} />
-              <//>
-            `}
+        <div class="req-hold" ...${hold.props}>
+          <${NewRequests} count=${log.pending} overflow=${log.pendingOverflow} onShow=${showNew} />
+          ${failed
+            ? html`<${ErrorState} title="Could not load requests" error=${log.error} onRetry=${retry} retrying=${log.refreshing} />`
+            : html`
+                <${HoverTips} class="req-tips">
+                  <${LogTable} rows=${rows} loading=${log.loading} freshKeys=${log.fresh} selectedKey=${id || null} onOpen=${open} empty=${empty} />
+                <//>
+              `}
+        </div>
         ${log.rows.length > 0 &&
         html`
           <div class="req-foot">

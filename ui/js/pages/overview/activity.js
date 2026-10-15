@@ -9,13 +9,19 @@
 // many such requests there are instead of leaving them out silently. Rows
 // that were in flight when the operator went to another page are carried
 // over and shown again on return.
+//
+// The list holds still while it is being read (the mouse over it, the
+// keyboard focus in it): what arrives meanwhile is counted, and comes in
+// when the reader leaves it.
 
 import { html, useEffect, useRef, useState } from '../../../vendor/preact-htm.js';
 import { Badge, Button, EmptyState, ErrorState, IconButton, Panel, Skeleton, StatusLamp, toneForStatus } from '../../components/index.js';
 import { formatDuration, formatRelativeTime, formatTokens, plural } from '../../lib/format.js';
+import { useHold } from '../../lib/hooks.js';
 import { useLive, useLiveGap } from '../../lib/live.js';
 import { href } from '../../lib/router.js';
 import { useStore } from '../../lib/store.js';
+import { providerTip } from '../requests/record.js';
 import { gauges, useServerNow } from './data.js';
 import { applyFeed, isPending, tokensOf } from './model.js';
 import { described, focusSoon, focusTarget, isStale } from './stale.js';
@@ -88,7 +94,7 @@ function Row({ record, now, fresh }) {
         <span class="overview-feed-main">
           <span class="overview-feed-model mono" title=${model}>${model}</span>
           <span class="overview-feed-meta">
-            <span class=${pending ? 'truncate' : 'mono truncate'} title=${first}>${first}</span>
+            <span class=${pending ? 'truncate' : 'mono truncate'} title=${!pending && !record.provider ? providerTip(record) : first}>${first}</span>
             <span class="overview-feed-sep" aria-hidden="true">·</span>
             <span class="truncate" title=${key}>${key}</span>
           </span>
@@ -134,6 +140,18 @@ export default function Activity({ recent, liveOpen }) {
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const skipped = useRef(false);
+  // Held like paused, without touching the pause switch; leaving the list
+  // brings in what arrived (and a load that came meanwhile, loaded again).
+  const hold = useHold({
+    onChange: (held) => {
+      if (held || pausedRef.current) return;
+      flush();
+      if (skipped.current) {
+        skipped.current = false;
+        recent.refresh();
+      }
+    },
+  });
 
   useEffect(() => {
     carried = (rows ?? []).filter(isPending);
@@ -144,7 +162,7 @@ export default function Activity({ recent, liveOpen }) {
   // response shows that it has ended (its "finished" frame was missed).
   useEffect(() => {
     if (!recent.data) return;
-    if (pausedRef.current) {
+    if (pausedRef.current || hold.heldRef.current) {
       skipped.current = true;
       return;
     }
@@ -159,11 +177,11 @@ export default function Activity({ recent, liveOpen }) {
   // dropped frames for it): the list is loaded again and merged as above.
   useLiveGap(() => recent.refresh());
 
-  const flush = () => {
+  const flush = (force = false) => {
     timer.current = null;
     const events = queue.current;
     if (events.length === 0) return;
-    if (pausedRef.current) {
+    if (pausedRef.current || (hold.heldRef.current && !force)) {
       // Count what a resume would bring in: requests not on screen yet.
       const known = new Set((rowsRef.current ?? []).map((row) => row.id));
       setWaiting(new Set(events.map((event) => event.data.id).filter((id) => !known.has(id))).size);
@@ -211,7 +229,8 @@ export default function Activity({ recent, liveOpen }) {
     lastGap.current = gap;
     // Nothing is in flight, yet rows say otherwise: their end was missed
     // (the page was away, frames were dropped). Take them off and reload.
-    idleFrames.current = data.in_flight === 0 && listed > 0 ? idleFrames.current + 1 : 0;
+    // (Not while the list is held: rows do not move under the reader.)
+    idleFrames.current = data.in_flight === 0 && listed > 0 && !hold.heldRef.current ? idleFrames.current + 1 : 0;
     if (idleFrames.current >= 2) {
       idleFrames.current = 0;
       const cutoff = (data.at ?? Date.now()) - SETTLE_MS;
@@ -235,7 +254,7 @@ export default function Activity({ recent, liveOpen }) {
   const resume = () => {
     pausedRef.current = false;
     setPaused(false);
-    flush();
+    flush(true);
     // Without live frames nothing was queued, and a load that arrived while
     // paused was not applied: load what happened meanwhile.
     if (!liveOpen || skipped.current) recent.refresh();
@@ -247,7 +266,18 @@ export default function Activity({ recent, liveOpen }) {
   const list = rows ?? [];
   const loading = rows == null && recent.loading;
   const failed = rows == null && recent.error;
-  const base = paused ? 'Paused' : liveOpen ? 'Requests as they start and finish' : isStale(recent) ? 'Latest requests' : `Latest requests, refreshed every ${FEED_POLL_MS / 1000}s`;
+  const held = !paused && hold.held;
+  const base = paused
+    ? 'Paused'
+    : held
+      ? hold.by === 'pointer'
+        ? 'Held while the pointer is on the list'
+        : 'Held while the list has the focus'
+      : liveOpen
+        ? 'Requests as they start and finish'
+        : isStale(recent)
+          ? 'Latest requests'
+          : `Latest requests, refreshed every ${FEED_POLL_MS / 1000}s`;
   const showUnlisted = !paused && unlisted > 0;
 
   return html`
@@ -257,7 +287,7 @@ export default function Activity({ recent, liveOpen }) {
       description=${described(base, recent)}
       flush
       actions=${html`
-        ${paused && waiting > 0 && html`<${Button} size="sm" variant="ghost" onClick=${resume}>${plural(waiting, 'new request')}<//>`}
+        ${(paused || held) && waiting > 0 && html`<${Button} size="sm" variant="ghost" onClick=${paused ? resume : () => flush(true)}>${plural(waiting, 'new request')}<//>`}
         <${IconButton}
           icon=${paused ? 'play' : 'pause'}
           label=${paused ? 'Resume the feed' : 'Pause the feed'}
@@ -281,6 +311,7 @@ export default function Activity({ recent, liveOpen }) {
         <${StatusLamp} tone="caution" label="Earlier requests could not be loaded" />
         <${Button} size="sm" variant="ghost" icon="refresh" onClick=${recent.refresh}>Try again<//>
       </p>`}
+      <div class="overview-feed-hold" ...${hold.props}>
       ${loading
         ? html`<div class="overview-feed-skeleton" aria-hidden="true">
             ${Array.from({ length: 6 }, (_, i) => html`<div class="overview-feed-skel" key=${i}><${Skeleton} width=${`${[58, 44, 66, 38, 52, 47][i]}%`} /><${Skeleton} width="30%" height="10px" /></div>`)}
@@ -299,6 +330,7 @@ export default function Activity({ recent, liveOpen }) {
             : html`<ol class="overview-feed" aria-label="Most recent requests, newest first">
                 ${list.map((record) => html`<${Row} key=${record.id} record=${record} now=${now} fresh=${fresh.has(record.id)} />`)}
               </ol>`}
+      </div>
     <//>
   `;
 }

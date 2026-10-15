@@ -33,14 +33,21 @@ if (preview) {
 
 if (window.isSecureContext && navigator.clipboard?.writeText) {
   for (const button of document.querySelectorAll('[data-copy]')) {
+    const feedback = button.closest('.gateway-command').querySelector('.copy-feedback');
+    let timer;
+    const announce = message => {
+      clearTimeout(timer);
+      feedback.textContent = '';
+      requestAnimationFrame(() => { feedback.textContent = message; });
+      timer = setTimeout(() => { feedback.textContent = ''; }, 4000);
+    };
     button.hidden = false;
     button.addEventListener('click', async () => {
-      const feedback = button.closest('.gateway-command').querySelector('.copy-feedback');
       try {
         await navigator.clipboard.writeText(button.dataset.copy);
-        feedback.textContent = 'Gateway command copied.';
+        announce('Gateway command copied.');
       } catch {
-        feedback.textContent = 'Select the command below to copy it.';
+        announce('Select the command below to copy it.');
       }
     });
   }

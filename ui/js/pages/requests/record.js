@@ -7,7 +7,7 @@
 // set by the page.
 
 import { API_BASE } from '../../lib/api.js';
-import { DASH, formatCurrency, formatDuration, formatNumber } from '../../lib/format.js';
+import { DASH, formatCurrency, formatDuration, formatNumber, sentence } from '../../lib/format.js';
 
 /** The query parameters that filter the list; the same names the API takes. */
 export const FILTER_KEYS = ['status', 'model', 'client_model', 'since', 'provider', 'key', 'q'];
@@ -250,8 +250,16 @@ export function routeTip(record) {
  */
 export const NO_PROVIDER = 'No provider';
 
+/**
+ * The words behind a provider cell. A request no provider served says why
+ * in the gateway's own message when the record has one (its backticks
+ * dropped: a tooltip has no mono face), the two possible causes otherwise.
+ */
 export function providerTip(record) {
-  if (!record.provider) return 'No provider served this request: it failed before routing, or every credential of the model was cooling down.';
+  if (!record.provider) {
+    const said = sentence(record.error?.message).replace(/`([^`]+)`/g, '$1');
+    return said ? `No provider served this request. ${said}` : 'No provider served this request: it failed before routing, or every credential of the model was cooling down.';
+  }
   const lines = [`Provider ${record.provider}`];
   if (record.credential_label) lines.push(`Credential ${record.credential_label}`);
   const attempts = record.attempts?.length ?? 0;

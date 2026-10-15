@@ -1,10 +1,12 @@
-// Overview: the logic behind the page, free of Preact and the DOM so it can be
-// read (and run under Node) on its own.
+// Overview: the logic behind the page, plain functions free of the DOM so it
+// can be read (and run under Node) on its own. The error-rate scale is the
+// shared one (errorRateTone in components/status.js).
 //
 //   vitals      one shape for the "stats" live frame and the polling fallback
 //   history     a few minutes of vitals, kept in memory, for the sparklines
 //   credentials what a credential's lamp says right now
 //   providers   one row of the health board
+//   routes      which route of each model can take a request right now
 //   verdict     the one-line answer to "is the gateway healthy?"
 //   series      /usage/timeseries extended with requests that finished since
 //   attempts    upstream attempts per provider, from request records
@@ -15,7 +17,8 @@
 // All times are the gateway's clock (unix ms). Callers pass `now` already
 // corrected for the difference between the two clocks.
 
-import { formatCountdown, formatNumber, formatTime, plural } from '../../lib/format.js';
+import { errorRateTone } from '../../components/status.js';
+import { formatCountdown, formatCountdownWords, formatNumber, formatPercent, formatTime, plural } from '../../lib/format.js';
 
 // ---------------------------------------------------------------------------
 // Vitals
@@ -80,24 +83,6 @@ export function latencyUnknown(vitals) {
   if (!vitals) return true;
   if (vitals.samples != null) return vitals.samples === 0;
   return !vitals.p50 && !vitals.p95;
-}
-
-/** Lamp for an error rate: amber from 5%, red from 25%. */
-export function errorRateTone(rate) {
-  if (typeof rate !== 'number' || !Number.isFinite(rate)) return null;
-  if (rate >= 0.25) return 'stop';
-  if (rate >= 0.05) return 'caution';
-  return null;
-}
-
-/**
- * What that lamp says, in words: its name and its tooltip. `span` is what
- * the rate covers, "minute" or "hour".
- */
-export function errorRateWords(rate, span = 'minute') {
-  const tone = errorRateTone(rate);
-  if (!tone) return null;
-  return `${tone === 'stop' ? 'High: 25%' : 'Elevated: 5%'} or more of the requests in the last ${span} failed`;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +198,7 @@ export function credentialDetail(state, now) {
   } else if (state.kind === 'unusable' && state.reason) {
     text += `: ${state.reason}`;
   } else if (state.kind === 'ready' && state.resting.length > 0) {
-    text += `, ${plural(state.resting.length, 'model')} resting`;
+    text += `, ${plural(state.resting.length, 'model')} cooling down`;
   }
   return text;
 }
@@ -340,7 +325,7 @@ export function describeProvider(summary, now) {
     if (counts.disabled > 0) parts.push(`${counts.disabled} disabled`);
     if (counts.unknown > 0) parts.push(`${counts.unknown} not seen yet`);
   }
-  if (summary.resting > 0) parts.push(`${plural(summary.resting, 'model')} resting`);
+  if (summary.resting > 0) parts.push(`${plural(summary.resting, 'model')} cooling down`);
   return parts.join(' · ');
 }
 
@@ -357,8 +342,158 @@ export function nextCooldownEnd(summaries) {
 }
 
 // ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+// GET /models says how many credentials could serve each route, but only as
+// of the moment it was read: a cooldown that started or ended since is not
+// in it. The provider list is kept current by the "credential" frames, so a
+// route's state is worked out from its credentials there. The snapshot in
+// GET /models stands in only for a provider that is not in the list.
+
+/**
+ * Whether one credential can take a request for `upstream` at `now`:
+ * { kind: "ready" | "cooling" | "disabled" | "unusable", until }.
+ */
+function credentialForModel(cred, upstream, now) {
+  const state = credentialState(cred, now);
+  if (state.kind === 'disabled' || state.kind === 'unusable') return { kind: state.kind, until: null };
+  // The whole credential rests.
+  if (typeof cred.cooldown_until === 'number' && cred.cooldown_until > now) return { kind: 'cooling', until: cred.cooldown_until };
+  // This model rests on it.
+  const model = state.resting.find((m) => m.model === upstream);
+  if (model) return { kind: 'cooling', until: model.until };
+  // "cooling" with no end given at all: take the gateway at its word.
+  if (state.kind === 'cooling' && cred.cooldown_until == null && (cred.model_cooldowns ?? []).length === 0) return { kind: 'cooling', until: null };
+  return { kind: 'ready', until: null };
+}
+
+/**
+ * The state of one route right now: { state, available, total, until, unknown }.
+ * state is a lamp tone: clear (a credential can take it), caution (every
+ * credential that could is cooling down; `until` is when the first is back),
+ * stop (none can: no credentials, or none usable), off (switched off).
+ * `unknown` marks a route judged from the GET /models snapshot alone.
+ */
+export function liveRouteState(route, provider, now) {
+  if (!provider) {
+    const available = route.credentials_available ?? 0;
+    const total = route.credentials_total ?? 0;
+    if (available > 0) return { state: 'clear', available, total, until: null, unknown: true };
+    return { state: total === 0 ? 'stop' : 'caution', available: 0, total, until: null, unknown: true };
+  }
+  const credentials = provider.credentials ?? [];
+  const total = credentials.length;
+  if (provider.enabled === false) return { state: 'off', available: 0, total, until: null, unknown: false };
+  let available = 0;
+  let cooling = 0;
+  let disabled = 0;
+  let until = null;
+  for (const cred of credentials) {
+    const c = credentialForModel(cred, route.upstream_model, now);
+    if (c.kind === 'ready') available += 1;
+    else if (c.kind === 'disabled') disabled += 1;
+    else if (c.kind === 'cooling') {
+      cooling += 1;
+      if (c.until != null) until = Math.min(until ?? Infinity, c.until);
+    }
+  }
+  let state = 'stop';
+  if (available > 0) state = 'clear';
+  else if (cooling > 0) state = 'caution';
+  else if (total > 0 && disabled === total) state = 'off';
+  return { state, available, total, until: state === 'caution' ? until : null, unknown: false };
+}
+
+/**
+ * Every model entry of GET /models that can be routed (not `ignored`), with
+ * the live state of each route. `providers` is GET /providers as the page
+ * holds it (patched by credential frames); null or undefined when not loaded.
+ *
+ * [{ name, alias, routes: [{ provider, upstream, priority, state, available, total, until, unknown }] }]
+ */
+export function routeAvailability(models, providers, now) {
+  if (!Array.isArray(models)) return null;
+  const byName = new Map((providers ?? []).map((p) => [p.name, p]));
+  return models
+    .filter((entry) => !entry.ignored)
+    .map((entry) => ({
+      name: entry.name,
+      alias: Array.isArray(entry.alias_targets),
+      routes: (entry.routes ?? []).map((route) => ({
+        provider: route.provider,
+        upstream: route.upstream_model,
+        priority: route.priority ?? 0,
+        ...liveRouteState(route, byName.get(route.provider), now),
+      })),
+    }));
+}
+
+/**
+ * Models that cannot be served right now because of cooldowns: not aliases,
+ * with a route, none of whose routes can take a request, and at least one
+ * held back by a cooldown (not by a switch or a missing key). The one back
+ * first comes first. [{ model, until }]; `until` is null when not known.
+ */
+export function coolingModels(entries) {
+  const out = [];
+  for (const entry of entries ?? []) {
+    if (entry.alias || entry.routes.length === 0) continue;
+    if (entry.routes.some((r) => r.state === 'clear')) continue;
+    const held = entry.routes.filter((r) => r.state === 'caution' && !r.unknown);
+    if (held.length === 0) continue;
+    const untils = held.map((r) => r.until).filter((u) => u != null);
+    out.push({ model: entry.name, until: untils.length > 0 ? Math.min(...untils) : null });
+  }
+  return out.sort((a, b) => (a.until ?? Infinity) - (b.until ?? Infinity) || (a.model < b.model ? -1 : 1));
+}
+
+/**
+ * The routes that take requests now, as a Set of route indexes of one entry:
+ * of those that can serve, the highest tier (GET /models gives each route
+ * its `priority`). The gateway shares requests among them.
+ */
+export function litRouteIndexes(routes) {
+  const serving = routes.map((r, i) => ({ r, i })).filter(({ r }) => r.state === 'clear');
+  if (serving.length === 0) return new Set();
+  const top = Math.max(...serving.map(({ r }) => r.priority));
+  return new Set(serving.filter(({ r }) => r.priority === top).map(({ i }) => i));
+}
+
+// ---------------------------------------------------------------------------
 // Verdict
 // ---------------------------------------------------------------------------
+
+// Names a line of the verdict spells out before "and N more models".
+const ATTENTION_NAMES = 2;
+
+/**
+ * What the verdict lists below its sentence, beyond the credentials: models
+ * that cooldowns keep from being served, and a failure rate on the shared
+ * lamp scale. `signals`: { cooling: coolingModels(...), errorRate,
+ * errorWindow ("minute" | "hour"), now }.
+ *
+ * [{ key, text }] and, for the cooling line, `names` (set in mono) and
+ * `rest` / `tail`, the words that follow them.
+ */
+export function attentionItems(signals) {
+  const items = [];
+  if (!signals) return items;
+  const cooling = signals.cooling ?? [];
+  if (cooling.length > 0) {
+    const names = cooling.slice(0, ATTENTION_NAMES).map((c) => c.model);
+    const rest = cooling.length - names.length;
+    const first = cooling.find((c) => c.until != null)?.until ?? null;
+    const back = first != null ? formatCountdownWords((first - (signals.now ?? 0)) / 1000) : null;
+    const tail = `cooling down${back ? `, ${cooling.length > 1 ? 'the first ' : ''}back in ${back}` : ''}`;
+    const joined = rest > 0 ? `${names.join(', ')} and ${plural(rest, 'more model')}` : names.join(' and ');
+    items.push({ key: 'cooling', names, rest, tail, text: `${joined} ${tail}` });
+  }
+  if (errorRateTone(signals.errorRate)) {
+    items.push({ key: 'errors', text: `${formatPercent(signals.errorRate)} of requests failed in the last ${signals.errorWindow ?? 'minute'}` });
+  }
+  return items;
+}
 
 /**
  * Is the gateway healthy? From the provider rows. The counts in /status stand
@@ -369,18 +504,27 @@ export function nextCooldownEnd(summaries) {
  * numbers. While the provider list is still loading the answer is null (a
  * skeleton).
  *
- * Returns { tone, label, detail, refused }. `refused` is true while the
- * gateway refuses the configuration file on disk (`status.config_rejected`):
- * it keeps serving the last valid configuration, so a healthy gateway is not
- * just "Serving" then but a caution, and the strip says the file was refused
- * and links to the raw file. A worse verdict (degraded, not serving) keeps
- * its own words and tone, with the same note.
+ * Returns { tone, label, detail, refused, attention }. `refused` is true
+ * while the gateway refuses the configuration file on disk
+ * (`status.config_rejected`): it keeps serving the last valid configuration,
+ * so a healthy gateway is not just "Serving" then but a caution, and the
+ * strip says the file was refused and links to the raw file. A worse verdict
+ * (degraded, not serving) keeps its own words and tone, with the same note.
+ *
+ * `signals` (see attentionItems) adds what the credentials do not show: a
+ * model every credential is resting for, and a failure rate of 5% or more.
+ * Either turns a "Serving" into "Degraded" (the credential sentence stays as
+ * the detail), and both are listed in `attention` under any verdict.
  */
-export function gatewayVerdict(summaries, status, providersFailed = false) {
+export function gatewayVerdict(summaries, status, providersFailed = false, signals = null) {
   const verdict = credentialVerdict(summaries, status, providersFailed);
-  if (!verdict || !status?.config_rejected) return verdict ? { ...verdict, refused: false } : null;
-  if (verdict.tone === 'clear') return { ...verdict, tone: 'caution', label: 'Serving the last valid configuration', refused: true };
-  return { ...verdict, refused: true };
+  if (!verdict) return null;
+  const attention = attentionItems(signals);
+  let out = { ...verdict, refused: false, attention };
+  if (out.tone === 'clear' && attention.length > 0) out = { ...out, tone: 'caution', label: 'Degraded' };
+  if (!status?.config_rejected) return out;
+  if (out.tone === 'clear') return { ...out, tone: 'caution', label: 'Serving the last valid configuration', refused: true };
+  return { ...out, refused: true };
 }
 
 function credentialVerdict(summaries, status, providersFailed) {

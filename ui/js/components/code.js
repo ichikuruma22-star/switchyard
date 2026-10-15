@@ -186,3 +186,18 @@ export function CodeBlock({ value, language = 'auto', title, label, wrap = false
     </div>
   `;
 }
+
+/**
+ * Gateway text with its backticked names set in mono: the gateway quotes the
+ * identifiers in its messages and warnings ("provider `x` has no models"),
+ * and the quotes are dropped for the mono face, which says the same thing.
+ *
+ *   html`<${TickText} text=${sentence(error.message)} />`
+ *
+ * text   the message; a lone backtick is shown as it is
+ * Other props (class, id) go to the wrapping <span>.
+ */
+export function TickText({ text, class: className, ...rest }) {
+  const parts = String(text ?? '').split(/`([^`]+)`/);
+  return html`<span class=${className} ...${rest}>${parts.map((part, i) => (i % 2 === 1 ? html`<span class="mono" key=${i}>${part}</span>` : part))}</span>`;
+}

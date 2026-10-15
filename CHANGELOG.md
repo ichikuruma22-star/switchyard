@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Switchya workspace
+
+- Transcript rows, notices and the composer share one reading column.
+  Existing-agent conversations show a repeated agent notice once, with one
+  thin rule per finished turn, and tool rows use readable names such as
+  "Read file" while Details keeps the exact tool name.
+- Pending approvals stand out: hold amber appears only on the transcript row
+  and approval card that need a decision, and the review header says
+  "Approval needed" or "Nothing to approve". The first-run screen offers
+  Connect a provider, Use an existing agent and Refresh models.
+- Phone, keyboard and contrast fixes: setup buttons no longer break words,
+  touch targets are 44px, the Built-in agent / Existing agents switch
+  announces its state, small text is at least 12px, dark-theme panes are
+  easier to tell apart, and copied file previews no longer contain hidden
+  zero-width characters.
+
+### Gateway dashboard
+
+- The Overview headline says "Degraded" when a model is cooling down on
+  every credential or 5% or more of the last minute's requests failed, and
+  names the model and when it comes back.
+- A Routes panel on the Overview shows where each model's requests go now;
+  rails turn amber while a route cools down.
+- Request lists on Requests and the Overview hold still while the pointer or
+  keyboard focus is on them; new requests wait behind "N new requests".
+
+### Website
+
+- Sharing switchya.com shows a large preview card instead of a bare text
+  link, and the site has an Apple touch icon.
+- The download section lists the Windows requirements, the ZIP size and its
+  SHA-256 hash next to the button, followed by the known limits.
+- The product illustration uses the app's real wording and keeps the review
+  pane at every width; tabs show a clear selected state, and small text,
+  focus rings and the 404 page are fixed.
+
 ## Switchya 0.1.0-preview.4 (2026-10-15)
 
 A bug-fix preview from a full audit of the app, CLI, agent tools and

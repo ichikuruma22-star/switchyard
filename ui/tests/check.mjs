@@ -164,6 +164,8 @@ assert.equal(f.sentence('routing.max_attempts: must be at least 1'), 'routing.ma
 assert.equal(f.sentence('rate_limit_rpm must be a whole number'), 'rate_limit_rpm must be a whole number.');
 assert.equal(f.sentence('`fast` has no routable target'), '`fast` has no routable target.');
 assert.equal(f.sentence(''), '');
+assert.equal(f.sentence('retry in 25s (last upstream error: 500 Mock upstream failure.)'), 'Retry in 25s (last upstream error: 500 Mock upstream failure.)', 'no second stop after a bracket');
+assert.equal(f.sentence('the model is (still) busy'), 'The model is (still) busy.');
 assert.equal(f.sentence(f.sentence('name must not be empty')), 'Name must not be empty.', 'applying it twice changes nothing');
 
 // 4. SSE parser: CRLF, split chunks, comments, multi-line data, [DONE], unterminated tail.
@@ -334,9 +336,9 @@ assert.equal(c.seriesTitle({ key: 'k', label: { type: 'span' } }), undefined, 'a
   const cred = (extra) => ({ id: 'p:1', status: 'ready', disabled: false, disabled_by: null, usable: true, cooldown_until: null, model_cooldowns: [], requests: 0, successes: 0, failures: 0, consecutive_failures: 0, last_error: null, ...extra });
   const prov = (credentials, extra = {}) => ({ name: 'p', kind: 'mock', enabled: true, model_count: 8, discover: true, config: { models: [] }, discovery: { state: 'off' }, credentials, ...extra });
   const failure = (cls, model) => ({ status: 500, class: cls, message: 'x', at: at - 10, model });
-  // One model-scoped failure: Ready, and the model is named, resting or not.
+  // One model-scoped failure: Ready, and the model is named, cooling down or not.
   let h = providerHealth(prov([cred({ requests: 1, failures: 1, consecutive_failures: 1, last_error: failure('server', 'mock-error-500'), model_cooldowns: [{ model: 'mock-error-500', until: at + 30_000, reason: 'server' }] })]), at);
-  assert.deepEqual([h.label, h.detail], ['Ready', 'mock-error-500 resting']);
+  assert.deepEqual([h.label, h.detail], ['Ready', 'mock-error-500 cooling down']);
   h = providerHealth(prov([cred({ requests: 1, failures: 1, consecutive_failures: 1, last_error: failure('server', 'mock-error-500') })]), at);
   assert.deepEqual([h.label, h.detail], ['Ready', 'mock-error-500 failed']);
   // A transport failure is the upstream as a whole.
@@ -352,6 +354,90 @@ assert.equal(c.seriesTitle({ key: 'k', label: { type: 'span' } }), undefined, 'a
   assert.equal(discoveryInfo(compat, at).short, 'discovery off');
   h = providerHealth(compat, at);
   assert.equal(h.detail, 'discovery is off');
+}
+
+// 10e. One lamp scale for a share of failed requests, on every page.
+{
+  const { errorRateTone, errorRateWords } = await import(url('js/components/status.js'));
+  for (const [rate, tone] of [[0, null], [0.049, null], [0.05, 'caution'], [0.249, 'caution'], [0.25, 'stop'], [1, 'stop'], [NaN, null], [Infinity, null], [null, null], [undefined, null]]) {
+    assert.equal(errorRateTone(rate), tone, `error rate ${rate}`);
+  }
+  assert.equal(errorRateWords(0.22, 'hour'), 'Elevated: 5% or more of the requests in the last hour failed');
+  assert.equal(errorRateWords(0.3), 'High: 25% or more of the requests in the last minute failed');
+  assert.equal(errorRateWords(0.01), null);
+  // The pages use it and keep no scale of their own.
+  const source = (rel) => fs.readFileSync(path.join(ui, rel), 'utf8');
+  for (const rel of ['js/pages/usage.js', 'js/pages/providers.js', 'js/pages/keys.js', 'js/pages/overview/vitals.js', 'js/pages/overview/model.js', 'js/pages/kitchen-sink.js']) {
+    assert.match(source(rel), /errorRateTone/, `${rel} uses the shared scale`);
+    assert.doesNotMatch(source(rel), /(?:>=|<|>)\s*0\.(?:05|1|25|5)\b/, `${rel} keeps no threshold of its own`);
+  }
+}
+
+// 10f. The overview verdict: models every credential rests for, and a high
+// failure rate, turn "Serving" into "Degraded"; routes are judged live.
+{
+  const { coolingModels, gatewayVerdict, routeAvailability, summarizeProvider } = await import(url('js/pages/overview/model.js'));
+  const { routeYard } = await import(url('js/pages/overview/routes.js'));
+  const now = 1_000_000;
+  const cred = (id, extra = {}) => ({ id, label: id, status: 'ready', disabled: false, usable: true, cooldown_until: null, model_cooldowns: [], ...extra });
+  const resting = (model, until) => ({ model_cooldowns: [{ model, until, reason: 'server' }] });
+  const route = (upstream, extra = {}) => ({ provider: 'mock', upstream_model: upstream, priority: 0, credentials_total: 2, credentials_available: 2, ...extra });
+  const models = [
+    { name: 'mock-echo', routes: [route('mock-echo')] },
+    { name: 'mock-error-500', routes: [route('mock-error-500')] },
+    { name: 'fast', alias_targets: ['mock-error-500'], routes: [route('mock-error-500', { target: 'mock-error-500' })] },
+    { name: 'ghost', alias_targets: ['nothing'], ignored: true, routes: [] },
+  ];
+  const mock = (credentials) => [{ name: 'mock', kind: 'mock', enabled: true, credentials }];
+  // Resting on one of two credentials: still served, nothing to report.
+  let providers = mock([cred('a', resting('mock-error-500', now + 30_000)), cred('b')]);
+  assert.deepEqual(coolingModels(routeAvailability(models, providers, now)), []);
+  // Resting on every credential: the model cannot be served. The alias that
+  // leads to it is not listed again, and the snapshot (2 available) is not believed.
+  providers = mock([cred('a', resting('mock-error-500', now + 30_000)), cred('b', resting('mock-error-500', now + 14_000))]);
+  const cooling = coolingModels(routeAvailability(models, providers, now));
+  assert.deepEqual(cooling, [{ model: 'mock-error-500', until: now + 14_000 }]);
+  // A cooldown that has ended is over without a new snapshot.
+  assert.deepEqual(coolingModels(routeAvailability(models, providers, now + 31_000)), []);
+  // A whole credential cooling down counts for every model on it.
+  const whole = mock([cred('a', { status: 'cooling', cooldown_until: now + 9_000 })]);
+  assert.deepEqual(coolingModels(routeAvailability(models, whole, now)).map((c) => c.model), ['mock-echo', 'mock-error-500']);
+  // Switched off is not a cooldown; a provider not in the list is judged by the snapshot.
+  assert.deepEqual(coolingModels(routeAvailability(models, mock([cred('a', { disabled: true, status: 'disabled' })]), now)), []);
+  assert.deepEqual(coolingModels(routeAvailability(models, [], now)), []);
+  assert.equal(routeAvailability(null, providers, now), null);
+
+  // The credentials are all ready: Serving, until a signal says otherwise.
+  const summaries = providers.map((p) => summarizeProvider(p, now));
+  const quiet = gatewayVerdict(summaries, {}, false, { cooling: [], errorRate: 0.049, errorWindow: 'minute', now });
+  assert.deepEqual([quiet.tone, quiet.label, quiet.attention], ['clear', 'Serving', []]);
+  let v = gatewayVerdict(summaries, {}, false, { cooling, errorRate: null, errorWindow: 'minute', now });
+  assert.deepEqual([v.tone, v.label, v.detail], ['caution', 'Degraded', 'All 2 credentials ready']);
+  assert.equal(v.attention[0].text, 'mock-error-500 cooling down, back in 14s');
+  assert.deepEqual(v.attention[0].names, ['mock-error-500']);
+  v = gatewayVerdict(summaries, {}, false, { cooling: [], errorRate: 0.22, errorWindow: 'minute', now });
+  assert.deepEqual([v.tone, v.label], ['caution', 'Degraded']);
+  assert.equal(v.attention[0].text, '22% of requests failed in the last minute');
+  v = gatewayVerdict(summaries, {}, false, { cooling: [{ model: 'a', until: now + 5_000 }, { model: 'b', until: null }, { model: 'c', until: null }], now });
+  assert.equal(v.attention[0].text, 'a, b and 1 more model cooling down, the first back in 5s');
+  // Without signals the verdict is the credentials' alone, as before.
+  assert.deepEqual(gatewayVerdict(summaries, {}).attention, []);
+  // A worse verdict keeps its own words and lists the same lines.
+  const worse = gatewayVerdict(whole.map((p) => summarizeProvider(p, now)), {}, false, { cooling, errorRate: 0.5, errorWindow: 'minute', now });
+  assert.deepEqual([worse.tone, worse.label, worse.attention.length], ['stop', 'Not serving', 2]);
+  // A refused file on disk still turns a clear verdict into a caution.
+  assert.equal(gatewayVerdict(summaries, { config_rejected: true }, false, { cooling: [], errorRate: 0, now }).label, 'Serving the last valid configuration');
+
+  // The yard: trouble first, then the busiest; at most eight models.
+  const many = Array.from({ length: 10 }, (_, i) => ({ name: `m${i}`, routes: [route(`m${i}`)] }));
+  const yardProviders = mock([cred('a', resting('m9', now + 20_000))]);
+  const yard = routeYard(routeAvailability(many, yardProviders, now), yardProviders, new Map([['m3', 40], ['m5', 7]]), now);
+  assert.deepEqual(yard.models.map((m) => m.id), ['m9', 'm3', 'm5', 'm0', 'm1', 'm2', 'm4', 'm6']);
+  assert.equal(yard.total, 10);
+  assert.equal(yard.models[0].note, 'back in 20s');
+  assert.deepEqual(yard.routes.find((r) => r.model === 'm9'), { model: 'm9', provider: 'mock', order: 1, state: 'caution', lit: false, until: now + 20_000 });
+  assert.equal(yard.routes.find((r) => r.model === 'm3').lit, true);
+  assert.deepEqual(yard.providers, [{ id: 'mock', label: 'mock', state: 'clear', note: 'Mock · 1 of 1 ready' }]);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

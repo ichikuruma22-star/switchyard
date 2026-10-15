@@ -1,18 +1,18 @@
 // Overview (#/overview): the page the operator keeps open. Top to bottom it
 // answers three questions: is the gateway healthy (status strip, notices,
-// provider health), what is it doing right now (vitals, traffic, live
-// activity), and who is using it (top models and client keys).
+// provider health), what is it doing right now (vitals, routes, traffic,
+// live activity), and who is using it (top models and client keys).
 //
-// Data: /status, /providers, /usage/timeseries, /usage/summary and /requests
-// through useResource; the live topics stats, request.started,
+// Data: /status, /providers, /models, /usage/timeseries, /usage/summary and
+// /requests through useResource; the live topics stats, request.started,
 // request.finished, credential and config.reloaded on top of them, and a
 // reload of all of it when frames may have been missed (useLiveGap).
 // Without the live connection every resource falls back to polling, and when
 // the gateway stops answering altogether the page says so instead of showing
 // its last state as the current one.
 //
-// The sections live in ./overview/: status.js, vitals.js, providers.js,
-// traffic.js, activity.js, top.js; model.js holds the logic, data.js the
+// The sections live in ./overview/: status.js, vitals.js, routes.js,
+// providers.js, traffic.js, activity.js, top.js; model.js holds the logic, data.js the
 // state they share, stale.js the words for data that could not be renewed.
 
 import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
@@ -26,6 +26,7 @@ import Activity, { FEED_CAP, FEED_POLL_MS } from './overview/activity.js';
 import { lastFrameAt, liveAttempts, loadedAttempts, syncClock, tail } from './overview/data.js';
 import { firstRun, pruneTail } from './overview/model.js';
 import ProviderBoard from './overview/providers.js';
+import Routes from './overview/routes.js';
 import { isStale } from './overview/stale.js';
 import { FirstRun, Notices, PutAway, StatusStrip } from './overview/status.js';
 import TopLists from './overview/top.js';
@@ -74,6 +75,9 @@ export default function Overview() {
   // Slow refreshes behind the live frames; brisk ones when there are none.
   const status = useResource('/status', { pollMs: liveOpen ? 30_000 : 5_000 });
   const providers = useResource('/providers', { pollMs: liveOpen ? 30_000 : 10_000 });
+  // The routes of each model. Their state is read from /providers, which
+  // credential frames keep current; this only says which routes exist.
+  const models = useResource('/models', { pollMs: liveOpen ? 60_000 : 30_000 });
   const hour = useResource(['/usage/timeseries', { range: '1h' }], { pollMs: liveOpen ? 60_000 : 15_000 });
   const day = useResource(range === '24h' ? ['/usage/timeseries', { range: '24h' }] : null, { pollMs: 60_000 });
   const top = useResource(['/usage/summary', { range: '24h' }], { pollMs: liveOpen ? 60_000 : 30_000 });
@@ -91,6 +95,7 @@ export default function Overview() {
   const refreshAll = () => {
     status.refresh();
     providers.refresh();
+    models.refresh();
     hour.refresh();
     day.refresh();
     top.refresh();
@@ -223,6 +228,7 @@ export default function Overview() {
   const sections = [
     { what: 'the status', resource: status },
     { what: 'provider health', resource: providers },
+    { what: 'the routes', resource: models },
     { what: 'provider attempts', resource: records },
     { what: 'the traffic chart', resource: range === '24h' ? day : hour },
     { what: 'the top lists', resource: top },
@@ -237,11 +243,12 @@ export default function Overview() {
 
   return html`
     <${Page} title="Overview" description=${description} class="overview">
-      <${StatusStrip} status=${status} providers=${providers} down=${down} />
+      <${StatusStrip} status=${status} providers=${providers} models=${models} down=${down} />
       <${Notices} status=${status} down=${down} sections=${sections} onRetry=${retry} dismissed=${dismissed} setDismissed=${setDismissed} />
       ${setup.show && !setupHidden && html`<${FirstRun} status=${status} providers=${providers} onHide=${() => setSetupHidden(true)} />`}
       <${PutAway} warnings=${hiddenWarnings} setup=${setup.show && setupHidden} onWarnings=${() => setDismissed([])} onSetup=${() => setSetupHidden(false)} />
       <${Vitals} status=${status} liveStatus=${live.status} down=${down} />
+      <${Routes} models=${models} providers=${providers} top=${top} />
       <${ProviderBoard} providers=${providers} recent=${records} onExpire=${providers.refresh} />
       <div class="overview-cols">
         <${Traffic} series=${range === '24h' ? day : hour} range=${range} onRange=${setRange} />

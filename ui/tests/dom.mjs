@@ -2397,4 +2397,69 @@ function mount(vnode) {
   }
 }
 
+// ---- describedBy: text outside the field describes it, first ---------------
+// Settings rows describe their control by the row's description and its
+// "Needs restart" badge; the empty hint they keep for a stable tree used to
+// be the only thing aria-describedby pointed at.
+{
+  const view = mount(html`
+    <div>
+      <p id="row-desc">What the setting does.</p>
+      <span id="row-restart">Needs restart</span>
+      <${Input} id="host" hint="" describedBy=${['row-desc', 'row-restart']} value="" onChange=${() => {}} />
+      <${Input} id="port" hint="Between 1 and 65535" describedBy="row-desc" value="" onChange=${() => {}} />
+      <${Input} id="name" hint="" value="" onChange=${() => {}} />
+      <${Input} id="bad" hint="ignored" error="Enter a host." describedBy="row-desc" value="" onChange=${() => {}} />
+      <div id="opt"><${Input} id="limit" label="Rate limit" optional value="" onChange=${() => {}} /></div>
+    </div>
+  `);
+  const described = (id) => document.querySelector(`#${id}`).getAttribute('aria-describedby');
+  assert.equal(described('host'), 'row-desc row-restart', 'an empty hint is not pointed at; the outside ids are, in order');
+  assert.equal(described('port'), 'row-desc port-hint', 'the outside text first, then the hint');
+  assert.equal(described('name'), null, 'nothing to describe: no attribute');
+  assert.equal(described('bad'), 'row-desc bad-error', 'an error takes the hint’s place, after the outside text');
+  const label = document.querySelector('#opt .field-label');
+  assert.equal(text(label), 'Rate limit (optional)', 'the optional mark is read as "(optional)", with a space');
+  await view.unmount();
+}
+
+// ---- BarList: the parts of a row are read apart -----------------------------
+{
+  const { BarList } = await import('../js/components/charts.js');
+  const view = mount(html`<${BarList} items=${[{ key: 'a', label: 'mock-echo', value: 97, href: '#/requests' }, { key: 'b', label: 'mock-lorem', value: 197 }]} share />`);
+  const row = document.querySelectorAll('.barlist-row').find((el) => text(el).includes('mock-echo'));
+  assert.match(text(row), /^mock-echo, 97, 33%$/, 'value and share are not run together ("9733%")');
+  await view.unmount();
+}
+
+// ---- useHold: a live list holds still under a mouse or the focus ----------
+{
+  const { useHold } = await import('../js/lib/hooks.js');
+  const changes = [];
+  let probe;
+  function Held() {
+    probe = useHold({ onChange: (held) => changes.push(held) });
+    return html`<div id="held" ...${probe.props}><button id="in-a">a</button><button id="in-b">b</button></div><button id="out">out</button>`;
+  }
+  const view = mount(html`<${Held} />`);
+  const box = document.querySelector('#held');
+  dispatch(box, 'pointerenter', { pointerType: 'touch', bubbles: false });
+  await sleep(5);
+  assert.equal(probe.heldRef.current, false, 'a finger does not hold the list');
+  dispatch(box, 'pointerenter', { pointerType: 'mouse', bubbles: false });
+  await until(() => probe.held && probe.by === 'pointer', 'a mouse over the list holds it');
+  assert.deepEqual(changes, [true]);
+  document.querySelector('#in-a').focus();
+  dispatch(box, 'pointerleave', { pointerType: 'mouse', bubbles: false });
+  await until(() => probe.by === 'focus', 'the focus inside keeps holding it after the pointer leaves');
+  assert.deepEqual(changes, [true], 'no release while the focus is inside');
+  // Focus moving within the list is not a release.
+  dispatch(document.querySelector('#in-a'), 'blur', { bubbles: false, relatedTarget: document.querySelector('#in-b') });
+  assert.equal(probe.heldRef.current, true);
+  dispatch(document.querySelector('#in-a'), 'blur', { bubbles: false, relatedTarget: document.querySelector('#out') });
+  await until(() => !probe.held, 'focus leaving the list releases it');
+  assert.deepEqual(changes, [true, false]);
+  await view.unmount();
+}
+
 console.log('component checks passed');

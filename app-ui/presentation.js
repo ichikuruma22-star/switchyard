@@ -7,6 +7,14 @@ export const timeLabel = ms => Number.isFinite(ms) ? new Intl.DateTimeFormat(und
 export const fullTime = ms => Number.isFinite(ms) ? new Date(ms).toLocaleString() : '';
 export const pretty = value => typeof value === 'string' ? value : JSON.stringify(value ?? null,null,2);
 export const shortPath = path => String(path || '').split(/[\\/]/).filter(Boolean).pop() || path;
+/** A folder path for reading. Windows verbatim prefixes (\\?\ and \\?\UNC\) are an
+ * internal detail. Display only: approvals and exact details keep the recorded value. */
+export const displayPath = path => {
+  const value = String(path ?? '');
+  if (/^\\\\\?\\UNC\\/i.test(value)) return `\\\\${value.slice(8)}`;
+  if (value.startsWith('\\\\?\\')) return value.slice(4);
+  return value;
+};
 export const modelId = model => typeof model?.id === 'string' ? model.id : '';
 export const isMockModel = model => modelId(model).startsWith('mock-') || model?.owned_by === 'mock' || model?.provider === 'mock';
 export const toolName = name => ({read_file:'Read file',search:'Search project',search_files:'Search project',list_files:'List files',apply_patch:'Edit files',run_command:'Run command'}[name] || String(name||'Tool operation').replaceAll('_',' '));

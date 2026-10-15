@@ -12,6 +12,15 @@ export function IconButton({label,icon,class:className='',...props}) {
 export function Notice({title,children,tone='neutral',action}) {
   return html`<div class="notice" data-tone=${tone} role=${tone==='stop'?'alert':undefined}><${Icon} name=${tone==='stop'||tone==='caution'?'alert':'info'}/><div><strong>${title}</strong>${children&&html`<div class="notice-body">${children}</div>`}${action}</div></div>`;
 }
+/** The review header's signal: amber with visible text only while a decision waits. */
+export function SignalLight({count=0}) {
+  const text=count>1?`${count} approvals needed`:count?'Approval needed':'Nothing to approve';
+  return html`<span class="signal-light" data-tone=${count?'caution':'neutral'}><${Icon} name="signal"/><span>${text}</span></span>`;
+}
+/** A turn boundary: one thin rule with the outcome and its time. */
+export function TurnRule({tone='neutral',label,time,fullTime,note}) {
+  return html`<div class="turn-rule" data-tone=${tone}><${Icon} name=${tone==='neutral'?'junction':'alert'}/><span class="turn-rule-label">${label}</span>${time&&html`<time title=${fullTime}>${time}</time>`}${note&&html`<span class="turn-rule-note">${note}</span>`}</div>`;
+}
 export function Dialog({open,onClose,title,children,class:className=''}) {
   const ref=useRef(null), opener=useRef(null), id=useRef(`dialog-title-${++nextId}`);
   const closeRef=useRef(onClose); closeRef.current=onClose;

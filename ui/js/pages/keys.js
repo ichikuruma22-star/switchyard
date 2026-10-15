@@ -25,6 +25,7 @@ import {
   Segmented,
   Switch,
   Table,
+  errorRateTone,
   sortRows,
   toast,
 } from '../components/index.js';
@@ -183,6 +184,10 @@ export default function Keys() {
   const keys = useResource('/keys', { pollMs: liveOpen ? 60_000 : 15_000 });
   const status = useResource('/status', { pollMs: liveOpen ? 60_000 : 20_000 });
   const models = useResource('/models', { pollMs: 120_000 });
+  // Whether any price is set: without one, a cost of 0 is "not priced", a
+  // dash, as on the Usage page. null while it is not known.
+  const pricing = useResource('/pricing');
+  const hasPrices = Array.isArray(pricing.data) ? pricing.data.length > 0 : null;
   const now = useNow(5000);
   const isPhone = useIsPhone();
 
@@ -206,7 +211,7 @@ export default function Keys() {
 
   // ---- keeping fresh ------------------------------------------------------
 
-  const refreshAll = () => Promise.all([keys.refresh(), status.refresh(), models.refresh()]);
+  const refreshAll = () => Promise.all([keys.refresh(), status.refresh(), models.refresh(), pricing.refresh()]);
 
   useLive('config.reloaded', () => {
     refreshAll();
@@ -444,7 +449,7 @@ export default function Keys() {
         return html`
           <span class="keys-stack">
             <span class=${requests ? undefined : 'faint'} title=${`${plural(requests ?? 0, 'request')} in the last 30 days`}>${formatTokens(requests)}</span>
-            ${stacked && errors > 0 && html`<span class="keys-sub keys-errors" title=${failedShare(requests, errors)}>${formatTokens(errors)} failed</span>`}
+            ${stacked && errors > 0 && html`<span class="keys-sub keys-errors" data-tone=${errorRateTone(requests > 0 ? errors / requests : null) ?? undefined} title=${failedShare(requests, errors)}>${formatTokens(errors)} failed</span>`}
           </span>
         `;
       },
@@ -459,7 +464,7 @@ export default function Keys() {
       render: (entry) => {
         const { errors, requests } = entry.usage ?? {};
         if (!errors) return html`<span class="faint">${formatNumber(errors)}</span>`;
-        return html`<span class="keys-errors" title=${failedShare(requests, errors)}>${formatTokens(errors)}</span>`;
+        return html`<span class="keys-errors" data-tone=${errorRateTone(requests > 0 ? errors / requests : null) ?? undefined} title=${failedShare(requests, errors)}>${formatTokens(errors)}</span>`;
       },
     },
     {
@@ -480,9 +485,10 @@ export default function Keys() {
       sortValue: (entry) => entry.usage?.cost,
       render: (entry) => {
         const { cost, tokens } = entry.usage ?? {};
+        const unpriced = hasPrices === false && !cost;
         return html`
           <span class="keys-stack">
-            <span class=${cost ? undefined : 'faint'}>${formatCurrency(cost)}</span>
+            ${unpriced ? html`<span class="faint" title="No prices configured">${DASH}</span>` : html`<span class=${cost ? undefined : 'faint'}>${formatCurrency(cost)}</span>`}
             ${stacked && tokens > 0 && html`<span class="keys-sub" title=${`${plural(tokens, 'token')}, prompt and output`}>${formatTokens(tokens)} tokens</span>`}
           </span>
         `;
@@ -547,7 +553,7 @@ export default function Keys() {
     },
     // `toggle`, `remove` and friends read the latest state through the resources.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [toggling, modelNames, now, authRequired, tier],
+    [toggling, modelNames, now, authRequired, tier, hasPrices],
   );
   const sortShown = columns.some((column) => column.key === sort.key);
 

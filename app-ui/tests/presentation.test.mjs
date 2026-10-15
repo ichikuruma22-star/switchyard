@@ -45,3 +45,15 @@ test('blocked storage is reported without losing the in-memory request',()=>{
   assert.deepEqual(readJournal({getItem(){throw Error('blocked');}}),{});
   assert.equal(writeJournal({setItem(){throw Error('blocked');}},{s1:{}}),false);
 });
+
+test('display paths hide Windows verbatim prefixes and leave other paths unchanged',async()=>{
+  const { displayPath }=await import('../presentation.js');
+  const raw=String.raw;
+  assert.equal(displayPath(raw`\\?\E:\projects\app`),raw`E:\projects\app`);
+  assert.equal(displayPath(raw`\\?\UNC\server\share\app`),raw`\\server\share\app`);
+  assert.equal(displayPath(raw`\\?\unc\server\share`),raw`\\server\share`);
+  assert.equal(displayPath(raw`E:\projects\app`),raw`E:\projects\app`);
+  assert.equal(displayPath(raw`\\server\share`),raw`\\server\share`);
+  assert.equal(displayPath('/home/user/app'),'/home/user/app');
+  assert.equal(displayPath(undefined),'');
+});

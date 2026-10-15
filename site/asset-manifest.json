@@ -6,8 +6,13 @@
   },
   {
     "path": "404.html",
-    "bytes": 877,
-    "sha256": "31096a3ff88e7a3e9b4206147c237df15261c9d51644c86cb4a79d227a3dd664"
+    "bytes": 1570,
+    "sha256": "6391a1059d8427d3c95a1315d152164584ed39d8941e5881839587065742ef5f"
+  },
+  {
+    "path": "assets/apple-touch-icon.png",
+    "bytes": 2002,
+    "sha256": "784b173964d53f90f26b05b5794c286ddb5f39b699ae5fbf1ce1a2f6ec8e8cec"
   },
   {
     "path": "assets/fonts/archivo-latin-var.woff2",
@@ -30,14 +35,19 @@
     "sha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b"
   },
   {
+    "path": "assets/social-card.png",
+    "bytes": 22246,
+    "sha256": "381f8a4f71495915824ea895cd3a2a3f99c7ded90d910049f2f2d7a2504c2ab8"
+  },
+  {
     "path": "assets/switchya-mark.svg",
     "bytes": 495,
     "sha256": "5295d8ae25239f81ebec6ffa85ac49d7e56e3cc21693660208dabdc62bcfb7c9"
   },
   {
     "path": "index.html",
-    "bytes": 16202,
-    "sha256": "d34c304cef4a9dc1ead7649ad0c1dde218ec1bd176fccb3c24ed7d895c78a91c"
+    "bytes": 18934,
+    "sha256": "0f9e20aa1bb135554fa49fadf93380b1b4b7a8af7d261c15a6c0a73d8e766257"
   },
   {
     "path": "robots.txt",
@@ -46,13 +56,13 @@
   },
   {
     "path": "site.css",
-    "bytes": 27834,
-    "sha256": "20bf686ed9390fe3915bcb5aa61b6456b5e09a31f7072fe7109d5246f5bca489"
+    "bytes": 28958,
+    "sha256": "676d4010fd17ad0c922b7c6df8cfff462917fab8532435ff3692659e61586560"
   },
   {
     "path": "site.js",
-    "bytes": 1719,
-    "sha256": "cc15a4c69b7770ab863771e1d1adc8c80ffa498f6cbdddda00d95eaf2b2e7619"
+    "bytes": 1949,
+    "sha256": "a8454b49ba4cbefd7e245441f5cc875c80ab0afbf6f1176c1a96eb8bccd823d5"
   },
   {
     "path": "sitemap.xml",

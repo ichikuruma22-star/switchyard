@@ -58,6 +58,8 @@ import {
   Tooltip,
   TrackDiagram,
   confirm,
+  errorRateTone,
+  errorRateWords,
   sortRows,
   toast,
   toneForStatus,
@@ -1333,8 +1335,8 @@ function LiveSection() {
   // error_rate_1m is the failed share of the requests of the last minute (rpm).
   const quiet = stats != null && stats.rpm === 0;
   const errorRate = stats && !quiet ? stats.error_rate_1m : null;
-  const errorTone = errorRate == null ? undefined : errorRate >= 0.05 ? 'stop' : errorRate > 0 ? 'caution' : 'clear';
-  const errorWords = { stop: '5% or more of the requests of the last minute failed', caution: 'Some requests of the last minute failed', clear: 'No request failed in the last minute' };
+  // The shared lamp scale: no lamp under 5%, caution from 5%, stop from 25%.
+  const errorTone = errorRateTone(errorRate) ?? undefined;
   const freshKeys = useMemo(() => new Set(events.map((event) => event.id)), [events]);
   // No frames arrive while the socket is down: the numbers are the last ones heard.
   const stale = stats != null && state.status !== 'open';
@@ -1362,7 +1364,7 @@ function LiveSection() {
             value=${errorRate == null ? null : formatPercent(errorRate).replace('%', '')}
             unit=${errorRate == null ? undefined : '%'}
             lamp=${errorTone}
-            lampLabel=${errorTone ? errorWords[errorTone] : undefined}
+            lampLabel=${errorTone ? errorRateWords(errorRate, 'minute') : undefined}
             hint=${quiet ? 'No requests in the last minute' : 'Of the last minute'}
             loading=${!stats}
           />

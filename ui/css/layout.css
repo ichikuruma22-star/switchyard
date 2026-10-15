@@ -349,8 +349,10 @@
     display: flex;
   }
 
+  /* The chip's word goes only while the connection is up: "Reconnecting"
+     and "Offline" keep it, so colour is never the only cue. */
   .palette-trigger,
-  .live-chip-label {
+  .live-chip[data-state="open"] .live-chip-label {
     display: none;
   }
 
@@ -468,6 +470,12 @@
   border-bottom: var(--hairline) solid var(--rule);
   color: var(--text-3);
   flex: none;
+}
+
+/* The field draws no outline of its own (it fills the bar): the bar's
+   bottom rule turns into the focus colour instead. */
+.palette-input:focus-within {
+  box-shadow: inset 0 -2px 0 var(--focus-ring);
 }
 
 .palette-input input {
