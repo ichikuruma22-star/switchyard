@@ -1,19 +1,19 @@
 {
-  "checkedAt": "2026-10-15T04:24:25.499Z",
-  "versionId": "f516d8ee-279d-47c6-b330-446fb82a4ab3",
-  "change": "Model-access section: Claude Code runs inside the workspace; official-terminal opening is optional for managed profiles.",
+  "checkedAt": "2026-10-15T04:40:50.850Z",
+  "versionId": "f03989c3-678f-4eb0-b781-6004c9eb15ee",
+  "change": "Model-access section corrected for in-workspace Claude Code, plus a Switch accounts workspace bullet covering named profiles and browser/device/Console/SSO sign-in methods.",
   "results": [
     {
       "url": "https://switchya.com/",
       "status": 200,
-      "bytes": 15840,
-      "sha256": "1e93be367eaaaaef52bf9d1c8710d9f9bd03b8032caa4a81af680251f1d37f67"
+      "bytes": 16121,
+      "sha256": "2cc191a24e5c2091e19da0b26242364829ab6076d4c26f2d109277e49a08943d"
     },
     {
       "url": "https://www.switchya.com/",
       "status": 200,
-      "bytes": 15840,
-      "sha256": "1e93be367eaaaaef52bf9d1c8710d9f9bd03b8032caa4a81af680251f1d37f67"
+      "bytes": 16121,
+      "sha256": "2cc191a24e5c2091e19da0b26242364829ab6076d4c26f2d109277e49a08943d"
     },
     {
       "url": "https://switchya.com/site.css",
