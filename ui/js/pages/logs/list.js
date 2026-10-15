@@ -149,6 +149,17 @@ function LogDetail({ line, actions, targetOn }) {
  * A row re-renders only when something it shows changed: the list renders
  * on every scroll frame and every batch of new lines.
  */
+/**
+ * The keyboard left a row: put its text back at the start. Tabbing to a chip
+ * near the end scrolls the line sideways (it does not wrap), and it would
+ * stay so, its message hidden, after the focus has moved on.
+ */
+function resetScroll(event) {
+  if (event.currentTarget.contains(event.relatedTarget)) return;
+  const text = event.currentTarget.querySelector('.logs-text');
+  if (text && text.scrollLeft !== 0) text.scrollLeft = 0;
+}
+
 class LogRow extends Component {
   shouldComponentUpdate(next) {
     const now = this.props;
@@ -183,6 +194,7 @@ class LogRow extends Component {
         data-expanded=${expanded ? '' : undefined}
         data-active=${active ? '' : undefined}
         data-mark=${mark ? '' : undefined}
+        onBlurCapture=${resetScroll}
       >
         ${mark &&
         html`<div class="logs-mark">
@@ -215,7 +227,7 @@ class LogRow extends Component {
                   title=${text.length > CHIP_TITLE_FROM ? `${name}=${text}` : undefined}
                   onClick=${toggle}
                 >
-                  <span class="logs-chip-key">${marked(name, needle)}</span><span class="logs-chip-eq">=</span><span class="logs-chip-value">${marked(text, needle)}</span>
+                  <span class="logs-chip-key">${marked(name, needle)}</span><span class="logs-chip-eq" aria-hidden="true">=</span><span class="logs-chip-value">${marked(text, needle)}</span>
                 </button>
               `;
             })}

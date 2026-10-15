@@ -139,8 +139,14 @@
   white-space: nowrap;
 }
 
-/* Failed requests are a status: the stop ink, and a figure next to it. */
-.keys-errors {
+/* Failed requests are a status once they are a share worth a lamp (the
+   shared scale, errorRateTone): the caution ink from 5% of the key's
+   requests, the stop ink from 25%. One failure in ten thousand stays plain. */
+.keys-errors[data-tone="caution"] {
+  color: var(--caution-ink);
+}
+
+.keys-errors[data-tone="stop"] {
   color: var(--stop-ink);
 }
 

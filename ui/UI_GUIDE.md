@@ -114,7 +114,8 @@ ui/
                         leave guards: useLeaveGuard, registerLeaveGuard, mayLeave
       hooks.js          useResource, useAsync, useInterval, useNow, useDebounced,
                         useLocalStorage, useMediaQuery, useIsPhone, useHotkey,
-                        useSize, usePresence, useModalLayer, useOutsidePointer
+                        useSize, usePresence, useModalLayer, useOutsidePointer,
+                        useHold
       format.js         numbers, tokens, durations, countdowns, times, bytes,
                         money, percent, sentence
       commands.js       useCommands: add entries to the command palette
@@ -391,6 +392,16 @@ Patterns:
   Offer a pause switch; while paused, count what arrived and show
   "12 new requests" as the way back. `useLiveGap(res.refresh)` covers
   reconnects and lag.
+- **Hold still while read:** a live list does not move under the reader.
+  While a mouse or pen is over it, or the keyboard focus is in it, treat it
+  as paused without touching the pause switch: park what arrives (rows that
+  start as well as rows that end), count it in the same "12 new requests"
+  button, and bring it in when the reader leaves (if the top of the list is
+  on screen). `useHold({ onChange })` from `lib/hooks.js` does the watching:
+  spread its `props` on an element that stays mounted while the list empties,
+  read `heldRef.current` in frame handlers, and do the reveal in
+  `onChange(false)`. Touch is left alone: a finger scrolls the list. The
+  Requests table and the Overview feed both do this.
 - **Live numbers:** render the last `stats` frame; fall back to polling
   `/status` when `liveState.status` is not `open` (reading the state to
   decide what to show is fine; `onDown` is for doing something once, when
@@ -586,6 +597,7 @@ drawing an SVG in a page.
 | `Kbd` | children | `<${Kbd}>Esc<//>` |
 | `toneForStatus(status)` | HTTP status to tone | 1xx info (a 101 is a WebSocket switched to), 2xx clear, 3xx and 429 caution, other 4xx/5xx stop, none off. A caller holding a record's `ok` lets it decide: `r.ok === false ? 'stop' : toneForStatus(r.status)` (a stream that broke after its 200 failed) |
 | `toneWord(tone)` | a tone in a word a person would say | `Healthy`, `Warning`, `Critical`, `In progress`, `Inactive` |
+| `errorRateTone(rate)`, `errorRateWords(rate, span)` | the one lamp scale for a share of failed requests, on every page | no lamp under 5% (or for a missing rate), `caution` from 5%, `stop` from 25%. The words are the lamp's name: "Elevated: 5% or more of the requests in the last minute failed"; `span` follows "in the last" (`minute`, `hour`, `24 hours`). Do not keep a scale of your own |
 
 A lamp always has words next to it (or a `title` when the column header says
 what it is). A lamp given neither is named `toneWord(tone)` for assistive
@@ -725,12 +737,14 @@ group's accessible name; the `Field`'s label is the visible one.
 
 ### Form controls
 
-All take `label`, `hint`, `error`, `warning`, `optional`, `disabled`, and
-call `onChange(value)`.
+All take `label`, `hint`, `error`, `warning`, `optional`, `describedBy`,
+`disabled`, and call `onChange(value)`. `optional` reads "(optional)" to
+assistive technology ("Rate limit (optional)"); the brackets are not drawn.
 
 | Component | Extra props |
 |---|---|
 | `Input` | `value`, `type`, `icon`, `suffix`, `actions` (icon buttons are square; a labelled `Button` keeps its width), `clearable`, `onClear`, `clearLabel`, `mono`, `size`, `autoFocus`, `onEnter`, `inputRef`, `placeholder` |
+| every control | `describedBy`: the id (or a list of ids) of text outside the field that describes the control, a setting's description or its "Needs restart" badge. `aria-describedby` lists them first, then the field's own error, warning or hint. An empty `hint` (kept so the field's tree does not change) is not pointed at |
 | `Textarea` | `value`, `rows`, `maxRows`, `mono`, `autoGrow` |
 | `Select` | `value`, `options` (strings or `{ value, label, disabled }`), `placeholder`, `size` |
 | `NumberInput` | `value` (number or null), `min`, `max`, `step` (a whole step means whole numbers only), `unit`, `placeholder` (say what empty means). `onChange` fires only for values inside the range; other text is marked invalid, blocks `Form` submit, and is clamped on blur |
@@ -827,8 +841,9 @@ if (ok) { toast.success('Key deleted'); keys.refresh(); }
 `TrackDiagram`: `models` `[{ id, label, note }]`, `providers`
 `[{ id, label, note, state }]`, `routes` `[{ model, provider, order, state, lit }]`,
 `selected`, `onSelect`. The lit rails are the route a request takes now (the
-first route in failover order whose state is `clear`). Dashed rails lead to a
-failing provider. Below 520px it becomes a list.
+first route in failover order whose state is `clear`, unless `lit` says
+otherwise). Amber rails are routes in `caution`, held back by a cooldown;
+dashed rails lead to a failing provider. Below 520px it becomes a list.
 
 Each rail is two lines with the surface colour between them, so the diagram
 has to know what it sits on. In a panel, a drawer or a modal it does
@@ -1095,7 +1110,10 @@ Plain, specific, no marketing. Write what an operator at 3 a.m. needs.
   re-renders once a minute for things that change slowly.
 - **A gateway message in front of other text** goes through `sentence()`:
   the gateway writes "the request body is not valid JSON", lower case and
-  without a full stop.
+  without a full stop. It quotes identifiers in backticks: show the message
+  with `<${TickText} text=${sentence(error.message)} />` (`components/code.js`),
+  which sets them in mono and drops the backticks. In a `title`, where there
+  is no mono, drop the backticks yourself.
 - **Use the product's words:** provider, credential, client key, model,
   alias, route, attempt, cooldown. One word per thing, the same on every page.
 - No exclamation marks, no "please", no "successfully" ("Provider saved"),

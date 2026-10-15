@@ -9,7 +9,9 @@
 //                the traffic chart between refetches
 //   attempts     upstream attempts per provider (see model.js), kept across
 //                visits to other pages
-//   gauges       the in-flight count the vitals show, for the activity feed
+//   gauges       what the vitals show that other sections judge by: the
+//                in-flight count (the activity feed) and the error rate
+//                (the verdict in the status strip)
 //   contact      when the gateway last sent a live frame
 
 import { useNow } from '../../lib/hooks.js';
@@ -77,8 +79,16 @@ export function liveAttempts(records) {
 
 // ---- Gauges and contact -----------------------------------------------------
 
-/** Requests in flight as the vitals last heard it (null: not known). */
-export const gauges = createStore({ inFlight: null });
+/**
+ * The vitals as last heard (null: not known).
+ *   inFlight     requests in flight
+ *   errorRate    the failed share the Error rate cell judges: null while the
+ *                gateway does not answer, or when no request came in the
+ *                last minute
+ *   errorWindow  what that rate covers, "minute" (live) or "hour" (polled)
+ *   rpm          requests per minute
+ */
+export const gauges = createStore({ inFlight: null, errorRate: null, errorWindow: 'minute', rpm: null });
 
 let frameAt = null;
 

@@ -3,11 +3,12 @@
 // and the setup steps of a new installation.
 
 import { html, useMemo, useState } from '../../../vendor/preact-htm.js';
-import { Button, CodeBlock, CopyButton, IconButton, Notice, Panel, Skeleton, StatusLamp } from '../../components/index.js';
+import { Button, CodeBlock, CopyButton, IconButton, Notice, Panel, Skeleton, StatusLamp, TickText } from '../../components/index.js';
 import { formatDateTime, formatDuration, formatNumber, formatTime, plural, sentence } from '../../lib/format.js';
 import { href } from '../../lib/router.js';
-import { serverClock, useServerNow } from './data.js';
-import { clientBase, curlExample, firstRun, gatewayVerdict, summarizeProvider, warningTarget } from './model.js';
+import { useStore } from '../../lib/store.js';
+import { gauges, serverClock, useServerNow } from './data.js';
+import { clientBase, coolingModels, curlExample, firstRun, gatewayVerdict, routeAvailability, summarizeProvider, warningTarget } from './model.js';
 import { focusSoon, focusTarget } from './stale.js';
 
 // ---------------------------------------------------------------------------
@@ -23,46 +24,64 @@ function Fact({ label, loading, wide = false, count = false, children }) {
   `;
 }
 
+/** One line of the verdict's attention list, with model names in mono. */
+function Attention({ item }) {
+  if (item.key !== 'cooling') return html`<li>${item.text}</li>`;
+  const names = item.names.map((name, i) => html`${i > 0 ? (item.rest > 0 ? ', ' : ' and ') : ''}<span class="mono" key=${name}>${name}</span>`);
+  return html`<li>${names}${item.rest > 0 ? ` and ${plural(item.rest, 'more model')}` : ''} ${item.tail}</li>`;
+}
+
 /**
  * One line that answers "is it healthy, what is it, where is it". While the
  * configuration file on disk is refused the verdict says so and links to the
  * raw file (see gatewayVerdict).
  * status     /status (useResource)
- * providers  /providers (useResource)
+ * providers  /providers (useResource), patched by credential frames
+ * models     /models (useResource): a model every credential is resting for
+ *            makes a "Serving" gateway "Degraded"
  * down       null, or { at, unreachable } while the gateway does not answer:
  *            `at` is when it last did (this browser's clock), `unreachable`
  *            is true when no response arrived at all
  */
-export function StatusStrip({ status, providers, down = null }) {
+export function StatusStrip({ status, providers, models, down = null }) {
   const now = useServerNow(1000);
   const data = status.data;
   const summaries = useMemo(() => (providers.data ? providers.data.map((p) => summarizeProvider(p, now)) : null), [providers.data, now]);
+  const cooling = useMemo(() => coolingModels(routeAvailability(models?.data, providers.data, now)), [models?.data, providers.data, now]);
+  const { errorRate, errorWindow } = useStore(gauges);
   // What the page last heard is not the state of a gateway that has stopped
   // answering: the verdict says so, and nothing pulses or counts on.
   const verdict = down
-    ? { tone: 'stop', label: down.unreachable ? 'Not reachable' : 'Not answering', detail: `Last answer at ${formatTime(down.at)}, trying again every 5s` }
-    : gatewayVerdict(summaries, data, Boolean(providers.error) && !providers.data);
+    ? { tone: 'stop', label: down.unreachable ? 'Not reachable' : 'Not answering', detail: `Last answer at ${formatTime(down.at)}, trying again every 5s`, attention: [] }
+    : gatewayVerdict(summaries, data, Boolean(providers.error) && !providers.data, { cooling, errorRate, errorWindow, now });
   const loading = !data;
   const counts = data?.counts;
   const uptime = data ? Math.max(0, (down ? down.at + serverClock.get().offset : now) - data.started_at) : null;
 
+  // The label and its sentence are announced when they change; the list
+  // under them is not (its countdowns tick every second).
   return html`
     <section class="overview-status" aria-label="Gateway status" data-down=${down ? '' : undefined}>
-      <div class="overview-verdict" role="status">
+      <div class="overview-verdict" data-tone=${verdict?.tone}>
         ${verdict
           ? html`
-              <${StatusLamp} tone=${verdict.tone} size="lg" pulse=${verdict.tone === 'clear' && !down} title=${verdict.label} />
+              <span class="overview-verdict-hood"><${StatusLamp} tone=${verdict.tone} size="lg" pulse=${verdict.tone === 'clear' && !down} title=${verdict.label} /></span>
               <div class="overview-verdict-text">
-                <span class="overview-verdict-label">${verdict.label}</span>
-                <span class="overview-verdict-detail">${verdict.detail}</span>
+                <span class="overview-verdict-say" role="status">
+                  <span class="overview-verdict-label">${verdict.label}</span>
+                  <span class="overview-verdict-detail">${verdict.detail}</span>
+                </span>
+                ${verdict.attention.length > 0 &&
+                html`<ul class="overview-verdict-attention" aria-label="Needs attention">
+                  ${verdict.attention.map((item) => html`<${Attention} key=${item.key} item=${item} />`)}
+                </ul>`}
                 ${verdict.refused &&
                 html`<span class="overview-verdict-refused">The file on disk was refused. <a href=${href('/settings', { tab: 'raw' })}>Open the raw file</a></span>`}
               </div>
             `
-          : html`<${Skeleton} width="160px" height="20px" />`}
+          : html`<span role="status"><${Skeleton} width="160px" height="20px" /></span>`}
       </div>
       <dl class="overview-facts">
-        <${Fact} label="Version" loading=${loading}><span class="mono">${data?.version}</span><//>
         <${Fact} label=${down ? 'Uptime at last answer' : 'Uptime'} loading=${loading}>
           <span class=${down ? 'num faint' : 'num'} title=${data ? `Started ${formatDateTime(data.started_at)}` : undefined}>${uptime != null && uptime < 60_000 ? `${Math.floor(uptime / 1000)}s` : formatDuration(uptime)}</span>
         <//>
@@ -82,12 +101,6 @@ export function StatusStrip({ status, providers, down = null }) {
 // ---------------------------------------------------------------------------
 // Notices
 // ---------------------------------------------------------------------------
-
-/** `provider \`x\`: ...` with the quoted names set in mono. */
-function WarningText({ text }) {
-  const parts = String(text).split(/`([^`]+)`/);
-  return html`<span class="overview-warning-text">${parts.map((part, i) => (i % 2 === 1 ? html`<span class="mono" key=${i}>${part}</span>` : part))}</span>`;
-}
 
 const WARNINGS_SHOWN = 4;
 
@@ -181,7 +194,7 @@ export function Notices({ status, down = null, sections = [], onRetry, dismissed
             const target = warningTarget(text);
             return html`
               <li key=${text}>
-                <${WarningText} text=${text} />
+                <${TickText} class="overview-warning-text" text=${text} />
                 <span class="overview-warning-actions">
                   <a href=${href(target.path, target.query)}>${target.label}</a>
                   <${IconButton} icon="x" size="sm" label="Dismiss this warning" data-overview-focus="dismiss" onClick=${() => dismiss([text], index)} />
@@ -233,15 +246,19 @@ export function PutAway({ warnings, setup, onWarnings, onSetup }) {
 // First run
 // ---------------------------------------------------------------------------
 
-function Step({ done, title, action, children }) {
+/**
+ * One setup step. A step that is done shows its title and lamp only; `more`
+ * is what it still offers behind a button (the example request).
+ */
+function Step({ done, title, action, more = null, children }) {
   return html`
     <li class="overview-step" data-done=${done ? '' : undefined}>
       <div class="overview-step-head">
         <h3>${title}</h3>
         <${StatusLamp} tone=${done ? 'clear' : 'off'} label=${done ? 'Done' : 'To do'} />
       </div>
-      <div class="overview-step-body">${children}</div>
-      ${action && html`<div class="overview-step-action">${action}</div>`}
+      ${done ? more && html`<div class="overview-step-body">${more}</div>` : html`<div class="overview-step-body">${children}</div>`}
+      ${!done && action && html`<div class="overview-step-action">${action}</div>`}
     </li>
   `;
 }
@@ -249,8 +266,14 @@ function Step({ done, title, action, children }) {
 /**
  * The setup steps of a new installation: shown while only the mock provider
  * exists or no client key does. `onHide` puts them away.
+ *
+ * Once the gateway has served a request the steps fold into one row (what
+ * is left, its button, "Show steps"): the page is about the gateway's state
+ * by then, and the full list would push it below the fold.
  */
 export function FirstRun({ status, providers, onHide }) {
+  const [expanded, setExpanded] = useState(false);
+  const [example, setExample] = useState(false);
   const state = firstRun(status.data, providers.data);
   if (!state.show) return null;
   const listen = status.data.listen;
@@ -265,50 +288,81 @@ export function FirstRun({ status, providers, onHide }) {
     onHide();
     focusSoon(() => focusTarget('show-setup'));
   };
+  // The toggle is drawn again in the other layout: the focus follows it.
+  const toggle = () => {
+    setExpanded(!expanded);
+    focusSoon(() => focusTarget('setup-toggle'));
+  };
+
+  const providerAction = html`<${Button} size="sm" variant="primary" icon="plus" href=${href('/providers', { new: 1 })}>Add a provider<//>`;
+  const keyAction = html`<${Button} size="sm" variant=${providerDone ? 'primary' : 'secondary'} icon="key" href=${href('/keys', state.noKey ? { new: 1 } : undefined)}>${state.noKey ? 'Create a client key' : 'Open API keys'}<//>`;
+
+  // ---- Compact: requests are being served ---------------------------------
+  if (state.hasTraffic && !expanded) {
+    const left = [!providerDone && { title: state.mockOnly ? 'Add a real provider' : 'Add a provider', action: providerAction }, state.noKey && { title: 'Create a client key', action: keyAction }].filter(Boolean);
+    const first = left[0];
+    return html`
+      <section class="overview-setup-compact" aria-label="Setup">
+        <span class="overview-setup-compact-text">
+          <${StatusLamp} tone="off" label=${`${plural(left.length, 'setup step')} left: ${first.title}`} />
+        </span>
+        <span class="overview-setup-compact-actions">
+          ${first.action}
+          <${Button} size="sm" variant="ghost" aria-expanded="false" data-overview-focus="setup-toggle" onClick=${toggle}>Show steps<//>
+          <${IconButton} icon="x" size="sm" label="Hide the setup steps" data-overview-focus="hide-setup" onClick=${hide} />
+        </span>
+      </section>
+    `;
+  }
+
+  const curlBlock = html`
+    <${CodeBlock}
+      class="overview-curl"
+      language="text"
+      title="Example request for bash/zsh"
+      value=${curl}
+      note=${state.authRequired || !state.model || viaPage
+        ? html`${state.authRequired &&
+            html`Set <span class="mono">SWITCHYARD_KEY</span> to a client key first. A key is shown when it is created and can be revealed again under API keys.${' '}`}${!state.model &&
+            html`Replace <span class="mono">MODEL</span> with a model one of your providers serves.${' '}`}${viaPage &&
+            html`The gateway listens on <span class="mono">${listen}</span>. The example uses the address this dashboard was opened on, because that is the one known to reach the gateway from here.`}`
+        : null}
+    />
+  `;
 
   return html`
     <${Panel}
       title="Set up the gateway"
       description="What is left before your own clients are served."
-      actions=${html`<${IconButton} icon="x" label="Hide the setup steps" data-overview-focus="hide-setup" onClick=${hide} />`}
+      actions=${html`
+        ${state.hasTraffic && html`<${Button} size="sm" variant="ghost" aria-expanded="true" data-overview-focus="setup-toggle" onClick=${toggle}>Show fewer<//>`}
+        <${IconButton} icon="x" label="Hide the setup steps" data-overview-focus="hide-setup" onClick=${hide} />
+      `}
     >
       <ol class="overview-steps">
-        <${Step}
-          done=${providerDone}
-          title="1. Add a provider"
-          action=${html`<${Button} size="sm" variant=${providerDone ? 'secondary' : 'primary'} icon="plus" href=${href('/providers', { new: 1 })}>Add a provider<//>`}
-        >
+        <${Step} done=${providerDone} title="1. Add a provider" action=${providerAction}>
           ${state.noProviders
             ? 'No provider is configured, so every request is refused. Add an upstream and its API key.'
-            : state.mockOnly
-              ? 'Only the built-in mock provider is configured. It answers with canned text and needs no key, so clients and this dashboard can be tried before a real upstream exists.'
-              : 'A real provider is configured.'}
+            : 'Only the built-in mock provider is configured. It answers with canned text and needs no key, so clients and this dashboard can be tried before a real upstream exists.'}
+        <//>
+        <${Step} done=${!state.noKey} title="2. Create a client key" action=${keyAction}>
+          ${state.authRequired
+            ? 'No client key exists, so the gateway answers every client with 401. Create one for each application.'
+            : html`No client key exists. Clients are admitted without one because <span class="mono">auth.required</span> is off.`}
         <//>
         <${Step}
-          done=${!state.noKey}
-          title="2. Create a client key"
-          action=${html`<${Button} size="sm" icon="key" href=${href('/keys', state.noKey ? { new: 1 } : undefined)}>${state.noKey ? 'Create a client key' : 'Open API keys'}<//>`}
+          done=${state.hasTraffic}
+          title="3. Send a request"
+          action=${html`<${Button} size="sm" icon="playground" href=${href('/playground')}>Open the playground<//>`}
+          more=${html`
+            <${Button} size="sm" variant="ghost" class="overview-step-more" aria-expanded=${example ? 'true' : 'false'} onClick=${() => setExample(!example)}>
+              ${example ? 'Hide example request' : 'Show example request'}
+            <//>
+            ${example && curlBlock}
+          `}
         >
-          ${state.noKey
-            ? state.authRequired
-              ? 'No client key exists, so the gateway answers every client with 401. Create one for each application.'
-              : html`No client key exists. Clients are admitted without one because <span class="mono">auth.required</span> is off.`
-            : `${plural(status.data.counts.client_keys, 'client key')} can call the gateway.`}
-        <//>
-        <${Step} done=${state.hasTraffic} title="3. Send a request" action=${html`<${Button} size="sm" icon="playground" href=${href('/playground')}>Open the playground<//>`}>
           <p>Try a model in the playground, or use the example below in bash or zsh.</p>
-          <${CodeBlock}
-            class="overview-curl"
-            language="text"
-            title="Example request for bash/zsh"
-            value=${curl}
-            note=${state.authRequired || !state.model || viaPage
-              ? html`${state.authRequired &&
-                  html`Set <span class="mono">SWITCHYARD_KEY</span> to a client key first. A key is shown when it is created and can be revealed again under API keys.${' '}`}${!state.model &&
-                  html`Replace <span class="mono">MODEL</span> with a model one of your providers serves.${' '}`}${viaPage &&
-                  html`The gateway listens on <span class="mono">${listen}</span>. The example uses the address this dashboard was opened on, because that is the one known to reach the gateway from here.`}`
-              : null}
-          />
+          ${curlBlock}
         <//>
       </ol>
     <//>

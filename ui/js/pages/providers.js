@@ -22,6 +22,7 @@ import {
   Switch,
   Table,
   confirm,
+  errorRateTone,
   sortRows,
   toast,
 } from '../components/index.js';
@@ -475,7 +476,7 @@ export default function Providers() {
           ? html`
               <span class="prov-figure">
                 <span>${formatCompact(health.requests)}</span>
-                <span class="prov-figure-note" data-tone=${health.failureRatio >= 0.5 ? 'stop' : health.failureRatio >= 0.1 ? 'caution' : undefined}>
+                <span class="prov-figure-note" data-tone=${errorRateTone(health.failureRatio) ?? undefined}>
                   ${health.failures > 0 ? `${formatPercent(health.failureRatio)} failed` : 'none failed'}
                 </span>
               </span>

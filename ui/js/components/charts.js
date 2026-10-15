@@ -780,14 +780,16 @@ export function BarList({ items = [], format = formatCompact, share = false, ran
     <ol class=${cx('barlist', className)}>
       ${rows.map((item, index) => {
         const width = peak > 0 ? Math.max(0, ((item.value || 0) / peak) * 100) : 0;
+        // The parts sit side by side with no text between them: the hidden
+        // commas keep a screen reader from reading "97" and "33%" as "9733%".
         const body = html`
           <span class="barlist-label">
             ${rank && html`<span class="barlist-rank">${item.plain ? '' : index + 1}</span>`}
             <span class=${cx('barlist-name', mono && !item.plain && 'mono')} title=${typeof item.label === 'string' ? item.label : undefined}>${item.label}</span>
-            ${item.hint && html`<span class="barlist-hint">${item.hint}</span>`}
+            ${item.hint && html`<span class="barlist-hint"><span class="sr-only">, </span>${item.hint}</span>`}
           </span>
           <span class="barlist-value">
-            ${format(item.value)}${share && total > 0 && html`<span class="barlist-share">${formatPercent((item.value || 0) / total, 0)}</span>`}
+            <span class="sr-only">, </span>${format(item.value)}${share && total > 0 && html`<span class="barlist-share"><span class="sr-only">, </span>${formatPercent((item.value || 0) / total, 0)}</span>`}
           </span>
           <span class="barlist-track" aria-hidden="true">
             <span class="barlist-fill" style=${`width:${round(width)}%${item.color ? `;--bar:${item.color}` : ''}`}></span>

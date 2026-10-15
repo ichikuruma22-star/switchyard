@@ -62,8 +62,10 @@ const BLANK = {
  * @param {{status: string, model: string, client_model: string, since: string, provider: string, key: string, q: string}} filters
  * @param {{ live: boolean, atTop: () => boolean }} options
  *   live   show arrivals as they come; false queues them
- *   atTop  whether the top of the list is on screen. Arrivals are queued
- *          while it is not, so the rows being read do not move.
+ *   atTop  whether rows may move now: the top of the list is on screen
+ *          and the reader is not holding it (pointer or focus on the list).
+ *          Arrivals are queued while it says no, so the rows being read do
+ *          not move.
  */
 export default function useRequestLog(filters, { live, atTop }) {
   const [state, setState] = useState(BLANK);

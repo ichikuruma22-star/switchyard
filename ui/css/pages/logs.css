@@ -248,6 +248,17 @@
   color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* A chip that takes the focus is scrolled clear of the row's buttons. */
+  scroll-padding-inline-end: var(--logs-actions-cover);
+}
+
+/* While the row's buttons show for the keyboard, the text stops short of
+   them, so the last chip and its focus ring are not under them. (Not on
+   hover: the text would reflow under the pointer.) */
+.logs-row:focus-within .logs-text,
+.logs-row[data-active] .logs-text,
+.logs-row[data-expanded] .logs-text {
+  padding-right: var(--logs-actions-cover);
 }
 
 .logs-msg {
@@ -303,7 +314,12 @@
   transition: background-color var(--dur-fast) ease;
 }
 
-.logs-chip-key,
+/* The key reads at 4.5:1 on every row background; the "=" between key and
+   value is punctuation and stays quiet. */
+.logs-chip-key {
+  color: var(--text-2);
+}
+
 .logs-chip-eq {
   color: var(--text-3);
 }
@@ -325,7 +341,15 @@
   }
 }
 
-/* Copy and open, at the end of the line the pointer or the keyboard is on. */
+/* Copy and open, at the end of the line the pointer or the keyboard is on.
+   --logs-actions-w is their box: two buttons, the gap and the padding.
+   --logs-actions-cover is how much of the line's text they lie over (the
+   box sits var(--space-2) from the edge, the text ends var(--space-4) from it). */
+.logs-row {
+  --logs-actions-w: calc(2 * (var(--logs-line-h) + var(--space-0h)) + var(--space-0h) + var(--space-2));
+  --logs-actions-cover: calc(var(--logs-actions-w) + var(--space-2) - var(--space-4));
+}
+
 .logs-row-actions {
   position: absolute;
   top: 0;

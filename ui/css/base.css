@@ -183,7 +183,12 @@ input[type="search"]::-webkit-search-decoration {
 
 /* Scroll areas inside the page (code, menus, tables, drawers) get the slim
    standard scrollbar in the theme's rule colour. The page itself keeps the
-   platform scrollbar. */
+   platform scrollbar's width, in the same colours, so a light scrollbar does
+   not run down the side of the dark theme. */
+html {
+  scrollbar-color: var(--rule-strong) var(--bg-ground);
+}
+
 :where(body *) {
   scrollbar-width: thin;
   scrollbar-color: var(--rule-strong) transparent;

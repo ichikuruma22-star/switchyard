@@ -643,7 +643,7 @@ export function adviceFor(error) {
   }
   if (code === 'websocket_queue_full') return 'Wait for the response in progress to finish, then send the turn again.';
   if (code === 'model_not_found' || code === 'MODEL_NOT_FOUND') return 'Choose a model from the list, or add a provider that serves this one.';
-  if (code === 'model_cooldown' || code === 'MODEL_COOLDOWN' || /cooling down/.test(error.message ?? '')) return 'Every credential for this model is resting. Wait for the cooldown, or reset it on the Providers page.';
+  if (code === 'model_cooldown' || code === 'MODEL_COOLDOWN' || /cooling down/.test(error.message ?? '')) return 'Every credential for this model is cooling down. Wait for the cooldown to end, or reset it on the Providers page.';
   const credential = credentialRefusal(error);
   if (credential === 'upstream_auth_error') return "The provider did not accept the gateway's credential. Check the provider's API key on the Providers page.";
   if (credential === 'upstream_permission_denied') return "The provider's credential is not allowed to serve this request. Check the provider's API key and its access to this model on the Providers page.";

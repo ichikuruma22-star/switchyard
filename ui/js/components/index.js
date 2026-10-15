@@ -8,7 +8,7 @@
 
 export { Icon, LogoMark, ICON_NAMES } from './icons.js';
 export { Button, IconButton, CopyButton, Spinner } from './button.js';
-export { StatusLamp, Badge, Kbd, toneForStatus, toneWord, TONES } from './status.js';
+export { StatusLamp, Badge, Kbd, toneForStatus, toneWord, errorRateTone, errorRateWords, TONES } from './status.js';
 export {
   Page,
   Panel,
@@ -47,7 +47,7 @@ export { Tooltip } from './tooltip.js';
 export { Menu } from './menu.js';
 export { Modal, Drawer, ConfirmDialog, ConfirmHost, confirm } from './overlay.js';
 export { toast, Toaster } from './toast.js';
-export { CodeBlock, formatJson, highlightJson } from './code.js';
+export { CodeBlock, TickText, formatJson, highlightJson } from './code.js';
 export {
   Sparkline,
   LineChart,

@@ -127,6 +127,7 @@ export function CommandPalette({ open, onClose, commands }) {
             <input
               type="text"
               placeholder="Jump to a page or run an action"
+              aria-label="Search pages and actions"
               value=${query}
               data-autofocus=""
               role="combobox"

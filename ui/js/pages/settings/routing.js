@@ -82,7 +82,7 @@ export function RoutingTab({ config, onDiskInvalid }) {
         <//>
       <//>
 
-      <${Panel} title="Cooldowns" description="How long a credential rests after a failure before it is tried again. An upstream Retry-After always wins.">
+      <${Panel} title="Cooldowns" description="How long a credential cools down after a failure before it is tried again. An upstream Retry-After always wins.">
         <${Rows}>
           <${SwitchRow}
             form=${form}

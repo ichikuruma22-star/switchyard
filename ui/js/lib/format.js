@@ -265,13 +265,14 @@ export function formatDelta(ratio, decimals = 1) {
  * that follows one would run into it. A plain first word is capitalised (not
  * a path or an identifier: "routing.max_attempts: …" and "rate_limit_rpm
  * must …" are left as they are) and a full stop is added unless the message
- * already ends in ., !, ?, : or an ellipsis.
+ * already ends in ., !, ?, : or an ellipsis, also before a closing bracket or
+ * quote ("… (last upstream error: 500 Mock upstream failure.)").
  */
 export function sentence(message) {
   const text = String(message ?? '').trim();
   if (!text) return '';
   const head = /^[a-z]+(?=[ ,;:]|$)/.test(text) ? text[0].toUpperCase() + text.slice(1) : text;
-  return /[.!?:…]$/.test(head) ? head : `${head}.`;
+  return /[.!?:…]["'”’)\]]*$/.test(head) ? head : `${head}.`;
 }
 
 /** "1 request", "2 requests". Pass the plural when it is irregular. */

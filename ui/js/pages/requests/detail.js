@@ -20,6 +20,7 @@ import {
   Skeleton,
   StatusLamp,
   Tabs,
+  TickText,
   Timeline,
   toast,
   toneForStatus,
@@ -109,7 +110,7 @@ const NEXT_STEP = {
   internal: 'The gateway failed while it served this request. The Logs page has what it wrote at that time.',
   client_disconnect: 'The client closed the connection before the answer was complete. Nothing failed on the gateway or upstream; if this keeps happening, look at the timeout the client sets.',
   aborted: 'The gateway stopped relaying this WebSocket session before either side had closed it. The client has to open a new session.',
-  rate_limit: 'The credential rests for its cooldown and other credentials are tried meanwhile. Add credentials or lower the request rate if this keeps happening.',
+  rate_limit: 'The credential cools down and other credentials are tried meanwhile. Add credentials or lower the request rate if this keeps happening.',
   unavailable: 'Every credential that could serve this model was cooling down, disabled or unusable. The Providers page shows which.',
   timeout: 'The upstream took longer than the request timeout. Check the provider, or raise the timeout under Settings.',
   invalid_request: 'The request was refused before it was sent upstream. The client request body shows what was sent.',
@@ -128,7 +129,7 @@ function ErrorBlock({ record }) {
   }
   return html`
     <${Notice} tone=${statusTone(record) === 'caution' ? 'caution' : 'stop'} title=${errorKindWords(error.kind)}>
-      <p class="req-error-message">${error.message}</p>
+      <p class="req-error-message"><${TickText} text=${sentence(error.message)} /></p>
       ${upstream != null && html`<p>${upstream === 0 ? 'The upstream did not answer.' : html`Upstream status <span class="num">${upstream}</span>.`}</p>`}
       ${next && html`<p class="req-error-next">${next}</p>`}
     <//>

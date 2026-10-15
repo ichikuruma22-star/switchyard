@@ -1027,3 +1027,61 @@ export function useOutsidePointer(refs, handler, enabled = true) {
     return () => document.removeEventListener('pointerdown', onDown, true);
   }, [enabled]);
 }
+
+/**
+ * Hold a live list still while it is being read: while a mouse or a pen is
+ * over the element, or the keyboard focus is inside it. A finger is left
+ * alone (touch scrolls the list, and a tap is over before anything arrives).
+ *
+ *   const hold = useHold({ onChange: (held) => { if (!held) showWhatArrived(); } });
+ *   html`<div ...${hold.props}>…the list…</div>`
+ *
+ * While held, the page parks what arrives (and counts it, "12 new requests")
+ * instead of inserting rows above the pointer; `onChange(false)` is the moment
+ * to put them on screen. Spread `props` on an element that stays mounted
+ * while the list empties or fails, or the pointer cannot be seen to leave.
+ *
+ * Returns { held, by, heldRef, props }: `held` re-renders the component,
+ * `heldRef.current` is for callbacks that run outside a render (a live frame
+ * handler), `by` says why ("pointer", "focus", or null).
+ */
+export function useHold({ onChange } = {}) {
+  const parts = useRef({ pointer: false, focus: false });
+  const heldRef = useRef(false);
+  const [by, setBy] = useState(null);
+  const changeRef = useRef(onChange);
+  changeRef.current = onChange;
+  const props = useMemo(() => {
+    const update = () => {
+      const { pointer, focus } = parts.current;
+      const next = pointer ? 'pointer' : focus ? 'focus' : null;
+      const was = heldRef.current;
+      heldRef.current = next != null;
+      setBy(next);
+      if (was !== heldRef.current) changeRef.current?.(heldRef.current);
+    };
+    return {
+      onPointerEnter: (event) => {
+        if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+        parts.current.pointer = true;
+        update();
+      },
+      onPointerLeave: () => {
+        if (!parts.current.pointer) return;
+        parts.current.pointer = false;
+        update();
+      },
+      onFocusCapture: () => {
+        if (parts.current.focus) return;
+        parts.current.focus = true;
+        update();
+      },
+      onBlurCapture: (event) => {
+        if (!parts.current.focus || event.currentTarget.contains(event.relatedTarget)) return;
+        parts.current.focus = false;
+        update();
+      },
+    };
+  }, []);
+  return { held: by != null, by, heldRef, props };
+}

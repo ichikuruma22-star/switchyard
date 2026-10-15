@@ -368,7 +368,7 @@ function CredentialsSection({ draft, update, issues, paths, hasIssueUnder, initi
   };
 
   const description = vertex
-    ? 'One entry per service account. Requests rotate across them and fail over when one rests.'
+    ? 'One entry per service account. Requests rotate across them and fail over when one is cooling down.'
     : draft.kind === 'mock'
       ? 'The mock provider needs none.'
       : info.keyless

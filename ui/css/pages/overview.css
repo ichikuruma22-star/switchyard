@@ -12,7 +12,8 @@
 /* ---- Status strip --------------------------------------------------------- */
 
 /* One instrument plate: the verdict, then the facts, divided by hairlines the
-   way a StatGroup is. */
+   way a StatGroup is. The verdict is the answer the page exists for: the
+   largest words in the strip, its lamp set in a housing like a signal head. */
 .overview-status {
   display: flex;
   flex-wrap: wrap;
@@ -27,17 +28,46 @@
 .overview-verdict {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  flex: 1 1 280px;
+  gap: var(--space-4);
+  /* Room for a line of attention ("mock-error-500 cooling down, back in
+     14s") without wrapping it at desktop widths. */
+  flex: 2 1 340px;
   min-width: 0;
-  min-height: 60px;
-  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+  min-height: 72px;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-4);
   box-shadow:
     1px 0 0 var(--rule),
     0 1px 0 var(--rule);
 }
 
+/* Colour means status only: a clear verdict stays on the plain plate, one
+   that needs attention is washed in its lamp's colour. */
+.overview-verdict[data-tone="caution"] {
+  background: var(--wash-caution);
+}
+
+.overview-verdict[data-tone="stop"] {
+  background: var(--wash-stop);
+}
+
+.overview-verdict-hood {
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: var(--space-2);
+  border: var(--hairline) solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+
 .overview-verdict-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.overview-verdict-say {
   display: flex;
   flex-direction: column;
   gap: var(--space-0h);
@@ -45,16 +75,40 @@
 }
 
 .overview-verdict-label {
-  font-size: var(--text-lg);
+  font-size: var(--text-xl);
   font-weight: var(--weight-semibold);
   font-stretch: var(--stretch-heading);
   line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+@container overview (min-width: 860px) {
+  .overview-verdict-label {
+    font-size: var(--text-2xl);
+  }
 }
 
 .overview-verdict-detail {
   font-size: var(--text-sm);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+}
+
+/* What the credentials do not show: a model every credential rests for, a
+   failure rate over the line. One line each. */
+.overview-verdict-attention {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0h);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-verdict-attention .mono {
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 /* The file on disk is refused: one more line, with the way to fix it. */
@@ -66,7 +120,7 @@
 .overview-facts {
   display: flex;
   flex-wrap: wrap;
-  flex: 4 1 520px;
+  flex: 3 1 480px;
   min-width: 0;
 }
 
@@ -229,6 +283,45 @@
   justify-content: flex-end;
 }
 
+/* A step that is done keeps one thing behind a button (the example
+   request): the button sits at its text's start, not stretched. */
+.overview-step-more {
+  align-self: flex-start;
+  margin-left: calc(var(--space-2) * -1);
+}
+
+/* Requests are being served: the steps fold into one row. */
+.overview-setup-compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: var(--hairline) solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  font-size: var(--text-sm);
+}
+
+.overview-setup-compact-text {
+  min-width: 0;
+  color: var(--text-2);
+}
+
+.overview-setup-compact-text .status {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.overview-setup-compact-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 /* ---- Sections ------------------------------------------------------------- */
 
 .overview-section {
@@ -270,9 +363,30 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Eight vitals: four across, two rows. */
+/* Eight vitals: four across, two rows. The first row says whether the
+   gateway is healthy; the second, how loaded it is, in smaller figures. */
 .stat-group.overview-vitals {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.overview-vital-minor .stat-value {
+  font-size: var(--text-2xl);
+}
+
+.overview-vital-minor .stat-main {
+  min-height: 30px;
+}
+
+/* ---- Routes --------------------------------------------------------------- */
+
+/* The yard is drawn at the width it reads best at, centred in the panel. */
+.overview-routes .track {
+  margin-inline: auto;
+}
+
+.overview-routes-skeleton {
+  max-width: 520px;
+  margin-inline: auto;
 }
 
 /* ---- Provider board ------------------------------------------------------- */
@@ -449,6 +563,12 @@
   animation: overview-fresh 1200ms ease-out 1;
 }
 
+/* The flash is a wash already: a badge's own wash on top of it would take
+   its text below 4.5:1. */
+.overview-feed-row[data-fresh] .badge {
+  background: transparent;
+}
+
 @keyframes overview-fresh {
   from {
     background: var(--wash-accent);
@@ -597,19 +717,20 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* Version and uptime share a row, the address gets one to itself (it is
-     read whole), the three counts share the last. */
+  /* The address gets a row to itself, first (it is read whole); uptime and
+     the three counts share the rows under it, two by two. */
   .overview-fact {
-    flex-basis: 34%;
+    flex-basis: 40%;
+    min-width: 88px;
   }
 
   .overview-fact[data-wide] {
+    order: -1;
     flex-basis: 100%;
   }
 
-  .overview-fact[data-count] {
-    flex-basis: 30%;
-    min-width: 88px;
+  .overview-setup-compact {
+    padding-left: var(--space-3);
   }
 
   /* Two vitals across leave no room for a trend beside the number: it moves
@@ -623,6 +744,24 @@
   .overview-vitals .stat-trend {
     flex: 1 0 100%;
     padding-bottom: 0;
+  }
+}
+
+/* A narrow feed: the provider and the client key take a line each and wrap
+   rather than being cut to "no …", which a finger cannot hover for a title. */
+@container overview (max-width: 360px) {
+  .overview-feed-meta {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .overview-feed-meta .overview-feed-sep {
+    display: none;
+  }
+
+  .overview-feed-meta .truncate {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 

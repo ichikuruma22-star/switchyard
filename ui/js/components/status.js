@@ -107,6 +107,29 @@ export function toneForStatus(status) {
   return 'stop';
 }
 
+/**
+ * The one lamp scale for a share of failed requests, on every page: no lamp
+ * below 5% (a missing or non-finite rate has none either), caution from 5%,
+ * stop from 25%. Returns null, "caution" or "stop".
+ */
+export function errorRateTone(rate) {
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) return null;
+  if (rate >= 0.25) return 'stop';
+  if (rate >= 0.05) return 'caution';
+  return null;
+}
+
+/**
+ * What that lamp says, in words: its accessible name and its tooltip, or null
+ * when there is no lamp. `span` is the window the rate covers, as it follows
+ * "in the last": "minute", "hour", "24 hours".
+ */
+export function errorRateWords(rate, span = 'minute') {
+  const tone = errorRateTone(rate);
+  if (!tone) return null;
+  return `${tone === 'stop' ? 'High: 25%' : 'Elevated: 5%'} or more of the requests in the last ${span} failed`;
+}
+
 /** A keyboard key cap: html`<${Kbd}>Esc<//>`. */
 export function Kbd({ children }) {
   return html`<kbd class="kbd">${children}</kbd>`;

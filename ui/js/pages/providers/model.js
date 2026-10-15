@@ -285,8 +285,8 @@ const restUntil = (until, now) => formatCountdownWords((until - now) / 1000);
 
 /**
  * Why something rests and for how long, as a sentence:
- * "Rate limited — resting 42s", "Rejected by the provider (401) — resting
- * 29m 41s; check the key".
+ * "Rate limited — cooling down, back in 42s", "Rejected by the provider
+ * (401) — cooling down, back in 29m 41s; check the key".
  *
  * @param {{ reason?: string|null, until?: number|null, status?: number }} rest
  * @param {number} now  epoch ms on the gateway's clock
@@ -295,7 +295,7 @@ export function explainCooldown({ reason, until, status = 0 }, now) {
   const known = REASONS[reason];
   const what = known ? known.clause : reason ? String(reason).replace(/_/g, ' ') : 'failed';
   const code = status > 0 ? ` (${status})` : '';
-  const left = until != null ? ` — resting ${restUntil(until, now)}` : '';
+  const left = until != null ? ` — cooling down, back in ${restUntil(until, now)}` : '';
   const advice = known?.advice ? `; ${known.advice}` : '';
   return `${capital(what)}${code}${left}${advice}`;
 }
@@ -354,7 +354,7 @@ export function credentialState(credential, provider, now) {
   }
   if (credential.status === 'cooling' && resting.length > 0) {
     // Every model on it rests; the credential is back when the first one is.
-    return make('cooling', 'Cooling down', `Every model on it is resting. The first is back in ${restUntil(resting[0].until, now)}.`, {
+    return make('cooling', 'Cooling down', `Every model on it is cooling down. The first is back in ${restUntil(resting[0].until, now)}.`, {
       until: resting[0].until,
       reason: resting[0].reason,
     });
@@ -364,7 +364,7 @@ export function credentialState(credential, provider, now) {
   }
   const streak = credential.consecutive_failures ?? 0;
   const notes = [];
-  if (resting.length > 0) notes.push(`${plural(resting.length, 'model')} resting on it.`);
+  if (resting.length > 0) notes.push(`${plural(resting.length, 'model')} cooling down on it.`);
   // In rotation, but nothing has worked since the last error: worth a look.
   if (streak > 0) notes.push(streak === 1 ? 'Its last attempt failed.' : `Its last ${streak} attempts failed.`);
   return make('ready', 'Ready', notes.length > 0 ? notes.join(' ') : null, { failing: streak > 0 });
@@ -440,8 +440,8 @@ export function providerHealth(provider, now) {
   } else if (counts.ready > 0 && broken === 0) {
     // Nothing has worked yet, and the one model tried failed: the
     // credentials are ready for the others, which have not been asked.
-    if (successes === 0 && failures > 0) [rank, tone, label, detail] = [3, 'clear', 'Ready', `${onlyFailedModel} ${restingModels.size > 0 ? 'resting' : 'failed'}`];
-    else if (restingModels.size > 0) [rank, tone, label, detail] = [3, 'clear', 'Serving', restingModels.size === 1 ? `${[...restingModels][0]} resting` : `${plural(restingModels.size, 'model')} resting`];
+    if (successes === 0 && failures > 0) [rank, tone, label, detail] = [3, 'clear', 'Ready', `${onlyFailedModel} ${restingModels.size > 0 ? 'cooling down' : 'failed'}`];
+    else if (restingModels.size > 0) [rank, tone, label, detail] = [3, 'clear', 'Serving', restingModels.size === 1 ? `${[...restingModels][0]} cooling down` : `${plural(restingModels.size, 'model')} cooling down`];
     else [rank, tone, label] = [4, 'clear', 'Serving'];
   } else if (counts.ready > 0) {
     [rank, tone, label, detail] = [2, 'caution', 'Degraded', `${counts.ready} of ${total} ready`];

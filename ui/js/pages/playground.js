@@ -226,7 +226,7 @@ export default function Playground() {
     const ready = routes.reduce((n, r) => n + (r.credentials_available ?? 0), 0);
     if (knownModel.ignored) modelHint = `None of this alias's targets (${(knownModel.alias_targets ?? []).join(', ')}) can be routed, so requests for it fail. Change the targets on the Models page.`;
     else if (routes.length === 0) modelHint = 'No provider serves this name right now. Requests for it fail.';
-    else if (ready === 0) modelHint = 'No credential can serve this model right now: each one is resting, switched off or unusable. Requests fail until one is back.';
+    else if (ready === 0) modelHint = 'No credential can serve this model right now: each one is cooling down, switched off or unusable. Requests fail until one is back.';
     else modelHint = `Served by ${[...new Set(routes.map((r) => r.provider))].join(', ')}.`;
     // An alias target written with a suffix pins the depth on its routes:
     // there it wins over a suffix on the alias and over the request body.

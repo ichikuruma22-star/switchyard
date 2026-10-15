@@ -71,7 +71,7 @@ function LiveChip() {
   const view = LIVE_VIEW[state.status] ?? LIVE_VIEW.idle;
   return html`
     <${Tooltip} content=${liveDetail(state, now)} side="bottom" align="end">
-      <button type="button" class="live-chip" aria-label=${`Connection: ${view.label}`} onClick=${() => waiting && live.reconnectNow()}>
+      <button type="button" class="live-chip" data-state=${state.status} aria-label=${`Connection: ${view.label}`} onClick=${() => waiting && live.reconnectNow()}>
         <${StatusLamp} tone=${view.tone} pulse=${view.pulse} title=${view.label} />
         <span class="live-chip-label">${view.label}</span>
       </button>
@@ -455,7 +455,7 @@ export function Shell({ takeFocus = false } = {}) {
             <${LogoMark} size=${22} />
             <span class="brand-name">Switchyard</span>
           </a>
-          <button type="button" class="palette-trigger" aria-label="Open the command palette" aria-keyshortcuts="Control+K Meta+K" onClick=${openPalette}>
+          <button type="button" class="palette-trigger" aria-label="Open the command palette" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" onClick=${openPalette}>
             <${Icon} name="search" size=${14} />
             <span>Jump to…</span>
             <${Kbd}>${hotkeyLabel('mod+k')}<//>

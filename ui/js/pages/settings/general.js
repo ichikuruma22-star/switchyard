@@ -189,6 +189,7 @@ export function GeneralTab({ config, status, onDiskInvalid }) {
             <div class="stack" style="--gap:var(--space-2)">
               <${SecretInput}
                 id=${secretId}
+                describedBy=${`${secretId}-desc`}
                 value=${newSecret}
                 onChange=${form.set('admin.secret')}
                 copy

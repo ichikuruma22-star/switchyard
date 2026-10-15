@@ -647,11 +647,14 @@
   min-height: 38px;
 }
 
-/* A readout: the sans, proportional figures, slightly narrow. */
+/* A readout: the sans, slightly narrow, with tabular figures. A value that
+   updates every second would otherwise change width with its digits ("1111"
+   is narrower than "0000") and push the trend beside it back and forth. */
 .stat-value {
   font-size: var(--text-3xl);
   font-weight: var(--weight-semibold);
   font-stretch: var(--stretch-heading);
+  font-variant-numeric: tabular-nums;
   line-height: 1.1;
   letter-spacing: -0.012em;
   white-space: nowrap;
@@ -1341,8 +1344,12 @@
   font-variant-ligatures: none;
 }
 
+/* 16px on touch screens: below that, iOS zooms the page when the field
+   takes the focus. The mono field is listed too, or its 0.93em (a more
+   specific rule) would win. */
 @media (pointer: coarse) {
-  .input-el {
+  .input-el,
+  .input[data-mono] .input-el {
     font-size: 16px;
   }
 }
@@ -2283,6 +2290,12 @@ select.input-el option {
   margin: -6px 0;
 }
 
+/* The copy button beside a long value (a model id with no space in it)
+   keeps its size; the value wraps instead. */
+.kv dd > .tip-anchor {
+  flex-shrink: 0;
+}
+
 @media (max-width: 420px) {
   .kv {
     grid-template-columns: minmax(0, 1fr);
@@ -3064,6 +3077,12 @@ button.track-node {
 
 .track-route[data-lit] .track-rail {
   stroke: var(--accent);
+}
+
+/* A route held back by a cooldown: the caution lamp's colour, the one thing
+   amber means. It comes back to grey (or lit) when the cooldown ends. */
+.track-route[data-state="caution"]:not([data-lit]) .track-rail {
+  stroke: var(--lamp-caution);
 }
 
 .track-route[data-state="stop"] .track-rail {

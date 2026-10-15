@@ -1,14 +1,16 @@
 // Overview: live vitals. One number per question, from the "stats" frame the
 // gateway pushes every second, with a few minutes of history behind each as a
 // sparkline. Without the live connection the same cells are fed by polling.
+// Two rows: health first (rate, errors, latency), then load (tokens, in
+// flight, streams, sockets) in smaller figures.
 
 import { html, useEffect, useState } from '../../../vendor/preact-htm.js';
-import { Sparkline, Stat, StatGroup, StatusLamp } from '../../components/index.js';
+import { Sparkline, Stat, StatGroup, StatusLamp, errorRateTone, errorRateWords } from '../../components/index.js';
 import { formatCompact, formatDuration, formatNumber, formatPercent, formatTime, formatTokens } from '../../lib/format.js';
 import { useIsPhone, useResource } from '../../lib/hooks.js';
 import { useLive } from '../../lib/live.js';
 import { gauges, markFrame, serverNow, syncClock } from './data.js';
-import { errorRateTone, errorRateWords, historySeries, latencyUnknown, pushHistory, vitalsFromPoll, vitalsFromStats } from './model.js';
+import { historySeries, latencyUnknown, pushHistory, vitalsFromPoll, vitalsFromStats } from './model.js';
 
 const POLL_MS = 5_000;
 // A frame older than this is not shown as current after coming back to the page.
@@ -85,18 +87,32 @@ export default function Vitals({ status, liveStatus, down = null }) {
   const idle = totals != null && totals.requests === 0;
   const now = serverNow();
 
-  // The activity feed compares its rows with this count.
-  const inFlight = vitals?.inFlight ?? null;
-  useEffect(() => {
-    gauges.set({ inFlight: down ? null : inFlight });
-  }, [inFlight, Boolean(down)]);
-
-  const spark = (field, label, mode) =>
-    html`<${Sparkline} data=${historySeries(history, field, now, mode)} minPoints=${MIN_POINTS} width=${phone ? 120 : 96} label=${`${label} over the last few minutes`} />`;
-
   const rate = vitals?.errorRate;
   const minuteWindow = vitals?.errorWindow === 'minute';
   const noRecent = minuteWindow && vitals?.rpm === 0;
+
+  // The activity feed compares its rows with the in-flight count; the
+  // verdict judges the error rate the way the Error rate cell does.
+  const inFlight = vitals?.inFlight ?? null;
+  const judgedRate = down || noRecent || typeof rate !== 'number' ? null : rate;
+  const errorWindow = minuteWindow ? 'minute' : 'hour';
+  const rpm = down ? null : (vitals?.rpm ?? null);
+  useEffect(() => {
+    gauges.set({ inFlight: down ? null : inFlight, errorRate: judgedRate, errorWindow, rpm });
+  }, [inFlight, Boolean(down), judgedRate, errorWindow, rpm]);
+  // Leaving the page leaves nothing behind for another page to judge by.
+  useEffect(() => () => gauges.set({ inFlight: null, errorRate: null, errorWindow: 'minute', rpm: null }), []);
+
+  // The second row's figures are smaller, and so are their trend lines.
+  const spark = (field, label, mode, minor = false) =>
+    html`<${Sparkline}
+      data=${historySeries(history, field, now, mode)}
+      minPoints=${MIN_POINTS}
+      width=${phone ? 120 : minor ? 80 : 96}
+      height=${minor ? 24 : undefined}
+      label=${`${label} over the last few minutes`}
+    />`;
+
   const rateText = rate == null || noRecent ? null : formatPercent(rate);
   // The lamp judges the rate; its words say against which line.
   const rateTone = noRecent || down ? null : errorRateTone(rate);
@@ -141,13 +157,6 @@ export default function Vitals({ status, liveStatus, down = null }) {
           loading=${loading}
         />
         <${Stat}
-          label="Tokens per minute"
-          value=${vitals ? formatTokens(vitals.tpm) : null}
-          hint=${tokensTotal != null ? `${formatTokens(tokensTotal)} since start` : null}
-          trend=${spark('tpm', 'Tokens per minute')}
-          loading=${loading}
-        />
-        <${Stat}
           label="Error rate"
           value=${rateText ? rateText.replace('%', '') : null}
           unit=${rateText ? '%' : undefined}
@@ -157,27 +166,38 @@ export default function Vitals({ status, liveStatus, down = null }) {
           trend=${spark('errorRate', 'Error rate')}
           loading=${loading}
         />
-        <${Stat}
-          label="In flight"
-          value=${vitals ? formatNumber(vitals.inFlight) : null}
-          hint=${down ? 'When last heard' : 'Being served now'}
-          trend=${spark('inFlight', 'Requests in flight', 'max')}
-          loading=${loading}
-        />
         <${Stat} label="p50 latency" value=${latency(vitals?.p50)} hint=${latencyHint('Median, last hour')} trend=${spark('p50', 'Median latency')} loading=${loading} />
         <${Stat} label="p95 latency" value=${latency(vitals?.p95)} hint=${latencyHint('Slowest 5%, last hour')} trend=${spark('p95', '95th percentile latency')} loading=${loading} />
         <${Stat}
-          label="Active streams"
-          value=${vitals ? formatNumber(vitals.streams) : null}
-          hint=${down ? 'When last heard' : 'Streaming now'}
-          trend=${spark('streams', 'Active streams', 'max')}
+          class="overview-vital-minor"
+          label="Tokens per minute"
+          value=${vitals ? formatTokens(vitals.tpm) : null}
+          hint=${tokensTotal != null ? `${formatTokens(tokensTotal)} since start` : null}
+          trend=${spark('tpm', 'Tokens per minute', 'last', true)}
           loading=${loading}
         />
         <${Stat}
+          class="overview-vital-minor"
+          label="In flight"
+          value=${vitals ? formatNumber(vitals.inFlight) : null}
+          hint=${down ? 'When last heard' : 'Being served now'}
+          trend=${spark('inFlight', 'Requests in flight', 'max', true)}
+          loading=${loading}
+        />
+        <${Stat}
+          class="overview-vital-minor"
+          label="Active streams"
+          value=${vitals ? formatNumber(vitals.streams) : null}
+          hint=${down ? 'When last heard' : 'Streaming now'}
+          trend=${spark('streams', 'Active streams', 'max', true)}
+          loading=${loading}
+        />
+        <${Stat}
+          class="overview-vital-minor"
           label="WebSocket clients"
           value=${vitals ? formatNumber(vitals.sockets) : null}
           hint=${down ? 'When last heard' : 'Connected now'}
-          trend=${spark('sockets', 'WebSocket clients', 'max')}
+          trend=${spark('sockets', 'WebSocket clients', 'max', true)}
           loading=${loading}
         />
       <//>

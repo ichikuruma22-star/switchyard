@@ -11,7 +11,7 @@
 // charts.js, breakdown.js, export.js.
 
 import { html, useCallback, useEffect, useMemo, useRef, useState } from '../../vendor/preact-htm.js';
-import { Button, EmptyState, ErrorState, Menu, Notice, Page, Panel, Segmented, Stat, StatGroup, confirm, toast } from '../components/index.js';
+import { Button, EmptyState, ErrorState, Menu, Notice, Page, Panel, Segmented, Stat, StatGroup, confirm, errorRateTone, errorRateWords, toast } from '../components/index.js';
 import { api } from '../lib/api.js';
 import { useCommands } from '../lib/commands.js';
 import { loadStyles } from '../lib/dom.js';
@@ -92,20 +92,6 @@ function Freshness({ updatedAt }) {
 // Headline numbers
 // ---------------------------------------------------------------------------
 
-/** Error-rate lamp: green with no failures, amber below 5%, red from there. */
-function errorTone(rate) {
-  if (rate == null) return undefined;
-  if (rate === 0) return 'clear';
-  return rate < 0.05 ? 'caution' : 'stop';
-}
-
-/** What each lamp says, in words: the lamp's accessible name and its tooltip. */
-const ERROR_TONE_WORDS = {
-  clear: 'No failed requests',
-  caution: 'Under 5% of requests failed',
-  stop: '5% or more of requests failed',
-};
-
 /**
  * "38.2 per hour on average". Thin traffic moves to a longer unit ("1.0 per
  * day") and, past that, says "Fewer than 0.1 per day": a rate that exists is
@@ -127,6 +113,8 @@ function Headline({ summary, range, priced, hasPrices, loading, stale }) {
 
   const errorRate = t ? ratio(t.errors, requests) : null;
   const errorText = errorRate == null ? null : formatPercent(errorRate);
+  // The shared lamp scale (no lamp under 5%); its words name the range.
+  const errorLamp = errorRateTone(errorRate);
 
   const prompt = t ? promptTokens(t) : null;
   let promptHint = null;
@@ -158,8 +146,8 @@ function Headline({ summary, range, priced, hasPrices, loading, stale }) {
         label="Error rate"
         value=${errorText ? errorText.replace('%', '') : null}
         unit=${errorText ? '%' : undefined}
-        lamp=${errorTone(errorRate)}
-        lampLabel=${ERROR_TONE_WORDS[errorTone(errorRate)]}
+        lamp=${errorLamp ?? undefined}
+        lampLabel=${errorLamp ? errorRateWords(errorRate, range.phrase.replace(/^the last /, '')) : undefined}
         hint=${t && requests > 0 ? `${formatNumber(t.errors)} of ${formatNumber(requests)} failed` : null}
         loading=${loading}
       />

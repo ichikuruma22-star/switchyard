@@ -169,7 +169,7 @@
   --series-4: #8264c8;  /* violet   oklch(0.58 0.150 295) */
   --series-5: #24a5ab;  /* cyan     oklch(0.66 0.105 200) */
   --series-6: #af5a21;  /* rust     oklch(0.56 0.130 50) */
-  --series-other: #5c646c;
+  --series-other: #6f777f;  /* 3.8:1 on surface: a mark that can be told apart (1.4.11) */
   --chart-grid: #23282d;
   --chart-axis: #40464c;
 
@@ -240,7 +240,7 @@
   --series-4: #6040a1;  /* violet   oklch(0.46 0.150 295) */
   --series-5: #1a9a9f;  /* cyan     oklch(0.62 0.105 200) */
   --series-6: #a24e10;  /* rust     oklch(0.52 0.130 50) */
-  --series-other: #a3a9af;
+  --series-other: #8a9097;  /* 3.2:1 on surface */
   --chart-grid: #e4e7ea;
   --chart-axis: #bdc1c6;
 

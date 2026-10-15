@@ -11,7 +11,9 @@
 //             value is allowed and will be saved, but the user should know
 //             something about it ("Keys this short are easy to guess").
 //             Takes the hint's place while it shows; an error takes both.
-//   optional  adds "optional" after the label
+//   optional  adds "(optional)" after the label
+//   describedBy  id (or ids) of text outside the field that describes the
+//             control; aria-describedby lists them before the field's own
 //
 // and reports changes the same way: onChange(value), with the new value
 // first, not an event.
@@ -46,7 +48,7 @@ export function Field({ label, hint, error, warning, optional = false, htmlFor, 
       ${label != null &&
       html`<label class="field-label" for=${htmlFor}>
         <span>${label}</span>
-        ${optional && html`<span class="field-optional">optional</span>`}
+        ${optional && html`<span class="field-optional"><span class="sr-only"> (</span>optional<span class="sr-only">)</span></span>`}
       </label>`}
       ${children}
       ${error
@@ -62,11 +64,19 @@ export function Field({ label, hint, error, warning, optional = false, htmlFor, 
   `;
 }
 
-/** aria wiring shared by the controls. */
-function describe(id, { hint, error, warning }) {
+/**
+ * aria wiring shared by the controls. `describedBy` (an id, or a list of
+ * them) names text outside the field that describes the control, a
+ * setting's description say: it is read first, then the field's own error,
+ * warning or hint. An empty hint (a line kept only so the field's tree does
+ * not change) describes nothing and is not pointed at.
+ */
+function describe(id, { hint, error, warning, describedBy }) {
+  const own = error ? `${id}-error` : warning ? `${id}-warning` : hint != null && hint !== '' ? `${id}-hint` : null;
+  const ids = [...[].concat(describedBy ?? []), own].filter(Boolean);
   return {
     'aria-invalid': error ? 'true' : undefined,
-    'aria-describedby': error ? `${id}-error` : warning ? `${id}-warning` : hint != null ? `${id}-hint` : undefined,
+    'aria-describedby': ids.length > 0 ? ids.join(' ') : undefined,
   };
 }
 
@@ -120,6 +130,7 @@ export function Input({
   hint,
   error,
   warning,
+  describedBy,
   optional,
   id: idProp,
   class: className,
@@ -185,7 +196,7 @@ export function Input({
               if (event.key === 'Enter' && !event.isComposing) onEnter(event);
             }
           : undefined}
-        ...${describe(id, { hint, error, warning })}
+        ...${describe(id, { hint, error, warning, describedBy })}
         ...${rest}
       />
       ${suffix != null && html`<span class="input-affix">${suffix}</span>`}
@@ -223,6 +234,7 @@ export function Textarea({
   hint,
   error,
   warning,
+  describedBy,
   optional,
   id: idProp,
   class: className,
@@ -267,7 +279,7 @@ export function Textarea({
         spellcheck=${false}
         data-autofocus=${autoFocus ? '' : undefined}
         onInput=${(event) => onChange?.(event.target.value, event)}
-        ...${describe(id, { hint, error, warning })}
+        ...${describe(id, { hint, error, warning, describedBy })}
         ...${rest}
       ></textarea>
     </div>
@@ -291,6 +303,7 @@ export function Select({
   hint,
   error,
   warning,
+  describedBy,
   optional,
   id: idProp,
   class: className,
@@ -320,7 +333,7 @@ export function Select({
         value=${value ?? ''}
         disabled=${disabled}
         onChange=${(event) => onChange?.(event.target.value, event)}
-        ...${describe(id, { hint, error, warning })}
+        ...${describe(id, { hint, error, warning, describedBy })}
         ...${rest}
       >
         ${placeholder != null && html`<option value="">${placeholder}</option>`}
@@ -340,7 +353,7 @@ export function Select({
  * An on/off setting that takes effect as a state ("Capture request bodies").
  * checked, onChange(checked), label, hint, error, disabled.
  */
-export function Switch({ label, hint, error, warning, id: idProp, class: className, checked = false, onChange, disabled = false, ...rest }) {
+export function Switch({ label, hint, error, warning, describedBy, id: idProp, class: className, checked = false, onChange, disabled = false, ...rest }) {
   const uid = useUid('sw');
   const id = idProp || uid;
   return html`
@@ -353,7 +366,7 @@ export function Switch({ label, hint, error, warning, id: idProp, class: classNa
         aria-checked=${checked ? 'true' : 'false'}
         disabled=${disabled}
         onClick=${() => onChange?.(!checked)}
-        ...${describe(id, { hint, error, warning })}
+        ...${describe(id, { hint, error, warning, describedBy })}
         ...${rest}
       ></button>
       ${(label != null || hint != null || error || warning) &&
@@ -375,7 +388,7 @@ export function Switch({ label, hint, error, warning, id: idProp, class: classNa
  * A tick box, for choosing items or agreeing to one thing in a form.
  * checked, onChange(checked), indeterminate, label, hint, error, disabled.
  */
-export function Checkbox({ label, hint, error, warning, id: idProp, class: className, checked = false, indeterminate = false, onChange, disabled = false, ...rest }) {
+export function Checkbox({ label, hint, error, warning, describedBy, id: idProp, class: className, checked = false, indeterminate = false, onChange, disabled = false, ...rest }) {
   const uid = useUid('cb');
   const id = idProp || uid;
   const ref = useRef(null);
@@ -392,7 +405,7 @@ export function Checkbox({ label, hint, error, warning, id: idProp, class: class
         checked=${checked}
         disabled=${disabled}
         onChange=${(event) => onChange?.(event.target.checked, event)}
-        ...${describe(id, { hint, error, warning })}
+        ...${describe(id, { hint, error, warning, describedBy })}
         ...${rest}
       />
       ${(label != null || hint != null || error || warning) &&
@@ -515,6 +528,7 @@ export function NumberInput({
   hint,
   error,
   warning,
+  describedBy,
   optional,
   id: idProp,
   class: className,
@@ -646,7 +660,7 @@ export function NumberInput({
             stepBy(-1);
           }
         }}
-        ...${describe(id, { hint, error: error || problem, warning })}
+        ...${describe(id, { hint, error: error || problem, warning, describedBy })}
         ...${rest}
       />
       ${unit != null && html`<span class="input-affix">${unit}</span>`}
@@ -684,7 +698,7 @@ export function NumberInput({
  * separated by commas, spaces or new lines adds every entry. Backspace in an
  * empty field removes the last tag. Duplicates are ignored.
  */
-export function TagInput({ label, hint, error, warning, optional, id: idProp, class: className, value = [], onChange, validate, placeholder, disabled = false, caseSensitive = false, ...rest }) {
+export function TagInput({ label, hint, error, warning, describedBy, optional, id: idProp, class: className, value = [], onChange, validate, placeholder, disabled = false, caseSensitive = false, ...rest }) {
   const uid = useUid('tags');
   const id = idProp || uid;
   const [draft, setDraft] = useState('');
@@ -781,7 +795,7 @@ export function TagInput({ label, hint, error, warning, optional, id: idProp, cl
             setDraft('');
           }
         }}
-        ...${describe(id, { hint, error, warning })}
+        ...${describe(id, { hint, error, warning, describedBy })}
         ...${rest}
       />
     </div>
@@ -817,6 +831,7 @@ export function SecretInput({
   hint,
   error,
   warning,
+  describedBy,
   optional,
   id: idProp,
   class: className,
@@ -903,7 +918,7 @@ export function SecretInput({
         data-bwignore=${managerOff ? '' : undefined}
         data-autofocus=${autoFocus ? '' : undefined}
         onInput=${(event) => onChange?.(event.target.value, event)}
-        ...${describe(id, { hint, error: error || revealError, warning })}
+        ...${describe(id, { hint, error: error || revealError, warning, describedBy })}
         ...${rest}
       />
       <span class="input-actions">

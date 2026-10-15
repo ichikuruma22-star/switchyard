@@ -17,6 +17,7 @@
 
 import { Component, html, useCallback, useLayoutEffect, useMemo, useRef, useState } from '../../vendor/preact-htm.js';
 import { cx } from '../lib/dom.js';
+import { useIsPhone } from '../lib/hooks.js';
 import { Icon } from './icons.js';
 import { EmptyState, ErrorState, Skeleton } from './surface.js';
 
@@ -210,6 +211,11 @@ export function Table({
   class: className,
 }) {
   const [localSort, setLocalSort] = useState(defaultSort);
+  // On a phone a collapsed table's header is out of sight (the rows are
+  // cards): its sort buttons leave the tab order, and the "Sort by" menu is
+  // the control. The header text stays for screen readers.
+  const phone = useIsPhone();
+  const hiddenHead = collapse && phone;
   const controlled = typeof onSort === 'function';
   const activeSort = controlled ? sort : localSort;
 
@@ -343,7 +349,7 @@ export function Table({
                 >
                   ${column.sortable
                     ? html`
-                        <button type="button" class="th-sort" onClick=${() => toggleSort(column)}>
+                        <button type="button" class="th-sort" tabindex=${hiddenHead ? '-1' : undefined} onClick=${() => toggleSort(column)}>
                           <span>${column.header ?? columnLabel(column)}</span>
                           <${Icon} name=${active ? (activeSort.dir === 'asc' ? 'arrow-up' : 'arrow-down') : 'sort'} size=${12} />
                         </button>

@@ -199,7 +199,7 @@ function CredentialItem({ credential, state, now, onPatch, onRefresh }) {
       ${state.resting.length > 0 &&
       html`
         <div class="prov-rests">
-          <span class="plate-label">Resting models</span>
+          <span class="plate-label">Models cooling down</span>
           <ul class="prov-rest-list">
             ${state.resting.map(
               (rest) => html`
@@ -372,7 +372,7 @@ function ModelsTab({ provider, health, now, onFetchModels, fetchingModels }) {
         if (ready > 0) return html`<${StatusLamp} tone="clear" label=${`${ready} of ${total} ready`} />`;
         // Nothing can take it: say why and until when, if a cooldown is the reason.
         return rest
-          ? html`<span class="prov-model-rest"><${StatusLamp} tone="caution" label="Resting" /><span class="prov-model-rest-why">${explainCooldown({ reason: rest.reason, until: rest.until }, now)}</span></span>`
+          ? html`<span class="prov-model-rest"><${StatusLamp} tone="caution" label="Cooling down" /><span class="prov-model-rest-why">${explainCooldown({ reason: rest.reason, until: rest.until }, now)}</span></span>`
           : html`<${StatusLamp} tone="caution" label="None ready" />`;
       },
     },
