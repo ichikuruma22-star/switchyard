@@ -29,11 +29,12 @@ No macOS app binary is available, and separate Linux checks do not constitute
 a Linux desktop release. See [the preview verification status](docs/SWITCHYA.md#published-preview-verification-status)
 for the tested scope and remaining limits.
 
-The gateway release includes a Windows x64 ZIP and Linux x64 musl archive with
-SHA-256 files. macOS ARM and Intel source checks have passed, but no macOS
-binary or runtime verification is available. Container images have not been
-built or published. These gateway results do not establish Switchya desktop
-availability on those platforms.
+The gateway release (v0.1.1) includes archives for Windows x64, Linux x64 and
+arm64 (glibc and static musl) and macOS arm64 and Intel, each with a SHA-256
+file. The release workflow tested each target and started its binary on a
+GitHub-hosted runner of that platform. A multi-architecture container image is
+published as `ghcr.io/ichikuruma22-star/switchyard`. These gateway results do
+not establish Switchya desktop availability on those platforms.
 
 ## Start Switchya from source
 
@@ -251,16 +252,18 @@ Environment: `SWITCHYARD_CONFIG`, `SWITCHYARD_ADMIN_SECRET`,
 
 ## Docker
 
-The release provides Windows x64 and Linux x64 archives. macOS binaries and
-published container images are pending; build a container locally from this
-checkout with `docker build -t switchyard:local .` before using this example:
+Release images for linux/amd64 and linux/arm64 are published to GitHub
+Container Registry as `ghcr.io/ichikuruma22-star/switchyard:<version>` and
+`:latest`. They run as an unprivileged user and keep their data in `/data`.
+To build your own instead, run `docker build -t switchyard:local .` from this
+checkout and use that tag below.
 
 ```bash
 export SWITCHYARD_ADMIN_SECRET="$(openssl rand -hex 32)"
 docker run -d --name switchyard -p 127.0.0.1:8317:8317 \
   -v switchyard-data:/data \
   -e SWITCHYARD_ADMIN_SECRET -e SWITCHYARD_ADMIN_ALLOW_REMOTE=true \
-  switchyard:local
+  ghcr.io/ichikuruma22-star/switchyard:0.1.1
 ```
 
 This bash example generates a fresh admin secret in `SWITCHYARD_ADMIN_SECRET`;
