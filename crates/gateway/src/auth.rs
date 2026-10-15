@@ -36,8 +36,8 @@ impl RateWindow {
     }
 
     /// Admits a request at `now` if fewer than `limit` were admitted in the
-    /// minute before it; otherwise says how long until the oldest of them
-    /// leaves the window.
+    /// minute before it; otherwise says how long until enough of them have
+    /// left the window for one more to be admitted.
     pub(crate) fn try_acquire(&self, limit: u32, now: Instant) -> Result<(), Duration> {
         let mut hits = self.hits.lock();
         while hits
@@ -48,8 +48,12 @@ impl RateWindow {
         }
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         if hits.len() >= limit {
-            let wait = match hits.front() {
-                Some(first) => RATE_WINDOW.saturating_sub(now.saturating_duration_since(*first)),
+            // The hit whose leaving brings the count below `limit`: the
+            // oldest, unless the window was carried over a reload that
+            // lowered the limit and holds more hits than the limit now
+            // allows.
+            let wait = match hits.get(hits.len() - limit) {
+                Some(hit) => RATE_WINDOW.saturating_sub(now.saturating_duration_since(*hit)),
                 // A limit of zero admits nothing; there is no moment to
                 // wait for, so advertise the whole window.
                 None => RATE_WINDOW,
@@ -723,6 +727,26 @@ mod tests {
     }
 
     #[test]
+    fn a_lowered_limit_waits_until_enough_hits_have_left() {
+        // Ten hits 5 s apart, admitted under a limit of 10 …
+        let window = RateWindow::new();
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        for hit in 0..10 {
+            assert_eq!(window.try_acquire(10, at(5 * hit)), Ok(()));
+        }
+        // … then the limit is 2: one more is admitted once all but one of
+        // them have left, when the hit at 40 s does (at 100 s), not when the
+        // oldest does (at 60 s).
+        assert_eq!(window.try_acquire(2, at(50)), Err(Duration::from_secs(50)));
+        assert_eq!(window.try_acquire(2, at(70)), Err(Duration::from_secs(30)));
+        assert!(window.try_acquire(2, at(99)).is_err());
+        assert_eq!(window.try_acquire(2, at(100)), Ok(()));
+        // A limit of zero never admits anything, whatever the window holds.
+        assert_eq!(window.try_acquire(0, at(100)), Err(RATE_WINDOW));
+    }
+
+    #[test]
     fn rate_limit_errors_carry_retry_after() {
         let mut limited = key("k", "limited");
         limited.rate_limit_rpm = Some(1);
@@ -773,6 +797,37 @@ mod tests {
                 .authenticate(&presented(None, Some("new"), None, None))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn a_lowered_limit_keeps_the_count_and_advertises_the_whole_wait() {
+        let mut limited = key("k", "limited");
+        limited.rate_limit_rpm = Some(10);
+        let mut config = Config::default();
+        config.auth.keys = vec![limited];
+        let first = KeyTable::build(&config, None, |k| format!("id-{k}"));
+        let identity = first
+            .authenticate(&presented(None, Some("k"), None, None))
+            .unwrap();
+        let now = Instant::now();
+        for second in 0..10 {
+            identity
+                .check_rate(now + Duration::from_secs(second))
+                .unwrap();
+        }
+
+        // Lowered to 2 a minute while all ten are in the window: the next
+        // request may come once the ninth hit (at 8 s) has left, in 58 s,
+        // not once the first one has, in 50 s.
+        config.auth.keys[0].rate_limit_rpm = Some(2);
+        let second = KeyTable::build(&config, Some(&first), |k| format!("id-{k}"));
+        let err = second
+            .refresh(&identity)
+            .unwrap()
+            .check_rate(now + Duration::from_secs(10))
+            .unwrap_err();
+        assert_eq!(err.status, 429);
+        assert_eq!(err.retry_after_secs, Some(58));
     }
 
     #[test]

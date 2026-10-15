@@ -1,7 +1,7 @@
 //! The [`Gateway`] handle: construction, accessors, background work.
 
 use crate::auth::{ClientIdentity, KeyTable};
-use crate::ops::Discoveries;
+use crate::ops::{Discoveries, DiscoveryRun};
 use crate::reply::{Served, error_reply};
 use crate::summary::SummaryRefusals;
 use crate::ticket::{TICKET_TTL, Tickets};
@@ -72,6 +72,13 @@ pub(crate) struct Inner {
     pub(crate) summary_refusals: SummaryRefusals,
     /// Where the discovery of each provider's model list stands.
     pub(crate) discoveries: Discoveries,
+    /// Held while the scheduler is rebuilt for a new configuration and the
+    /// listings it calls for are numbered, and while a background listing's
+    /// outcome is recorded and its list handed to the scheduler. A listing
+    /// that ends in between would otherwise still count under its old
+    /// number and put the list of a provider's old endpoint into the
+    /// registry just built for the new one.
+    pub(crate) discovery_gate: Mutex<()>,
     log_level_hook: Mutex<Option<LogLevelHook>>,
     started_at: SystemTime,
     shutdown: CancellationToken,
@@ -160,6 +167,7 @@ impl Gateway {
             file_marks: tokio::sync::Mutex::new(HashSet::new()),
             summary_refusals: SummaryRefusals::new(Arc::clone(&config)),
             discoveries: Discoveries::default(),
+            discovery_gate: Mutex::new(()),
             log_level_hook: Mutex::new(None),
             started_at: SystemTime::now(),
             shutdown: CancellationToken::new(),
@@ -183,7 +191,8 @@ impl Gateway {
             inner.shutdown.clone(),
         ));
         inner.tasks.lock().push(follower);
-        inner.spawn_discovery(None, config);
+        let runs = inner.plan_discovery(None, &config);
+        inner.spawn_discovery(config, runs);
 
         Ok(Gateway { inner })
     }
@@ -605,9 +614,16 @@ impl Inner {
         // in with the configuration (handing them over one provider at a
         // time derived the model table once per mock provider), and
         // discovered lists are kept by the scheduler for providers whose
-        // endpoint did not change.
-        self.scheduler
-            .rebuild(&config, &resolve_secret, mock_model_lists(&config));
+        // endpoint did not change. The listings the change calls for are
+        // numbered along with it, so none started before can still hand
+        // over a list from here on (see `discovery_gate`); they start once
+        // the service-account files have been checked.
+        let runs = {
+            let _gate = self.discovery_gate.lock();
+            self.scheduler
+                .rebuild(&config, &resolve_secret, mock_model_lists(&config));
+            self.plan_discovery(Some(&replaced), &config)
+        };
         // A service-account file may have been replaced along with the
         // configuration that names it.
         self.service_accounts.lock().clear();
@@ -641,7 +657,7 @@ impl Inner {
             client_keys = config.auth.keys.len(),
             "configuration applied"
         );
-        self.spawn_discovery(Some(&replaced), config);
+        self.spawn_discovery(config, runs);
     }
 
     /// Tells the live dashboard that the configuration in effect is the
@@ -676,16 +692,22 @@ impl Inner {
         });
     }
 
-    /// Runs model discovery in the background for the providers of
-    /// `config` that need it: at start (`previous` is `None`) all that want
+    /// The model listings to run in the background for the providers of
+    /// `config` that need one: at start (`previous` is `None`) all that want
     /// discovery, after a configuration change those whose
     /// discovery-relevant settings changed (see
     /// [`Gateway::discovery_states`]). The other providers keep their
-    /// lists, and their upstreams are left alone.
-    fn spawn_discovery(self: &Arc<Self>, previous: Option<&Config>, config: Arc<Config>) {
-        let runs = self.discoveries.plan(previous, &config, |provider| {
+    /// lists, and their upstreams are left alone. Asked after the scheduler
+    /// was built for `config`.
+    fn plan_discovery(&self, previous: Option<&Config>, config: &Config) -> Vec<DiscoveryRun> {
+        self.discoveries.plan(previous, config, |provider| {
             self.scheduler.discovered_models(provider)
-        });
+        })
+    }
+
+    /// Runs the listings [`Inner::plan_discovery`] asked for in the
+    /// background.
+    fn spawn_discovery(self: &Arc<Self>, config: Arc<Config>, runs: Vec<DiscoveryRun>) {
         if runs.is_empty() {
             return;
         }
@@ -797,5 +819,108 @@ async fn follow_config(
             inner.config_applied();
             refused = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::DiscoveryStatus;
+    use axum::Router;
+    use axum::http::StatusCode;
+    use axum::routing::get;
+    use tokio::sync::Notify;
+
+    /// Waits until `check` holds, polling briefly.
+    async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if check() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("timed out waiting for: {what}");
+    }
+
+    /// A provider is moved to another endpoint while the listing of its old
+    /// one is still under way, and that listing ends while the change is
+    /// being applied — after the scheduler was rebuilt for the new endpoint.
+    /// Its list must not become the new endpoint's, which fails to list.
+    #[tokio::test]
+    async fn a_listing_of_an_endpoint_left_behind_does_not_reach_the_rebuilt_scheduler() {
+        // The old endpoint answers when told to; the new one is down.
+        let asked = Arc::new(Notify::new());
+        let answer = Arc::new(Notify::new());
+        let old = {
+            let (asked, answer) = (Arc::clone(&asked), Arc::clone(&answer));
+            move || async move {
+                asked.notify_one();
+                answer.notified().await;
+                axum::Json(serde_json::json!({
+                    "object": "list",
+                    "data": [{"id": "only-at-the-old-endpoint", "object": "model"}]
+                }))
+            }
+        };
+        let app = Router::new().route("/old/v1/models", get(old)).route(
+            "/new/v1/models",
+            get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "down") }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let config = |endpoint: &str| {
+            format!(
+                "[upstream]\nproxy = \"direct\"\n\n[[providers]]\nname = \"moved\"\n\
+                 kind = \"openai-compat\"\nbase_url = \"{base}/{endpoint}/v1\"\n\
+                 api_keys = [\"key-moved\"]\n"
+            )
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("switchyard.toml");
+        std::fs::write(&path, config("old")).unwrap();
+        let gateway = Gateway::start(GatewayOptions::new(&path).watch(false))
+            .await
+            .unwrap();
+        let inner = Arc::clone(gateway.inner());
+        asked.notified().await;
+
+        // Applying the move is held up in the check of the service-account
+        // files, which comes after the rebuild.
+        let marks = inner.file_marks.lock().await;
+        gateway
+            .config_store()
+            .replace_text(&config("new"))
+            .await
+            .unwrap();
+        eventually("the scheduler is rebuilt for the new endpoint", || {
+            inner
+                .scheduler
+                .provider_config("moved")
+                .is_some_and(|provider| provider.base_url.contains("/new/"))
+        })
+        .await;
+        // The old endpoint answers now, and its listing ends.
+        answer.notify_one();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(marks);
+
+        eventually("the listing of the new endpoint ends", || {
+            gateway
+                .discovery_states()
+                .get("moved")
+                .is_some_and(|state| state.state == DiscoveryStatus::Failed)
+        })
+        .await;
+        let state = gateway.discovery_states().remove("moved").unwrap();
+        assert_eq!(state.models, 0, "{state:?}");
+        assert_eq!(inner.scheduler.discovered_models("moved"), 0);
+        assert!(
+            inner.scheduler.resolve("only-at-the-old-endpoint").is_err(),
+            "the old endpoint's list is routed to the new one"
+        );
+        gateway.shutdown().await;
     }
 }

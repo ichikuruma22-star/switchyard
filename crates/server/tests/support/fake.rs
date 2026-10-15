@@ -23,6 +23,7 @@ pub struct Recorded {
     pub query: String,
     pub authorization: Option<String>,
     pub subprotocols: Option<String>,
+    pub content_type: Option<String>,
     pub body: Value,
 }
 
@@ -51,6 +52,7 @@ impl Shared {
             query: query.unwrap_or_default(),
             authorization: text("authorization"),
             subprotocols: text("sec-websocket-protocol"),
+            content_type: text("content-type"),
             body,
         });
         recorded.len()

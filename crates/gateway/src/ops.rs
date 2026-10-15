@@ -342,6 +342,10 @@ impl Inner {
                 return;
             };
             let listed = self.list_models(config, provider).await;
+            // A configuration change must not rebuild the scheduler between
+            // the outcome being found to count and the list being handed
+            // over (see `Inner::discovery_gate`).
+            let _gate = self.discovery_gate.lock();
             if self.discoveries.finish(name, Some(*run), &listed)
                 && let Ok(models) = listed
             {

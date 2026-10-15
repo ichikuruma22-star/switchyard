@@ -492,8 +492,9 @@ Always a `Reply::Full`. Picks an `openai` / `openai-compat` credential for
 the model (404 when the model has no such route), forwards the body with only
 the JSON `model` field replaced by the upstream id and the object serialized
 again even when the model id was already correct. The server's raw JSON routes
-also serialize the parsed body regardless of its media-type label, so duplicate
-JSON fields cannot change the authorized model downstream. Library callers'
+also serialize the parsed body regardless of its media-type label and pass it
+on as `application/json`, so duplicate JSON fields cannot change the authorized
+model downstream and a mislabelled body still has its `model` replaced. Library callers'
 non-JSON bodies are forwarded byte for byte. Returns the upstream's status, body and
 `Content-Type`. Errors are in the OpenAI envelope.
 

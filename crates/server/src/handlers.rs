@@ -8,7 +8,7 @@ use crate::route::{GeminiMethod, RawEndpoint, Route};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+use http::header::{CACHE_CONTROL, CONTENT_LENGTH};
 use http::{HeaderMap, HeaderValue, Method};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -401,7 +401,9 @@ async fn raw(context: Context, endpoint: RawEndpoint, body: Bytes) -> Response {
     };
     // This endpoint always interprets its body as JSON, even if a client
     // labels it text/plain. Forward that same parsed representation so
-    // duplicate fields never give an upstream a different model selection.
+    // duplicate fields never give an upstream a different model selection,
+    // and label it as what it is: the gateway replaces the `model` of JSON
+    // bodies only, and the upstream reads the body by its label.
     let body = Bytes::from(
         serde_json::to_vec(json.as_ref().expect("a model requires a JSON body"))
             .expect("JSON values serialize"),
@@ -413,11 +415,7 @@ async fn raw(context: Context, endpoint: RawEndpoint, body: Bytes) -> Response {
         path: endpoint.upstream_path().to_string(),
         method: Method::POST,
         body,
-        content_type: context
-            .headers
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string),
+        content_type: Some("application/json".to_string()),
         query: context.query.without(&[]),
         model,
         headers: context.headers.clone(),
