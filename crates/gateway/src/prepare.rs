@@ -121,6 +121,38 @@ pub(crate) fn upstream_ctx(lease: &Lease) -> UpstreamCtx<'_> {
     }
 }
 
+/// The field of a Responses request that continues state stored at the
+/// vendor, if it has one. Only a Responses upstream can look that state up:
+/// translated for another, the request would be answered without the
+/// history it names, and the reply would still echo the field.
+fn stored_state(request: &Request) -> Option<&'static str> {
+    if request.previous_response_id.is_some() {
+        Some("previous_response_id")
+    } else if request.extra.contains_key("conversation") {
+        Some("conversation")
+    } else {
+        None
+    }
+}
+
+/// What a client is told when its request continues state stored at the
+/// vendor (`param`, see [`stored_state`]) and the model is served by an
+/// upstream of another protocol. Over HTTP the gateway keeps no responses
+/// of its own (the WebSocket mode does, see `docs/DESIGN.md` section 10).
+fn stored_state_error(param: &str) -> ApiError {
+    let error = ApiError::invalid_request(format!(
+        "`{param}` refers to state stored by an OpenAI Responses upstream, which the \
+         provider serving this model cannot look up; resend the full conversation in \
+         `input` without `{param}`"
+    ))
+    .with_param(param);
+    if param == "previous_response_id" {
+        error.with_code("previous_response_not_found")
+    } else {
+        error
+    }
+}
+
 /// Applies the Vertex AI body conventions to a body built for `protocol`.
 pub(crate) fn adapt_for_vertex(body: &mut Value, protocol: Protocol, op: &Operation) {
     match protocol {
@@ -142,6 +174,8 @@ impl Inner {
     ///   upstream, remembered reasoning restored, encoded by the upstream's
     ///   codec, then payload rules. A Responses body for a provider that
     ///   refuses reasoning summaries is built without `reasoning.summary`.
+    ///   A Responses request that continues state stored at the vendor is
+    ///   refused unless the upstream speaks Responses too.
     pub(crate) async fn prepare_generate(
         &self,
         job: &mut Job,
@@ -183,7 +217,13 @@ impl Inner {
             upstream.prepare_passthrough(&mut body, stream, &ctx);
             (body, ToolNames::new(), label)
         } else {
-            let mut request = job.decoded().map_err(PrepareError::Client)?.clone();
+            let decoded = job.decoded().map_err(PrepareError::Client)?;
+            if protocol != Protocol::OpenaiResponses
+                && let Some(param) = stored_state(decoded)
+            {
+                return Err(PrepareError::Client(stored_state_error(param)));
+            }
+            let mut request = decoded.clone();
             request.model = lease.upstream_model.clone();
             request.stream = stream;
             let asked = request.reasoning.clone().unwrap_or_default();

@@ -9,7 +9,8 @@ use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use support::fake::{complete, frames};
 use support::{
-    Answer, Behaviour, FOUR_PROVIDERS, Harness, Wire, arguments, body, codec, tool_declaration,
+    Answer, Behaviour, FOUR_PROVIDERS, Harness, Wire, arguments, body, codec, route,
+    tool_declaration,
 };
 use switchyard_core::Protocol;
 use switchyard_core::ir::FinishReason;
@@ -118,6 +119,75 @@ async fn a_body_with_a_foreign_signature_is_translated_not_forwarded() {
         harness.record(&output.request_id).mode,
         Some(Mode::Translated)
     );
+}
+
+#[tokio::test]
+async fn stored_responses_are_continued_only_by_a_responses_upstream() {
+    let harness = Harness::start(FOUR_PROVIDERS).await;
+    // Translated, the request would be answered without the history it
+    // names, by a reply that echoes the id as if it had been continued.
+    for upstream in [Protocol::OpenaiChat, Protocol::Anthropic, Protocol::Gemini] {
+        let (model, _, _) = route(upstream);
+        for (client, param) in [
+            (
+                json!({"model": model, "previous_response_id": "resp_1", "input": "and the second file?"}),
+                "previous_response_id",
+            ),
+            (
+                json!({"model": model, "previous_response_id": "resp_1"}),
+                "previous_response_id",
+            ),
+            (
+                json!({"model": model, "conversation": "conv_1", "input": "and?"}),
+                "conversation",
+            ),
+        ] {
+            let output = harness
+                .ask_with(Protocol::OpenaiResponses, client, model, false)
+                .await;
+            assert_eq!(output.status, 400, "{upstream} {param}");
+            let error = &output.json()["error"];
+            assert_eq!(error["type"], "invalid_request_error", "{error}");
+            assert_eq!(error["param"], param, "{error}");
+        }
+    }
+    let output = harness
+        .ask_with(
+            Protocol::OpenaiResponses,
+            json!({"model": "m-anthropic", "previous_response_id": "resp_1", "input": "and?"}),
+            "m-anthropic",
+            false,
+        )
+        .await;
+    assert_eq!(
+        output.json()["error"]["code"],
+        "previous_response_not_found"
+    );
+    assert_eq!(harness.fake.count(), 0, "nothing was sent upstream");
+
+    // A Responses upstream keeps the state: the id reaches it.
+    let output = harness
+        .ask_with(
+            Protocol::OpenaiResponses,
+            json!({"model": "m-responses", "previous_response_id": "resp_1", "input": "and?"}),
+            "m-responses",
+            false,
+        )
+        .await;
+    assert_eq!(output.status, 200);
+    assert_eq!(harness.fake.last().body["previous_response_id"], "resp_1");
+
+    // Without stored state the request is translated as ever.
+    let output = harness
+        .ask_with(
+            Protocol::OpenaiResponses,
+            json!({"model": "m-anthropic", "input": "hi"}),
+            "m-anthropic",
+            false,
+        )
+        .await;
+    assert_eq!(output.status, 200);
+    assert_eq!(harness.fake.last().wire, Some(Wire::Anthropic));
 }
 
 // ---------------------------------------------------------------------------
