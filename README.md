@@ -15,9 +15,9 @@ published `preview.2` archive; they ship in `preview.3`.
 
 | Start here | Purpose | Availability |
 |---|---|---|
-| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.3) |
+| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4) |
 | [Native desktop build](desktop/README.md) | Build the separate desktop shell | Separate Cargo workspace; operating-system runtime verification is distinct from gateway verification |
-| [Switchyard Gateway](#switchyard-gateway) | Protocol translation, routing, credential pools, and its operations dashboard | [v0.1.0 Windows x64 and Linux x64 downloads](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.0) |
+| [Switchyard Gateway](#switchyard-gateway) | Protocol translation, routing, credential pools, and its operations dashboard | [v0.1.1 downloads for Windows, Linux and macOS](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1) |
 
 The Switchya preview targets Windows 10/11 x64 and contains the native
 shell and CLI in an unsigned portable archive, with no installer or bundled

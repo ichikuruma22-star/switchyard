@@ -1,8 +1,8 @@
 [
   {
     "path": "_headers",
-    "bytes": 559,
-    "sha256": "c02c9c0b9b59b967aeb5e7a3ba40b2734d4f7666867a668a629c2d2309e2174a"
+    "bytes": 605,
+    "sha256": "ffdaa55c3755f6a3e93f3f655b52cabf03fedeecec65d40f0febbe79ae5d0083"
   },
   {
     "path": "404.html",
@@ -36,8 +36,8 @@
   },
   {
     "path": "index.html",
-    "bytes": 16196,
-    "sha256": "5d195596c7e2632afd2243ee174b90b3758d9039e52f4beff8242f9667f6cb25"
+    "bytes": 16202,
+    "sha256": "d34c304cef4a9dc1ead7649ad0c1dde218ec1bd176fccb3c24ed7d895c78a91c"
   },
   {
     "path": "robots.txt",
