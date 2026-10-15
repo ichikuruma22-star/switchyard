@@ -15,7 +15,7 @@ const ENV_HELP: &str = "\
 Environment variables:
   SWITCHYARD_CONFIG              Configuration file, used when --config is not given
   SWITCHYARD_ADMIN_SECRET        Admin secret; overrides admin.secret in the file
-  SWITCHYARD_ADMIN_ALLOW_REMOTE  1 or true: accept admin requests from other machines
+  SWITCHYARD_ADMIN_ALLOW_REMOTE  1, true or yes: accept admin requests from other machines
   SWITCHYARD_LOG                 Log level (trace, debug, info, warn, error) or filter
                                  directives such as \"info,switchyard_gateway=debug\";
                                  overrides logging.level

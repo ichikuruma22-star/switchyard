@@ -359,7 +359,7 @@ impl AccountManager {
         self.ensure_running()?;
         if !valid_agent(agent_id) {
             return Err(AppError::invalid(
-                "Choose codex or claude for this account profile.",
+                "Choose codex, claude or antigravity for this account profile.",
             ));
         }
         let name = checked_name(name)?;
@@ -438,7 +438,7 @@ impl AccountManager {
     ) -> Result<ProfileBinding> {
         if !valid_agent(agent_id) {
             return Err(AppError::invalid(
-                "Choose codex or claude for the account profile.",
+                "Choose codex, claude or antigravity for the account profile.",
             ));
         }
         let id = profile_id
