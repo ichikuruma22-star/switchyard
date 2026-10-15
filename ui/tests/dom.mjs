@@ -1352,6 +1352,22 @@ function mount(vnode) {
   assert.equal(field.value, '');
   await tags.unmount();
 
+  // TagInput caseSensitive (JSON paths, which the gateway looks up exactly):
+  // a case variant is an entry of its own, the same spelling still is not.
+  const pathChanges = [];
+  function Paths() {
+    const [value, setValue] = useState(['Metadata']);
+    return html`<${TagInput} label="Paths to remove" caseSensitive value=${value} onChange=${(next) => (pathChanges.push(next), setValue(next))} />`;
+  }
+  const paths = mount(html`<${Paths} />`);
+  const pathField = document.querySelector('input');
+  pathField.value = 'Metadata, metadata';
+  dispatch(pathField, 'input');
+  await until(() => pathChanges.length === 1, 'the case variant was added');
+  assert.deepEqual(pathChanges[0], ['Metadata', 'metadata']);
+  assert.equal(pathField.hasAttribute('casesensitive') || pathField.hasAttribute('caseSensitive'), false, 'the option is not passed on to the input');
+  await paths.unmount();
+
   // A caution about a value that is allowed: its own line, tied to the control.
   function Caution({ error: failure }) {
     return html`

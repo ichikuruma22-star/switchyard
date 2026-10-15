@@ -668,19 +668,23 @@ export function NumberInput({
 // ---------------------------------------------------------------------------
 
 /**
- * A list of short strings: model patterns, allowed models, excluded models.
+ * A list of short strings: model patterns, allowed models, excluded models,
+ * payload paths.
  *
  * value     string[]
  * onChange  (string[]) => void
  * validate  (tag) => error message or null; invalid tags stay visible,
  *           marked in the stop colour, so the user can see what to fix
  * placeholder  shown while the list is empty
+ * caseSensitive  tags that differ only in case are different tags (JSON
+ *           paths); by default they are one (model names, which the gateway
+ *           matches ignoring case)
  *
  * Enter, comma or leaving the field adds what was typed. Pasting a list
  * separated by commas, spaces or new lines adds every entry. Backspace in an
  * empty field removes the last tag. Duplicates are ignored.
  */
-export function TagInput({ label, hint, error, warning, optional, id: idProp, class: className, value = [], onChange, validate, placeholder, disabled = false, ...rest }) {
+export function TagInput({ label, hint, error, warning, optional, id: idProp, class: className, value = [], onChange, validate, placeholder, disabled = false, caseSensitive = false, ...rest }) {
   const uid = useUid('tags');
   const id = idProp || uid;
   const [draft, setDraft] = useState('');
@@ -692,11 +696,12 @@ export function TagInput({ label, hint, error, warning, optional, id: idProp, cl
       .map((p) => p.trim())
       .filter(Boolean);
     if (parts.length === 0) return false;
-    const seen = new Set(value.map((v) => v.toLowerCase()));
+    const fold = caseSensitive ? (tag) => tag : (tag) => tag.toLowerCase();
+    const seen = new Set(value.map(fold));
     const next = [...value];
     for (const part of parts) {
-      if (seen.has(part.toLowerCase())) continue;
-      seen.add(part.toLowerCase());
+      if (seen.has(fold(part))) continue;
+      seen.add(fold(part));
       next.push(part);
     }
     if (next.length !== value.length) onChange?.(next);

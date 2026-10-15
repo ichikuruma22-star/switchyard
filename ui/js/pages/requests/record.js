@@ -32,10 +32,15 @@ function matchesStatus(record, status) {
   const want = status.trim().toLowerCase();
   if (want === 'ok' || want === 'success' || want === 'succeeded') return record.ok === true;
   if (want === 'error' || want === 'err' || want === 'failed' || want === 'failure') return record.ok === false;
-  if (/^[1-5]xx$/.test(want)) return Math.floor(record.status / 100) === Number(want[0]);
-  if (/^[1-5]\d\d$/.test(want)) return record.status === Number(want);
-  // The gateway ignores a status it cannot parse (999, 6xx); so does the page.
-  return true;
+  // A class (4xx) or a code (429), read as the gateway reads them: a leading
+  // "+" and leading zeros are allowed ("0429" is 429).
+  const number = /^\+?(\d+)(xx)?$/.exec(want);
+  // The API refuses anything else (999, 6xx) with a 400. Do not let live
+  // frames make that failed query look like a valid, unfiltered list.
+  if (!number) return false;
+  const n = Number(number[1]);
+  if (number[2]) return n >= 1 && n <= 5 && Math.floor(record.status / 100) === n;
+  return n >= 100 && n <= 599 && record.status === n;
 }
 
 /**

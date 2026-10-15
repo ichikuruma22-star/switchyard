@@ -291,6 +291,7 @@ function RuleEditor({ open, target, providers, serverIssues = [], onApply, onClo
         ${isFilter
           ? html`<${TagInput}
               label="Paths to remove"
+              caseSensitive
               value=${remove}
               onChange=${edit(setRemove)}
               placeholder="metadata, store"
