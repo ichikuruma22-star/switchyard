@@ -42,6 +42,62 @@ pub struct Project {
     pub created_at_ms: i64,
 }
 
+/// A portable progress note. Its content is reported context, never authority
+/// to approve an operation or proof that a command actually succeeded.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointDraft {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub source: String,
+    #[serde(default)]
+    pub next_steps: Vec<String>,
+    #[serde(default)]
+    pub verification: String,
+    #[serde(default)]
+    pub risks: Vec<String>,
+}
+
+impl CheckpointDraft {
+    pub(crate) fn validate(&self) -> Result<()> {
+        let bounded = |text: &str, max: usize| {
+            text.len() <= max
+                && !text
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        };
+        if !uuid::Uuid::parse_str(&self.id).is_ok_and(|id| id.to_string() == self.id)
+            || self.title.trim().is_empty()
+            || !bounded(&self.title, 200)
+            || self.summary.trim().is_empty()
+            || !bounded(&self.summary, 16_384)
+            || self.source.trim().is_empty()
+            || !bounded(&self.source, 120)
+            || !bounded(&self.verification, 16_384)
+            || self.next_steps.len() > 20
+            || self.risks.len() > 20
+            || self
+                .next_steps
+                .iter()
+                .chain(&self.risks)
+                .any(|item| !bounded(item, 1024))
+            || serde_json::to_vec(self)?.len() > 65_536
+        {
+            return Err(AgentError::Invalid("A checkpoint needs a UUID, title, summary and source, with at most 20 next steps and 20 risks. Keep the complete note below 64 KiB and omit terminal control characters.".into()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Checkpoint {
+    pub project_id: String,
+    pub created_at_ms: i64,
+    #[serde(flatten)]
+    pub content: CheckpointDraft,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,

@@ -29,3 +29,10 @@ html[data-theme=dark]{color-scheme:dark;--sheet:#121b25;--paper:#17212d;--ink:#e
 .continuing-account{margin:0;min-height:44px}.continuing-account strong{min-width:0;overflow:hidden;color:var(--ink);font-size:11px;font-weight:520;text-overflow:ellipsis;white-space:nowrap}.adapter-turn+.adapter-turn .run-divider{margin-top:6px;padding-top:14px;border-top:1px dashed var(--line)}
 .codex-item-headline{display:inline-block;max-width:min(48ch,100%);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .codex-item>summary>span:first-of-type{flex:1;min-width:0}
+.button[data-variant=danger]{border-color:var(--stop);color:var(--stop);background:var(--paper)}
+.button[data-variant=danger]:hover:not(:disabled){background:var(--stop-bg);border-color:var(--stop)}
+.remove-profile-button{margin-top:12px;color:var(--stop)}
+.account-remove-confirm{margin-top:14px;padding:14px;border:1px solid var(--stop);border-radius:7px;background:var(--stop-bg)}
+.account-remove-confirm p{font-size:12px;line-height:1.6}
+.account-remove-confirm .account-actions{margin-top:10px}
+.signin-method{display:inline-flex}.signin-method select{min-height:44px;max-width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font-size:12px}

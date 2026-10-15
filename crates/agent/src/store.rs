@@ -93,6 +93,14 @@ impl Store {
              );
              CREATE INDEX IF NOT EXISTS sessions_project ON sessions(project_id);
              CREATE INDEX IF NOT EXISTS operations_session ON operations(session_id, state);
+             CREATE TABLE IF NOT EXISTS workspace_state (
+                id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS checkpoints (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
+                created_at_ms INTEGER NOT NULL, value TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS checkpoints_project ON checkpoints(project_id);
              PRAGMA user_version=1;",
         )?;
         let store = Self {
@@ -118,6 +126,104 @@ impl Store {
         let mut query = connection.prepare("SELECT value FROM projects ORDER BY rowid DESC")?;
         let rows = query.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|row| decode(row?)).collect()
+    }
+
+    pub(crate) fn workspace_state(&self) -> Result<Option<Value>> {
+        let text = self
+            .connection
+            .lock()
+            .query_row("SELECT value FROM workspace_state WHERE id=1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        text.map(decode).transpose()
+    }
+
+    pub(crate) fn checkpoint(&self, project: &str, id: &str) -> Result<Checkpoint> {
+        let connection = self.connection.lock();
+        get_project(&connection, project)?;
+        let row = connection
+            .query_row(
+                "SELECT created_at_ms,value FROM checkpoints WHERE id=?1 AND project_id=?2",
+                params![id, project],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let (created_at_ms, text) = row
+            .ok_or_else(|| AgentError::NotFound("Checkpoint not found in this project.".into()))?;
+        Ok(Checkpoint {
+            project_id: project.into(),
+            created_at_ms,
+            content: decode(text)?,
+        })
+    }
+
+    pub(crate) fn checkpoints(
+        &self,
+        project: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<Value> {
+        if !(1..=100).contains(&limit) || before.is_some_and(|cursor| cursor < 1) {
+            return Err(AgentError::Invalid(
+                "Checkpoint pages need a limit from 1 to 100 and a positive cursor.".into(),
+            ));
+        }
+        let connection = self.connection.lock();
+        get_project(&connection, project)?;
+        let mut query=connection.prepare("SELECT rowid,created_at_ms,value FROM checkpoints WHERE project_id=?1 AND (?2 IS NULL OR rowid<?2) ORDER BY rowid DESC LIMIT ?3")?;
+        let rows = query
+            .query_map(params![project, before, (limit + 1) as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let next = if rows.len() > limit {
+            Some(rows[limit - 1].0)
+        } else {
+            None
+        };
+        let summaries=rows.into_iter().take(limit).map(|(_,time,text)| {
+            let note:CheckpointDraft=decode(text)?;
+            Ok(json!({"id":note.id,"title":note.title,"source":note.source,"created_at_ms":time,"summary":note.summary.chars().take(240).collect::<String>()}))
+        }).collect::<Result<Vec<_>>>()?;
+        Ok(json!({"checkpoints":summaries,"next_before":next}))
+    }
+
+    pub(crate) fn save_checkpoint(
+        &self,
+        project: &str,
+        note: CheckpointDraft,
+    ) -> Result<Checkpoint> {
+        note.validate()?;
+        self.transaction(|tx| {
+            get_project(tx, project)?;
+            let existing=tx.query_row("SELECT project_id,created_at_ms,value FROM checkpoints WHERE id=?1",[&note.id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,String>(2)?))).optional()?;
+            if let Some((existing_project,time,text))=existing {
+                let existing:CheckpointDraft=decode(text)?;
+                if existing_project!=project || existing!=note {
+                    return Err(AgentError::Conflict("This checkpoint ID already belongs to different content. Retry the original note unchanged or use a new UUID.".into()));
+                }
+                return Ok(Checkpoint { project_id:project.into(), created_at_ms:time, content:existing });
+            }
+            let time=now_ms();
+            tx.execute("INSERT INTO checkpoints(id,project_id,created_at_ms,value) VALUES(?1,?2,?3,?4)",params![note.id,project,time,serde_json::to_string(&note)?])?;
+            Ok(Checkpoint { project_id:project.into(), created_at_ms:time, content:note })
+        })
+    }
+
+    pub(crate) fn save_workspace_state(&self, value: &Value) -> Result<()> {
+        let text = serde_json::to_string(value)?;
+        if text.len() > 16 * 1024 {
+            return Err(AgentError::Invalid(
+                "workspace preferences exceed their size limit".into(),
+            ));
+        }
+        self.connection.lock().execute("INSERT INTO workspace_state(id,value) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value", [text])?;
+        Ok(())
     }
 
     pub(crate) fn sessions(&self, project: Option<&str>) -> Result<Vec<Session>> {

@@ -1,6 +1,6 @@
 [package]
 name = "switchyard-app"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 switchyard = { path = "../switchyard" }
 switchyard-agent = { path = "../agent" }
+switchyard-agent-tools = { path = "../agent-tools" }
 switchyard-agent-adapters = { path = "../agent-adapters" }
 switchyard-core.workspace = true
 switchyard-gateway.workspace = true
@@ -32,13 +33,18 @@ reqwest.workspace = true
 rustls.workspace = true
 rust-embed = { workspace = true, features = ["include-exclude"] }
 mime_guess.workspace = true
+portable-pty = "0.9.0"
+base64.workspace = true
+parking_lot.workspace = true
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-io"] }
 
 [dev-dependencies]
 tempfile.workspace = true
 tower.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_JobObjects"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process"] }
+libc = "0.2"

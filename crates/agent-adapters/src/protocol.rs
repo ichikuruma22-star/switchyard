@@ -17,11 +17,11 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_LINE: usize = 256 * 1024;
 const MAX_STREAM: usize = 32 * 1024 * 1024;
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
-const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const INTERRUPT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub(crate) const INTERRUPT_TIMEOUT: Duration = Duration::from_secs(5);
 
-enum Packet {
+pub(crate) enum Packet {
     Message(Value),
     End,
     Fault(&'static str),
@@ -43,9 +43,9 @@ pub(crate) struct RunInput {
     pub(crate) project: PathBuf,
     pub(crate) profile: Option<crate::ProfileBinding>,
     pub(crate) prompt: String,
-    /// Saved Codex thread to resume instead of starting a new one.
+    /// Saved agent conversation to resume instead of starting a new one.
     pub(crate) resume_thread: Option<String>,
-    /// Ask Codex not to save a new thread. Used when Switchya keeps no history.
+    /// Ask the agent not to save a new thread. Used when Switchya keeps no history.
     pub(crate) ephemeral: bool,
 }
 
@@ -292,21 +292,24 @@ fn confirmed_policy(result: &Value) -> bool {
             .is_none_or(|v| v.as_bool() == Some(false))
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
 }
 
-async fn write(stdin: &mut ChildStdin, value: &Value) -> Result<()> {
+pub(crate) async fn write(stdin: &mut ChildStdin, value: &Value) -> Result<()> {
     let mut bytes = serde_json::to_vec(value)
         .map_err(|_| AdapterError::Protocol("Could not encode protocol request.".into()))?;
     bytes.push(b'\n');
     tokio::time::timeout(Duration::from_secs(5), stdin.write_all(&bytes))
         .await
-        .map_err(|_| AdapterError::Protocol("Codex protocol write timed out.".into()))?
-        .map_err(|_| AdapterError::Protocol("Codex protocol write failed.".into()))
+        .map_err(|_| AdapterError::Protocol("Agent protocol write timed out.".into()))?
+        .map_err(|_| AdapterError::Protocol("Agent protocol write failed.".into()))
 }
 
-async fn read_stdout(stdout: tokio::process::ChildStdout, packets: mpsc::Sender<Packet>) {
+pub(crate) async fn read_stdout(
+    stdout: tokio::process::ChildStdout,
+    packets: mpsc::Sender<Packet>,
+) {
     let mut reader = BufReader::new(stdout);
     let mut total = 0usize;
     loop {
@@ -319,7 +322,7 @@ async fn read_stdout(stdout: tokio::process::ChildStdout, packets: mpsc::Sender<
             Ok(n) => n,
             Err(_) => {
                 let _ = packets
-                    .send(Packet::Fault("Codex stdout could not be read."))
+                    .send(Packet::Fault("Agent stdout could not be read."))
                     .await;
                 break;
             }
@@ -332,7 +335,7 @@ async fn read_stdout(stdout: tokio::process::ChildStdout, packets: mpsc::Sender<
         if n > MAX_LINE || total > MAX_STREAM {
             let _ = packets
                 .send(Packet::Fault(
-                    "Codex exceeded the bounded protocol output limit.",
+                    "The agent exceeded the bounded protocol output limit.",
                 ))
                 .await;
             break;
@@ -349,7 +352,7 @@ async fn read_stdout(stdout: tokio::process::ChildStdout, packets: mpsc::Sender<
             _ => {
                 let _ = packets
                     .send(Packet::Fault(
-                        "Codex emitted invalid structured JSON output.",
+                        "The agent emitted invalid structured JSON output.",
                     ))
                     .await;
                 break;
@@ -358,7 +361,10 @@ async fn read_stdout(stdout: tokio::process::ChildStdout, packets: mpsc::Sender<
     }
 }
 
-async fn discard_stderr(mut stderr: tokio::process::ChildStderr, packets: mpsc::Sender<Packet>) {
+pub(crate) async fn discard_stderr(
+    mut stderr: tokio::process::ChildStderr,
+    packets: mpsc::Sender<Packet>,
+) {
     let mut buffer = [0u8; 8192];
     let mut total = 0usize;
     loop {
@@ -368,7 +374,9 @@ async fn discard_stderr(mut stderr: tokio::process::ChildStderr, packets: mpsc::
                 total += n;
                 if total > MAX_STREAM {
                     let _ = packets
-                        .send(Packet::Fault("Codex exceeded the diagnostic output limit."))
+                        .send(Packet::Fault(
+                            "The agent exceeded the diagnostic output limit.",
+                        ))
                         .await;
                     break;
                 }
@@ -672,7 +680,7 @@ fn public_item(item: &Value) -> Value {
     Value::Object(result)
 }
 
-fn fail(state: &Arc<Mutex<StoredRun>>, message: &str, uncertain: bool) {
+pub(crate) fn fail(state: &Arc<Mutex<StoredRun>>, message: &str, uncertain: bool) {
     fail_unlocked(&mut state.lock(), message, uncertain);
 }
 fn fail_unlocked(state: &mut StoredRun, message: &str, uncertain: bool) {

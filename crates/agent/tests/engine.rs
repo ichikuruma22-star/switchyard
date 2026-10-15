@@ -307,7 +307,12 @@ async fn overlapping_project_mutations_serialize_and_recheck_hashes_while_reads_
     #[cfg(windows)]
     let command = r#"
 $ErrorActionPreference = 'Stop'
-[IO.File]::WriteAllText((Join-Path (Get-Location) 'command-ready'), 'ready')
+Write-Output 'fixture entered'
+Write-Output ('fixture current directory: ' + [Environment]::CurrentDirectory)
+$fixtureMarker = Join-Path (Get-Location) 'command-ready'
+Write-Output ('fixture marker: ' + $fixtureMarker)
+[IO.File]::WriteAllText($fixtureMarker, 'ready')
+Write-Output 'fixture ready'
 while (-not (Test-Path -LiteralPath 'release-command')) { Start-Sleep -Milliseconds 10 }
 [IO.File]::WriteAllText((Join-Path (Get-Location) 'nested/hello.txt'), "first change`n")
 "#;
@@ -351,13 +356,42 @@ printf 'first change\n' > nested/hello.txt
             Decision::AllowOnce,
         )
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    let barrier = tokio::time::timeout(Duration::from_secs(10), async {
         while !project.join("command-ready").exists() {
+            let events = h.engine.events(&h.session.id, 0, 500).unwrap();
+            if let Some(completed) = events.iter().find(|event| event.kind == "tool.completed") {
+                panic!(
+                    "approved command ended before reaching its barrier: {}",
+                    completed.payload
+                );
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .expect("approved command must reach its barrier");
+    .await;
+    if let Err(error) = barrier {
+        // Preserve the failed ten-second assertion, but let the bounded tool
+        // finish so its captured output can explain a CI-only startup failure.
+        drop(release);
+        let _ = tokio::time::timeout(Duration::from_secs(35), async {
+            loop {
+                if h.engine
+                    .events(&h.session.id, 0, 500)
+                    .unwrap()
+                    .iter()
+                    .any(|event| event.kind == "tool.completed")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        panic!(
+            "approved command must reach its barrier: {error}; session: {}",
+            serde_json::to_string(&h.engine.session(&h.session.id).unwrap()).unwrap()
+        );
+    }
 
     h.engine
         .submit_turn(&patch_session.id, "queued-patch", "Make the second change")

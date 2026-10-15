@@ -6,13 +6,21 @@ mod api;
 mod assets;
 pub mod cli;
 mod error;
+mod git_review;
 mod guard;
+mod handoffs;
 mod launch;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod launch_acl;
 mod providers;
 mod startup;
+#[allow(unsafe_code)]
+mod terminal_platform;
+mod terminals;
+mod workspace;
+#[cfg(test)]
+mod workspace_tests;
 
 pub use error::{AppError, Result};
 pub use launch::LaunchInfo;
@@ -96,16 +104,34 @@ pub async fn start_host(options: AppOptions) -> Result<RunningHost> {
         }
     };
     let cancel = CancellationToken::new();
+    let (host_record, data_dir) = match (|| {
+        let data_dir = std::fs::canonicalize(&options.data_dir)
+            .map_err(|_| AppError::local("Could not resolve the app data directory."))?;
+        Ok::<_, AppError>((launch::HostRecord::publish(&launch, &data_dir)?, data_dir))
+    })() {
+        Ok(value) => value,
+        Err(error) => {
+            accounts.shutdown().await;
+            adapters.shutdown().await;
+            let _ = runtime.shutdown().await;
+            return Err(error);
+        }
+    };
+    let terminals = terminals::TerminalManager::default();
     let state = Arc::new(api::AppState {
         engine: runtime.engine.clone(),
         gateway: runtime.gateway.clone(),
         config_path: runtime.config_path.clone(),
+        data_dir,
         adapters: adapters.clone(),
         accounts: accounts.clone(),
+        workspace_reads: Arc::new(tokio::sync::Semaphore::new(4)),
+        terminals: terminals.clone(),
     });
     let router = api::router(state, port, launch.token.clone(), cancel.clone());
     let stopped = cancel.clone();
     let task = tokio::spawn(async move {
+        let _host_record = host_record;
         use std::future::IntoFuture;
         let server = axum::serve(listener, router)
             .with_graceful_shutdown(stopped.clone().cancelled_owned())
@@ -135,13 +161,15 @@ pub async fn start_host(options: AppOptions) -> Result<RunningHost> {
                 },
             }
         };
-        let (_, _, engine, served) = tokio::join!(
+        let (_, _, terminal_result, engine, served) = tokio::join!(
             accounts.shutdown(),
             adapters.shutdown(),
+            terminals.shutdown(),
             runtime.shutdown(),
             drain
         );
         engine?;
+        terminal_result?;
         served
     });
     Ok(RunningHost {

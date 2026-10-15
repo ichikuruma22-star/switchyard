@@ -1,10 +1,19 @@
 # CLI account profiles
 
-Switchya can keep multiple Codex and Claude Code sign-ins in separate managed
-profiles. Profiles belong to the official CLIs; they do not turn subscription
+Switchya can use an existing Codex or Claude Code CLI sign-in, or keep multiple
+sign-ins in separate managed profiles. Profiles belong to the official CLIs;
+they do not turn subscription
 credentials into gateway API keys. Install the relevant CLI separately.
 
 ## Use accounts
+
+Already signed in through the installed CLI? Select **Existing Codex CLI** or
+**Existing Claude CLI** in **Accounts** or the existing-agent account selector.
+No new profile or sign-in is needed. **Refresh account** explicitly checks the
+selected CLI's status. New installations default to these entries; existing
+saved defaults, including an unset Claude default, are preserved.
+
+To keep another sign-in in an isolated managed profile:
 
 1. Open **Accounts**, choose Codex or Claude Code, and create a named profile.
 2. Choose **Refresh account**. New profiles show unknown status until this
@@ -16,14 +25,55 @@ credentials into gateway API keys. Install the relevant CLI separately.
 4. Select **Use as default** for future runs, or choose a profile in the
    existing-agent run form. Running tasks retain their original account.
 
-**Cancel sign-in** stops the pending login. It does not log out an account or
-erase credentials. To add another identity, create another profile. This
-version has no logout, profile removal or credential replacement controls.
+Managed profiles offer more than one official sign-in method. Codex profiles
+can use **Browser sign-in** (ChatGPT OAuth, the default) or **Device code**:
+Switchya shows a verification URL and a one-time code to enter on any device,
+which suits machines where opening a browser is awkward. Claude profiles can
+use **Claude subscription** (`--claudeai`, the default), **Anthropic Console**
+(`--console`, API usage billing) or **Single sign-on (SSO)** (`--sso`). Choose
+the method next to **Sign in** in Accounts, or from the CLI:
+`switchya agent login --profile PROFILE_ID [--method device]`.
+`switchya agent use --profile PROFILE_ID` makes a profile the default from
+the terminal. API keys remain a gateway/provider concern; none of these
+methods asks for one.
 
-The **Existing Codex CLI** entry uses the current CLI configuration. Account
-management treats it as read-only: it can be selected and explicitly inspected,
-but Switchya cannot start a replacement login for it. It may be used for a
-Codex run without first requesting account inspection.
+**Cancel sign-in** stops the pending login. It does not log out an account or
+erase credentials. To add another identity, create another profile.
+
+To remove a managed profile, choose **Remove profile** on its card and
+confirm. Removal deletes the profile and its private CLI home — the stored
+sign-in goes with it — and cannot be undone. If the profile was the default
+for its agent, the default returns to the **Existing … CLI** entry.
+Conversations that used the removed profile keep their binding and cannot
+continue; start a new conversation. Removal is refused while the profile has
+an active run, refresh, sign-in or terminal launch. The built-in Existing CLI
+entries cannot be removed or signed out here; manage those sign-ins through
+the official CLIs. There is still no in-place credential replacement: remove
+the profile and create a new one to start over.
+
+## Antigravity accounts
+
+Antigravity (`agy`) profiles work differently from Codex and Claude Code
+because the CLI exposes no account-status command. **Existing Antigravity
+CLI** uses the installed CLI as-is. A managed profile redirects the child's
+home to its private directory, so that profile's Antigravity state and saved
+conversations stay separate. Status always reads unknown: **Refresh account**
+records that no check exists rather than probing the CLI, and runs are not
+gated on sign-in — the CLI reports authentication failures itself. To sign
+in to a managed profile, choose **Open Antigravity** on its card, complete
+sign-in in that terminal, then start work. There is no browser, device-code
+or SSO sign-in job for Antigravity, and no usage display. Antigravity runs
+in plan mode (read-only); see
+[the adapter contract](AGENT-ADAPTERS.md#antigravity).
+
+The **Existing Codex CLI** (`system-codex`), **Existing Claude CLI**
+(`system-claude`) and **Existing Antigravity CLI** (`system-antigravity`)
+entries use the installed CLIs' environment and configuration
+as inherited by the Switchya host, including an existing `CLAUDE_CONFIG_DIR`.
+Account management treats both as read-only for sign-in: they can be selected
+and explicitly inspected, but Switchya cannot start a replacement login for
+them. They may be used without first requesting account inspection. Manage
+their sign-ins through the official CLIs.
 
 Managed profiles require a successful signed-in status check before starting
 work. A status check is a snapshot, not a guarantee that the next request will
@@ -31,18 +81,28 @@ succeed. After restarting the host, refresh managed profiles again.
 
 ## Concurrent work and switching
 
-The structured Codex adapter accepts up to four active runs across all
+The structured Codex and Claude Code adapters share a limit of four active runs across all
 profiles. Each accepted run pins its account identity and private CLI home.
 Changing the selected default affects later runs only. Retrying the same
 command keeps the original binding, including after a default change; changing
 that command's profile, agent or request content returns a conflict.
+Continuation after a restart keeps the original profile, including either
+built-in CLI profile. For an existing CLI profile, keep that CLI's account and
+configuration consistent when continuing: Switchya saves the profile binding,
+not a snapshot of credentials or global settings.
 
 Sign-in is rejected while the profile has an active tracked run, refresh or
 login. It also requires a confirmed signed-out snapshot and an additional
 official CLI status check before login starts. Already signed-in credentials
 are not replaced by the sign-in action.
 
-For Claude, **Open Claude Code** starts the official CLI in a separate native
+Choose **Claude Code** in **Existing agents** to keep its conversation, tool
+activity and approval requests inside Switchya. Choose **Existing Claude CLI**
+or a managed Claude profile with a confirmed sign-in. Its default permission
+mode retains existing CLI allow
+and deny rules; Switchya forwards requests that require a decision.
+
+The optional **Open Claude Code** account action starts the official CLI in a separate native
 terminal for the currently opened project, using the selected managed profile.
 This is an external CLI session: its conversation, approvals, termination and
 results are not tracked by Switchya. Closing Switchya does not close it.
@@ -106,11 +166,12 @@ parameters cannot select an arbitrary credential directory.
 | GET | `/api/account-profiles` | Cached profiles and selected defaults |
 | POST | `/api/account-profiles` | `{ "agent_id": "codex", "name": "Work" }`; `claude` also supported |
 | POST | `/api/account-profiles/{id}/refresh` | `{}`; queues a status check, returns 202 |
-| POST | `/api/account-profiles/{id}/login` | `{}`; queues sign-in, returns 202 |
+| POST | `/api/account-profiles/{id}/login` | `{}` or `{ "method": "device" }`; queues sign-in, returns 202 |
 | GET | `/api/account-profiles/{id}/login` | Cached login state; does not start a process |
 | POST | `/api/account-profiles/{id}/login/cancel` | `{}`; cancels the pending login |
 | POST | `/api/account-profiles/{id}/login/open` | `{}`; opens its recorded official login URL |
 | POST | `/api/account-profiles/{id}/select` | `{}`; saves the default for that agent |
+| POST | `/api/account-profiles/{id}/remove` | `{}`; removes a managed profile, deletes its private CLI home and returns the updated defaults |
 | POST | `/api/account-profiles/{id}/terminal` | `{ "project_id": "opened-project-id" }`; managed Claude only |
 
 At most 32 managed profiles are supported. Names contain 1–64 characters after

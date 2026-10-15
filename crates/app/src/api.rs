@@ -21,8 +21,11 @@ pub(crate) struct AppState {
     pub(crate) engine: AppEngine,
     pub(crate) gateway: switchyard_gateway::Gateway,
     pub(crate) config_path: PathBuf,
+    pub(crate) data_dir: PathBuf,
     pub(crate) adapters: AdapterManager,
     pub(crate) accounts: crate::accounts::AccountManager,
+    pub(crate) workspace_reads: Arc<tokio::sync::Semaphore>,
+    pub(crate) terminals: crate::terminals::TerminalManager,
 }
 
 pub(crate) fn router(
@@ -43,6 +46,46 @@ pub(crate) fn router(
             post(crate::providers::refresh),
         )
         .route("/api/projects", get(projects).post(open_project))
+        .route(
+            "/api/workspace",
+            get(crate::workspace::selection).post(crate::workspace::save_selection),
+        )
+        .route("/api/projects/{id}/files", get(crate::workspace::directory))
+        .route("/api/projects/{id}/file", get(crate::workspace::file))
+        .route("/api/projects/{id}/search", get(crate::handoffs::search))
+        .route(
+            "/api/projects/{id}/mcp-config",
+            get(crate::handoffs::mcp_config),
+        )
+        .route(
+            "/api/projects/{id}/checkpoints",
+            get(crate::handoffs::list).post(crate::handoffs::save),
+        )
+        .route(
+            "/api/projects/{id}/checkpoints/{note}",
+            get(crate::handoffs::read),
+        )
+        .route(
+            "/api/projects/{id}/conversations",
+            get(crate::handoffs::conversations),
+        )
+        .route(
+            "/api/projects/{id}/conversations/{kind}/{conversation}",
+            get(crate::handoffs::conversation),
+        )
+        .route(
+            "/api/projects/{id}/changes",
+            get(crate::git_review::changes),
+        )
+        .route("/api/projects/{id}/diff", get(crate::git_review::diff))
+        .route(
+            "/api/terminals",
+            get(crate::terminals::list).post(crate::terminals::start),
+        )
+        .route("/api/terminals/{id}", get(crate::terminals::output))
+        .route("/api/terminals/{id}/input", post(crate::terminals::input))
+        .route("/api/terminals/{id}/resize", post(crate::terminals::resize))
+        .route("/api/terminals/{id}/close", post(crate::terminals::close))
         .route("/api/sessions", get(sessions).post(create_session))
         .route("/api/sessions/{id}", get(session))
         .route("/api/sessions/{id}/turns", post(submit_turn))
@@ -76,6 +119,10 @@ pub(crate) fn router(
         .route(
             "/api/account-profiles/{id}/select",
             post(crate::accounts::select),
+        )
+        .route(
+            "/api/account-profiles/{id}/remove",
+            post(crate::accounts::remove),
         )
         .route(
             "/api/account-profiles/{id}/terminal",
@@ -186,7 +233,7 @@ fn decode_query_part(value: &str) -> Result<String> {
     Ok(decoded)
 }
 
-fn query(uri: &Uri, allowed: &[&str]) -> Result<BTreeMap<String, String>> {
+pub(crate) fn query(uri: &Uri, allowed: &[&str]) -> Result<BTreeMap<String, String>> {
     let mut output = BTreeMap::new();
     if let Some(raw) = uri.query() {
         if raw.is_empty() || raw.len() > 2048 {
@@ -206,7 +253,7 @@ fn query(uri: &Uri, allowed: &[&str]) -> Result<BTreeMap<String, String>> {
     Ok(output)
 }
 
-fn event_cursor(uri: &Uri, max_limit: usize) -> Result<(u64, usize)> {
+pub(crate) fn event_cursor(uri: &Uri, max_limit: usize) -> Result<(u64, usize)> {
     let values = query(uri, &["after_seq", "limit"])?;
     let integer = |name: &str, default: u64| -> Result<u64> {
         values.get(name).map_or(Ok(default), |value| {
@@ -221,7 +268,7 @@ fn event_cursor(uri: &Uri, max_limit: usize) -> Result<(u64, usize)> {
         })
     };
     let after_seq = integer("after_seq", 0)?;
-    let limit = integer("limit", 200)?;
+    let limit = integer("limit", 200.min(max_limit) as u64)?;
     if limit == 0 || limit > max_limit as u64 {
         return Err(AppError::invalid(format!(
             "Event limit must be between 1 and {max_limit}."
@@ -583,8 +630,11 @@ mod tests {
                 engine: runtime.engine.clone(),
                 gateway: runtime.gateway.clone(),
                 config_path: runtime.config_path.clone(),
+                data_dir: options.data_dir.clone(),
                 adapters: AdapterManager::new(),
                 accounts: crate::accounts::AccountManager::open(&options.data_dir).unwrap(),
+                workspace_reads: Arc::new(tokio::sync::Semaphore::new(4)),
+                terminals: crate::terminals::TerminalManager::default(),
             });
             Self {
                 router: router(
@@ -736,10 +786,37 @@ mod tests {
         let harness = Harness::new().await;
         let (status, initial) = harness.request("GET", "/api/account-profiles", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(initial["profiles"].as_array().unwrap().len(), 1);
+        assert_eq!(initial["profiles"].as_array().unwrap().len(), 3);
         assert_eq!(initial["profiles"][0]["id"], "system-codex");
         assert_eq!(initial["profiles"][0]["read_only"], true);
         assert_eq!(initial["profiles"][0]["refreshing"], false);
+        assert_eq!(initial["profiles"][1]["id"], "system-claude");
+        assert_eq!(initial["profiles"][1]["name"], "Existing Claude CLI");
+        assert_eq!(initial["profiles"][1]["agent_id"], "claude");
+        assert_eq!(initial["profiles"][1]["managed"], false);
+        assert_eq!(initial["profiles"][1]["read_only"], true);
+        assert_eq!(initial["profiles"][1]["account"]["auth_status"], "unknown");
+        for (id, agent) in [("system-codex", "codex"), ("system-claude", "claude")] {
+            let (status, selected) = harness
+                .request(
+                    "POST",
+                    &format!("/api/account-profiles/{id}/select"),
+                    Some(json!({})),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(selected["defaults"][agent], id);
+            assert_eq!(selected["profile"]["selected"], true);
+            let (status, rejected) = harness
+                .request(
+                    "POST",
+                    &format!("/api/account-profiles/{id}/login"),
+                    Some(json!({})),
+                )
+                .await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(rejected["error"]["code"], "system_profile_read_only");
+        }
         let (status, created) = harness
             .request(
                 "POST",
@@ -758,6 +835,23 @@ mod tests {
             .await;
         assert_eq!(status, StatusCode::OK);
         assert!(login["login"].is_null());
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/login"),
+                Some(json!({"method":"console"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+        assert_eq!(rejected["error"]["code"], "invalid_login_method");
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/login"),
+                Some(json!({"method":"device","extra":true})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
         let (status, selected) = harness
             .request(
                 "POST",
@@ -788,6 +882,37 @@ mod tests {
         assert_eq!(rejected["error"]["code"], "profile_not_signed_in");
         let (_, runs) = harness.request("GET", "/api/adapter-runs", None).await;
         assert!(runs["runs"].as_array().unwrap().is_empty());
+        let (status, rejected) = harness
+            .request(
+                "POST",
+                "/api/account-profiles/system-codex/remove",
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(rejected["error"]["code"], "system_profile_read_only");
+        let (status, removed) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/remove"),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{removed}");
+        assert_eq!(removed["removed"], id);
+        assert_eq!(removed["defaults"]["codex"], "system-codex");
+        let (status, after) = harness.request("GET", "/api/account-profiles", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(after["profiles"].as_array().unwrap().len(), 3);
+        let (status, missing) = harness
+            .request(
+                "POST",
+                &format!("/api/account-profiles/{id}/remove"),
+                Some(json!({})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["error"]["code"], "profile_not_found");
         harness.runtime.shutdown().await.unwrap();
     }
 

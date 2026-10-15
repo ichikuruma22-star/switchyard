@@ -4,7 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-/// Explicitly exported host credentials. Intentionally has no Debug implementation.
+/// Private host credentials. Intentionally has no Debug implementation.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LaunchInfo {
@@ -13,6 +13,48 @@ pub struct LaunchInfo {
     pub base_url: String,
     pub token: String,
     pub pid: u32,
+}
+
+/// The single database owner advertises its listener in a private, protected
+/// directory. A stable path lets MCP clients reconnect after a host restart.
+pub(crate) struct HostRecord {
+    path: PathBuf,
+    token: String,
+}
+impl HostRecord {
+    pub(crate) fn path(data: &Path) -> PathBuf {
+        data.join(".switchya").join("host.json")
+    }
+    pub(crate) fn publish(info: &LaunchInfo, data: &Path) -> Result<Self> {
+        let directory = data.join(".switchya");
+        crate::startup::private_directory(&directory)?;
+        let path = checked_path(&Self::path(data))?;
+        if path
+            .try_exists()
+            .map_err(|_| AppError::local("Could not inspect the active-host record."))?
+        {
+            LaunchInfo::read(&path)?;
+        }
+        let temporary = directory.join(format!("host-{}.json", uuid::Uuid::new_v4()));
+        info.write_new(&temporary)?;
+        if std::fs::rename(&temporary, &path).is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(AppError::local(
+                "Could not publish the private active-host record.",
+            ));
+        }
+        Ok(Self {
+            path,
+            token: info.token.clone(),
+        })
+    }
+}
+impl Drop for HostRecord {
+    fn drop(&mut self) {
+        if LaunchInfo::read(&self.path).is_ok_and(|current| current.token == self.token) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 impl LaunchInfo {
@@ -224,6 +266,24 @@ fn checked_path(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn private_host_record_rotates_without_an_old_owner_removing_a_new_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = HostRecord::publish(&LaunchInfo::new(18317), temp.path()).unwrap();
+        let next = LaunchInfo::new(18318);
+        let second = HostRecord::publish(&next, temp.path()).unwrap();
+        drop(first);
+        let path = HostRecord::path(temp.path());
+        assert_eq!(LaunchInfo::read(&path).unwrap().token, next.token);
+        drop(second);
+        assert!(!path.exists());
+        std::fs::write(&path, "An unrelated file must not be overwritten.").unwrap();
+        assert!(HostRecord::publish(&next, temp.path()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "An unrelated file must not be overwritten."
+        );
+    }
     #[test]
     fn launch_info_round_trips_without_overwrite_and_rejects_remote_urls() {
         let temp = tempfile::tempdir().unwrap();

@@ -137,11 +137,22 @@ impl AccountProcess {
         self.write(&json!({"method":"initialized"})).await
     }
 
-    pub(crate) async fn stop(&mut self) {
-        let _ = self.tree.terminate();
-        let _ = tokio::time::timeout(Duration::from_millis(500), self.child.wait()).await;
+    pub(crate) async fn stop(&mut self) -> Result<()> {
+        let termination = self.tree.terminate();
+        // Termination is asynchronous on Windows. Match the other adapters' bound
+        // and never report success until the child has actually been reaped.
+        let wait_result = tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await;
+        let reaped = matches!(&wait_result, Ok(Ok(_)));
         for reader in &self.readers {
             reader.abort();
+        }
+        if self.tree.cleanup_confirmed(&termination, reaped) {
+            Ok(())
+        } else {
+            Err(AdapterError::Unavailable(
+                "The account CLI could not be stopped safely. Restart Switchya before retrying."
+                    .into(),
+            ))
         }
     }
 }

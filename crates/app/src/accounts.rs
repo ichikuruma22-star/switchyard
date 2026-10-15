@@ -1,5 +1,5 @@
 //! Private account profiles. Only labels and selections are persisted here;
-//! official CLI processes own their credentials inside separate profile homes.
+//! official CLIs own credentials in their existing configuration or managed homes.
 use crate::api::{AppState, body, no_query};
 use crate::{AppError, Result};
 use axum::Json;
@@ -18,21 +18,35 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use switchyard_agent_adapters::{
     AccountRuntime, AccountSnapshot, AccountUsage, AdapterManager, AdapterRun, LoginJob,
-    ProfileBinding, StartRequest, launch_profile_terminal, official_auth_url,
+    ProfileBinding, StartRequest, default_login_method, launch_profile_terminal, official_auth_url,
+    valid_login_method,
 };
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 const SYSTEM_CODEX: &str = "system-codex";
+const SYSTEM_CLAUDE: &str = "system-claude";
+const SYSTEM_ANTIGRAVITY: &str = "system-antigravity";
+
+fn system_profile(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        SYSTEM_CODEX => Some(("Existing Codex CLI", "codex")),
+        SYSTEM_CLAUDE => Some(("Existing Claude CLI", "claude")),
+        SYSTEM_ANTIGRAVITY => Some(("Existing Antigravity CLI", "antigravity")),
+        _ => None,
+    }
+}
 const MAX_PROFILES: usize = 32;
 const MAX_MANIFEST: u64 = 128 * 1024;
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Defaults {
     codex: Option<String>,
     claude: Option<String>,
+    #[serde(default)]
+    antigravity: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -59,7 +73,8 @@ impl Default for Manifest {
             profiles: Vec::new(),
             defaults: Defaults {
                 codex: Some(SYSTEM_CODEX.into()),
-                claude: None,
+                claude: Some(SYSTEM_CLAUDE.into()),
+                antigravity: Some(SYSTEM_ANTIGRAVITY.into()),
             },
         }
     }
@@ -162,7 +177,7 @@ fn active_login(job: &LoginJob) -> bool {
 }
 
 fn valid_agent(agent: &str) -> bool {
-    matches!(agent, "codex" | "claude")
+    matches!(agent, "codex" | "claude" | "antigravity")
 }
 
 fn checked_name(name: &str) -> Result<String> {
@@ -186,6 +201,7 @@ fn selected<'a>(defaults: &'a Defaults, agent: &str) -> Option<&'a str> {
     match agent {
         "codex" => defaults.codex.as_deref(),
         "claude" => defaults.claude.as_deref(),
+        "antigravity" => defaults.antigravity.as_deref(),
         _ => None,
     }
 }
@@ -214,7 +230,9 @@ impl AccountManager {
             crate::startup::private_directory(&home)?;
         }
         let mut cache = BTreeMap::new();
-        cache.insert(SYSTEM_CODEX.into(), CachedProfile::default());
+        for id in [SYSTEM_CODEX, SYSTEM_CLAUDE, SYSTEM_ANTIGRAVITY] {
+            cache.insert(id.into(), CachedProfile::default());
+        }
         for profile in &manifest.profiles {
             cache.insert(profile.id.clone(), CachedProfile::default());
         }
@@ -255,16 +273,12 @@ impl AccountManager {
         }
     }
 
-    fn record<'a>(state: &'a ProfileState, id: &str) -> Result<Option<&'a ProfileRecord>> {
-        if id == SYSTEM_CODEX {
-            return Ok(None);
-        }
+    fn record<'a>(state: &'a ProfileState, id: &str) -> Result<&'a ProfileRecord> {
         state
             .manifest
             .profiles
             .iter()
             .find(|profile| profile.id == id)
-            .map(Some)
             .ok_or_else(|| {
                 AppError::new(
                     StatusCode::NOT_FOUND,
@@ -275,15 +289,16 @@ impl AccountManager {
     }
 
     fn binding(&self, state: &ProfileState, id: &str) -> Result<ProfileBinding> {
-        let Some(profile) = Self::record(state, id)? else {
+        if let Some((name, agent_id)) = system_profile(id) {
             return Ok(ProfileBinding {
-                id: SYSTEM_CODEX.into(),
-                name: "Existing Codex CLI".into(),
-                agent_id: "codex".into(),
+                id: id.into(),
+                name: name.into(),
+                agent_id: agent_id.into(),
                 home: PathBuf::new(),
                 managed: false,
             });
-        };
+        }
+        let profile = Self::record(state, id)?;
         let home = self.inner.homes.join(&profile.id);
         check_directory_chain(&home)?;
         crate::startup::private_directory(&home)?;
@@ -302,11 +317,12 @@ impl AccountManager {
     }
 
     fn view(state: &ProfileState, id: &str) -> Result<ProfileView> {
-        let record = Self::record(state, id)?;
-        let (name, agent_id, managed) = record
-            .map_or(("Existing Codex CLI", "codex", false), |profile| {
-                (profile.name.as_str(), profile.agent_id.as_str(), true)
-            });
+        let (name, agent_id, managed) = if let Some((name, agent_id)) = system_profile(id) {
+            (name, agent_id, false)
+        } else {
+            let profile = Self::record(state, id)?;
+            (profile.name.as_str(), profile.agent_id.as_str(), true)
+        };
         let cached = state
             .cache
             .get(id)
@@ -325,7 +341,8 @@ impl AccountManager {
 
     pub(crate) fn cached(&self) -> (Vec<ProfileView>, Defaults) {
         let state = lock(&self.inner.state);
-        let profiles = std::iter::once(SYSTEM_CODEX)
+        let profiles = [SYSTEM_CODEX, SYSTEM_CLAUDE, SYSTEM_ANTIGRAVITY]
+            .into_iter()
             .chain(
                 state
                     .manifest
@@ -460,7 +477,7 @@ impl AccountManager {
             return adapters.start(request).map_err(AppError::from);
         }
         let binding = match request.continue_run_id.as_deref() {
-            // A conversation stays with the account that holds its Codex thread.
+            // A conversation stays with the account that holds its CLI history.
             Some(previous) => {
                 let original = adapters.run_profile(previous)?.ok_or_else(|| {
                     AppError::new(
@@ -501,7 +518,10 @@ impl AccountManager {
                 "Finish this account's sign-in or terminal launch before starting a run.",
             ));
         }
-        if binding.managed && cached.account.auth_status != "signed_in" {
+        if binding.managed
+            && binding.agent_id != "antigravity"
+            && cached.account.auth_status != "signed_in"
+        {
             return Err(AppError::new(
                 StatusCode::CONFLICT,
                 "profile_not_signed_in",
@@ -520,10 +540,81 @@ impl AccountManager {
         match binding.agent_id.as_str() {
             "codex" => manifest.defaults.codex = Some(id.into()),
             "claude" => manifest.defaults.claude = Some(id.into()),
+            "antigravity" => manifest.defaults.antigravity = Some(id.into()),
             _ => return Err(AppError::invalid("Unknown profile agent.")),
         }
         self.persist(&mut state, manifest)?;
         Ok((Self::view(&state, id)?, state.manifest.defaults.clone()))
+    }
+    /// Removes a managed profile and deletes its private CLI home, which is
+    /// where the official CLI kept that profile's credentials. Conversations
+    /// pinned to the profile keep their binding and can no longer continue;
+    /// `start_run` already reports that as `profile_changed`.
+    pub(crate) fn remove_profile(&self, id: &str, adapters: &AdapterManager) -> Result<Defaults> {
+        self.ensure_running()?;
+        let mut state = lock(&self.inner.state);
+        let binding = self.binding(&state, id)?;
+        if !binding.managed {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "system_profile_read_only",
+                "Existing CLI accounts cannot be removed here. Manage that sign-in in its official CLI.",
+            ));
+        }
+        let cached = state
+            .cache
+            .get(id)
+            .ok_or_else(|| AppError::local("Account cache is unavailable."))?;
+        if cached.refreshing
+            || cached.login_busy
+            || cached.terminal_busy
+            || cached.login.as_ref().is_some_and(active_login)
+        {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "profile_busy",
+                "Finish or cancel this profile's sign-in, refresh or terminal launch before removing it.",
+            ));
+        }
+        if adapters.profile_has_active_runs(id) {
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "profile_busy",
+                "This profile has an active run. Finish it before removing the profile.",
+            ));
+        }
+        // Delete the credential home first: if metadata persistence then
+        // fails, the profile is still listed and a refresh shows it signed
+        // out, rather than credentials lingering in an orphaned directory
+        // no profile points at.
+        match std::fs::remove_dir_all(&binding.home) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(AppError::local(
+                    "Could not delete this profile's local account data. It was not removed.",
+                ));
+            }
+        }
+        let mut manifest = state.manifest.clone();
+        manifest.profiles.retain(|profile| profile.id != id);
+        let system_default = match binding.agent_id.as_str() {
+            "codex" => SYSTEM_CODEX,
+            "claude" => SYSTEM_CLAUDE,
+            "antigravity" => SYSTEM_ANTIGRAVITY,
+            _ => return Err(AppError::invalid("Unknown profile agent.")),
+        };
+        let defaults = match binding.agent_id.as_str() {
+            "codex" => &mut manifest.defaults.codex,
+            "antigravity" => &mut manifest.defaults.antigravity,
+            _ => &mut manifest.defaults.claude,
+        };
+        if defaults.as_deref() == Some(id) {
+            *defaults = Some(system_default.into());
+        }
+        self.persist(&mut state, manifest)?;
+        state.cache.remove(id);
+        Ok(state.manifest.defaults.clone())
     }
 
     fn spawn(&self, task: impl std::future::Future<Output = ()> + Send + 'static) {
@@ -593,6 +684,7 @@ impl AccountManager {
         &self,
         id: &str,
         adapters: &AdapterManager,
+        method: Option<&str>,
     ) -> Result<LoginJob> {
         self.ensure_running()?;
         let binding = {
@@ -602,7 +694,24 @@ impl AccountManager {
                 return Err(AppError::new(
                     StatusCode::CONFLICT,
                     "system_profile_read_only",
-                    "The existing Codex account is read-only here. Create a managed profile to sign in.",
+                    "Existing CLI accounts are read-only here. Create a managed profile to sign in.",
+                ));
+            }
+            if binding.agent_id == "antigravity" {
+                return Err(AppError::new(
+                    StatusCode::CONFLICT,
+                    "profile_sign_in_not_allowed",
+                    "Antigravity sign-in happens in its own terminal. Use Open Antigravity for this profile, sign in there, then start a run.",
+                ));
+            }
+            let method = method
+                .map(str::to_owned)
+                .unwrap_or_else(|| default_login_method(&binding.agent_id).to_owned());
+            if !valid_login_method(&binding.agent_id, &method) {
+                return Err(AppError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_login_method",
+                    "Choose a supported sign-in method for this account.",
                 ));
             }
             let cached = state
@@ -628,10 +737,16 @@ impl AccountManager {
                 ));
             }
             cached.login_busy = true;
-            binding
+            (binding, method)
         };
+        let (binding, method) = binding;
         // AccountRuntime registers and returns synchronously on its first poll.
-        let job = match self.inner.runtime.start_login(binding.clone()).await {
+        let job = match self
+            .inner
+            .runtime
+            .start_login(binding.clone(), &method)
+            .await
+        {
             Ok(job) => job,
             Err(error) => {
                 if let Some(cached) = lock(&self.inner.state).cache.get_mut(id) {
@@ -675,7 +790,9 @@ impl AccountManager {
 
     pub(crate) fn cached_login(&self, id: &str) -> Result<Option<LoginJob>> {
         let state = lock(&self.inner.state);
-        Self::record(&state, id)?;
+        if system_profile(id).is_none() {
+            Self::record(&state, id)?;
+        }
         Ok(state.cache.get(id).and_then(|cached| cached.login.clone()))
     }
 
@@ -743,19 +860,19 @@ impl AccountManager {
                 .cache
                 .get_mut(id)
                 .ok_or_else(|| AppError::local("Account cache is unavailable."))?;
-            if !binding.managed || binding.agent_id != "claude" {
+            if !binding.managed || !matches!(binding.agent_id.as_str(), "claude" | "antigravity") {
                 return Err(AppError::invalid(
-                    "External terminals are available here for managed Claude profiles.",
+                    "External terminals are available here for managed Claude and Antigravity profiles.",
                 ));
             }
             if cached.login_busy
                 || cached.terminal_busy
-                || cached.account.auth_status != "signed_in"
+                || (binding.agent_id == "claude" && cached.account.auth_status != "signed_in")
             {
                 return Err(AppError::new(
                     StatusCode::CONFLICT,
                     "profile_not_ready",
-                    "Refresh and sign in to this Claude profile before opening its terminal.",
+                    "Refresh and sign in to this profile before opening its terminal.",
                 ));
             }
             cached.terminal_busy = true;
@@ -823,9 +940,9 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
             ));
         }
     }
-    for agent in ["codex", "claude"] {
+    for agent in ["codex", "claude", "antigravity"] {
         if let Some(id) = selected(&manifest.defaults, agent) {
-            let valid = agent == "codex" && id == SYSTEM_CODEX
+            let valid = system_profile(id).is_some_and(|(_, profile_agent)| profile_agent == agent)
                 || manifest
                     .profiles
                     .iter()
@@ -1052,6 +1169,12 @@ struct OpenTerminal {
     project_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartLogin {
+    method: Option<String>,
+}
+
 pub(crate) async fn list(
     State(state): State<Arc<AppState>>,
     request: Request,
@@ -1087,8 +1210,11 @@ pub(crate) async fn start_login(
     RoutePath(id): RoutePath<String>,
     request: Request,
 ) -> Result<impl IntoResponse> {
-    let _: Empty = body(request).await?;
-    let login = state.accounts.begin_login(&id, &state.adapters).await?;
+    let input: StartLogin = body(request).await?;
+    let login = state
+        .accounts
+        .begin_login(&id, &state.adapters, input.method.as_deref())
+        .await?;
     Ok((StatusCode::ACCEPTED, Json(json!({"login":login}))))
 }
 
@@ -1132,6 +1258,16 @@ pub(crate) async fn select(
     Ok(Json(json!({"profile":profile,"defaults":defaults})))
 }
 
+pub(crate) async fn remove(
+    State(state): State<Arc<AppState>>,
+    RoutePath(id): RoutePath<String>,
+    request: Request,
+) -> Result<Json<Value>> {
+    let _: Empty = body(request).await?;
+    let defaults = state.accounts.remove_profile(&id, &state.adapters)?;
+    Ok(Json(json!({"removed":id,"defaults":defaults})))
+}
+
 pub(crate) async fn launch_terminal(
     State(state): State<Arc<AppState>>,
     RoutePath(id): RoutePath<String>,
@@ -1147,7 +1283,7 @@ pub(crate) async fn launch_terminal(
             AppError::new(
                 StatusCode::NOT_FOUND,
                 "project_not_found",
-                "Open the project in this workspace before launching Claude Code.",
+                "Open the project in this workspace before launching the agent terminal.",
             )
         })?;
     state
@@ -1157,10 +1293,14 @@ pub(crate) async fn launch_terminal(
     Ok((
         StatusCode::ACCEPTED,
         Json(
-            json!({"launched":true,"message":"Claude Code was requested in an external terminal. This app does not track that session."}),
+            json!({"launched":true,"message":"The agent was requested in an external terminal. This app does not track that session."}),
         ),
     ))
 }
+
+#[cfg(test)]
+#[path = "claude_workspace_fixture.rs"]
+mod claude_workspace_fixture;
 
 #[cfg(test)]
 mod tests {
@@ -1173,10 +1313,27 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let manager = AccountManager::open(temp.path()).unwrap();
         let (profiles, defaults) = manager.cached();
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].id, SYSTEM_CODEX);
-        assert!(profiles[0].read_only);
+        assert_eq!(profiles.len(), 3);
+        for (profile, (id, name, agent)) in profiles.iter().zip([
+            (SYSTEM_CODEX, "Existing Codex CLI", "codex"),
+            (SYSTEM_CLAUDE, "Existing Claude CLI", "claude"),
+            (
+                SYSTEM_ANTIGRAVITY,
+                "Existing Antigravity CLI",
+                "antigravity",
+            ),
+        ]) {
+            assert_eq!(profile.id, id);
+            assert_eq!(profile.name, name);
+            assert_eq!(profile.agent_id, agent);
+            assert!(profile.read_only && !profile.managed && profile.selected);
+            assert_eq!(profile.account.auth_status, "unknown");
+            assert_eq!(profile.account.checked_at_ms, 0);
+            assert!(!profile.refreshing);
+        }
+        assert_eq!(std::fs::read_dir(&manager.inner.homes).unwrap().count(), 0);
         assert_eq!(defaults.codex.as_deref(), Some(SYSTEM_CODEX));
+        assert_eq!(defaults.claude.as_deref(), Some(SYSTEM_CLAUDE));
         let work = manager.create_profile("codex", "  Work  ").unwrap();
         let personal = manager.create_profile("claude", "Personal").unwrap();
         assert_eq!(work.name, "Work");
@@ -1219,6 +1376,80 @@ mod tests {
     }
 
     #[test]
+    fn existing_claude_is_selectable_in_legacy_metadata_without_migrating_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("account-profiles.json");
+        let legacy = serde_json::to_vec(&json!({
+            "schema_version": 1, "profiles": [],
+            "defaults": {"codex": SYSTEM_CODEX, "claude": null}
+        }))
+        .unwrap();
+        write_manifest(temp.path(), &path, &legacy).unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), legacy);
+        assert!(manager.cached().1.claude.is_none());
+        let (profile, defaults) = manager.select_profile(SYSTEM_CLAUDE).unwrap();
+        assert!(profile.read_only && !profile.managed && profile.selected);
+        assert_eq!(defaults.claude.as_deref(), Some(SYSTEM_CLAUDE));
+        drop(manager);
+
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let state = lock(&manager.inner.state);
+        let binding = manager.resolve_locked(&state, "claude", None).unwrap();
+        assert_eq!(binding.id, SYSTEM_CLAUDE);
+        assert_eq!(binding.name, "Existing Claude CLI");
+        assert!(!binding.managed && binding.home.as_os_str().is_empty());
+        assert!(state.manifest.profiles.is_empty());
+        for (agent, wrong_id) in [("codex", SYSTEM_CLAUDE), ("claude", SYSTEM_CODEX)] {
+            assert!(
+                manager
+                    .resolve_locked(&state, agent, Some(wrong_id))
+                    .is_err()
+            );
+            let mut invalid = state.manifest.clone();
+            if agent == "codex" {
+                invalid.defaults.codex = Some(wrong_id.into());
+            } else {
+                invalid.defaults.claude = Some(wrong_id.into());
+            }
+            assert!(validate_manifest(&invalid).is_err());
+        }
+        assert!(manager.binding(&state, "system-unknown").is_err());
+        assert_eq!(std::fs::read_dir(&manager.inner.homes).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn existing_cli_profiles_pass_account_gates_without_starting_a_cli() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let adapters = AdapterManager::new();
+        for (id, agent) in [(SYSTEM_CODEX, "codex"), (SYSTEM_CLAUDE, "claude")] {
+            manager.select_profile(id).unwrap();
+            for profile_id in [None, Some(id)] {
+                let error = manager
+                    .start_run(
+                        &adapters,
+                        StartRequest {
+                            adapter_id: agent.into(),
+                            project_path: temp.path().to_owned(),
+                            prompt: "No CLI may be spawned.".into(),
+                            // Stops at adapter validation after the account gates.
+                            command_id: "invalid".into(),
+                            continue_run_id: None,
+                            profile: None,
+                        },
+                        profile_id,
+                    )
+                    .unwrap_err();
+                assert_eq!(error.message, "command_id must be a UUID.");
+            }
+        }
+        assert!(adapters.list_runs().is_empty());
+        manager.shutdown().await;
+        adapters.shutdown().await;
+    }
+
+    #[test]
     fn metadata_edits_never_overwrite_an_external_change() {
         let temp = tempfile::tempdir().unwrap();
         let manager = AccountManager::open(temp.path()).unwrap();
@@ -1231,7 +1462,7 @@ mod tests {
         };
         assert_eq!(error.code, "profile_metadata_changed");
         assert_eq!(std::fs::read(&path).unwrap(), externally_changed);
-        assert_eq!(manager.cached().0.len(), 1);
+        assert_eq!(manager.cached().0.len(), 3);
         assert!(AccountManager::open(temp.path()).is_err());
     }
 
@@ -1272,8 +1503,17 @@ mod tests {
         let manager = AccountManager::open(temp.path()).unwrap();
         let profile = manager.create_profile("codex", "Work").unwrap();
         let adapters = AdapterManager::new();
-        assert!(manager.begin_login(SYSTEM_CODEX, &adapters).await.is_err());
-        assert!(manager.begin_login(&profile.id, &adapters).await.is_err());
+        for id in [SYSTEM_CODEX, SYSTEM_CLAUDE] {
+            let error = manager.begin_login(id, &adapters, None).await.unwrap_err();
+            assert_eq!(error.code, "system_profile_read_only");
+            assert!(manager.cached_login(id).unwrap().is_none());
+        }
+        assert!(
+            manager
+                .begin_login(&profile.id, &adapters, None)
+                .await
+                .is_err()
+        );
         let request = || StartRequest {
             adapter_id: "codex".into(),
             project_path: temp.path().to_owned(),
@@ -1296,16 +1536,65 @@ mod tests {
             .start_run(&adapters, request(), Some(&profile.id))
             .unwrap_err();
         assert_eq!(error.code, "profile_busy");
-        assert!(manager.begin_login(&profile.id, &adapters).await.is_err());
+        assert!(
+            manager
+                .begin_login(&profile.id, &adapters, None)
+                .await
+                .is_err()
+        );
         lock(&manager.inner.state)
             .cache
             .get_mut(&profile.id)
             .unwrap()
             .login_busy = false;
-        assert!(manager.begin_login(&profile.id, &adapters).await.is_err());
+        assert!(
+            manager
+                .begin_login(&profile.id, &adapters, Some("console"))
+                .await
+                .is_err()
+        );
         assert!(adapters.list_runs().is_empty());
         assert!(manager.cached_login(&profile.id).unwrap().is_none());
         manager.shutdown().await;
+        adapters.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn removing_a_managed_profile_deletes_its_home_and_restores_the_system_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = AccountManager::open(temp.path()).unwrap();
+        let adapters = AdapterManager::new();
+        let error = manager.remove_profile(SYSTEM_CODEX, &adapters).unwrap_err();
+        assert_eq!(error.code, "system_profile_read_only");
+        let profile = manager.create_profile("codex", "Work").unwrap();
+        manager.select_profile(&profile.id).unwrap();
+        let home = manager.inner.homes.join(&profile.id);
+        std::fs::write(home.join("credentials.fixture"), b"not a real credential").unwrap();
+        {
+            let mut state = lock(&manager.inner.state);
+            state.cache.get_mut(&profile.id).unwrap().login_busy = true;
+        }
+        let error = manager.remove_profile(&profile.id, &adapters).unwrap_err();
+        assert_eq!(error.code, "profile_busy");
+        assert!(home.join("credentials.fixture").exists());
+        lock(&manager.inner.state)
+            .cache
+            .get_mut(&profile.id)
+            .unwrap()
+            .login_busy = false;
+        let defaults = manager.remove_profile(&profile.id, &adapters).unwrap();
+        assert_eq!(defaults.codex.as_deref(), Some(SYSTEM_CODEX));
+        assert!(!home.exists());
+        let (profiles, _) = manager.cached();
+        assert_eq!(profiles.len(), 3);
+        assert!(profiles.iter().all(|item| item.id != profile.id));
+        let error = manager.remove_profile(&profile.id, &adapters).unwrap_err();
+        assert_eq!(error.code, "profile_not_found");
+        drop(manager);
+        let reopened = AccountManager::open(temp.path()).unwrap();
+        assert_eq!(reopened.cached().0.len(), 3);
+        assert_eq!(reopened.cached().1.codex.as_deref(), Some(SYSTEM_CODEX));
+        reopened.shutdown().await;
         adapters.shutdown().await;
     }
 

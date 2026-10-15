@@ -16,6 +16,8 @@ import { html } from './vendor/preact-htm.js';
 
 /** name -> SVG inner markup (strings of path data keep the set compact). */
 const PATHS = {
+  folder: html`<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />`,
+  file: html`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6M8 13h8M8 17h6" />`,
   // ---- Switchyard glyphs -------------------------------------------------
   // The mark: a straight track with a diverging route and its lamp.
   switch: html`<path d="M2 16.5h20" /><path d="M2 16.5h5.5c4.5 0 4.5-9 9-9H22" /><circle cx="19" cy="7.5" r="0.5" fill="currentColor" />`,

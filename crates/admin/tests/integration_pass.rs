@@ -844,7 +844,7 @@ async fn providers_show_what_switched_a_credential_off_and_how_discovery_stands(
     // A provider that wants discovery and cannot have it: the state says
     // that it failed and why, instead of an empty model list that could
     // mean anything.
-    let upstream = refusing_upstream().await;
+    let (upstream, release_discovery) = refusing_upstream().await;
     let (status, body) = app
         .post(
             "/providers",
@@ -854,6 +854,9 @@ async fn providers_show_what_switched_a_credential_off_and_how_discovery_stands(
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["discovery"]["state"], "pending", "{body}");
     assert!(body["discovery"]["at"].is_i64(), "{body}");
+    // The fixture cannot finish discovery until the pending snapshot has been
+    // observed. A fast upstream may otherwise win this race on another runner.
+    release_discovery.notify_one();
     let failed = support::eventually(|| {
         let states = app.gateway.discovery_states();
         let state = states.get("refused")?;
@@ -887,19 +890,25 @@ async fn providers_show_what_switched_a_credential_off_and_how_discovery_stands(
 
 /// An OpenAI-compatible upstream that refuses to list its models, quoting
 /// the key it was asked with.
-async fn refusing_upstream() -> std::net::SocketAddr {
+async fn refusing_upstream() -> (std::net::SocketAddr, std::sync::Arc<tokio::sync::Notify>) {
     use axum::response::IntoResponse;
+    let release_discovery = std::sync::Arc::new(tokio::sync::Notify::new());
+    let wait_for_release = release_discovery.clone();
     let app = axum::Router::new().route(
         "/v1/models",
-        axum::routing::get(|| async {
-            (
-                StatusCode::FORBIDDEN,
-                axum::Json(json!({"error": {
-                    "message": format!("no such organisation for key {KEY}"),
-                    "type": "invalid_request_error",
-                }})),
-            )
-                .into_response()
+        axum::routing::get(move || {
+            let wait_for_release = wait_for_release.clone();
+            async move {
+                wait_for_release.notified().await;
+                (
+                    StatusCode::FORBIDDEN,
+                    axum::Json(json!({"error": {
+                        "message": format!("no such organisation for key {KEY}"),
+                        "type": "invalid_request_error",
+                    }})),
+                )
+                    .into_response()
+            }
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -909,7 +918,7 @@ async fn refusing_upstream() -> std::net::SocketAddr {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    addr
+    (addr, release_discovery)
 }
 
 #[tokio::test]

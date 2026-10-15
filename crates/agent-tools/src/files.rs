@@ -154,6 +154,127 @@ fn relative_parts(relative: &str, allow_root: bool) -> Result<Vec<&std::ffi::OsS
     Ok(parts)
 }
 
+pub(super) fn check_relative(relative: &str) -> Result<(), ToolError> {
+    relative_parts(relative, false).map(|_| ())
+}
+
+/// Hold the complete path on Windows; walk directory descriptors on Unix.
+/// Listing uses the opened directory, so replacing a parent with a link cannot
+/// redirect the browser into another part of the filesystem.
+pub(super) fn directory(root: &Path, relative: &str) -> Result<Value, ToolError> {
+    const MAX_ENTRIES: usize = 2_000;
+    let _path = resolve(root, relative, true, false)?;
+    let parts = relative_parts(relative, true)?;
+    let mut directory = open_directory(root)?;
+    #[cfg(windows)]
+    let mut held = Vec::new();
+    #[cfg(windows)]
+    let mut current = root.to_path_buf();
+    for part in parts {
+        #[cfg(unix)]
+        {
+            directory = unix_open_at(
+                &directory,
+                part,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0,
+            )?;
+        }
+        #[cfg(windows)]
+        {
+            current.push(part);
+            let next = open_directory(&current)?;
+            held.push(directory);
+            directory = next;
+        }
+    }
+    let mut entries = Vec::new();
+    let mut omitted = 0;
+    let mut truncated = false;
+    #[cfg(unix)]
+    let names = rustix::fs::Dir::read_from(&directory)
+        .map_err(std::io::Error::from)?
+        .map(|entry| entry.map_err(std::io::Error::from));
+    #[cfg(windows)]
+    let names = fs::read_dir(&_path)?;
+    for (index, entry) in names.enumerate() {
+        if index >= MAX_ENTRIES {
+            truncated = true;
+            break;
+        }
+        let entry = entry?;
+        #[cfg(unix)]
+        let name = match entry.file_name().to_str() {
+            Ok(name) if !matches!(name, "." | "..") => name.to_owned(),
+            _ => continue,
+        };
+        #[cfg(windows)]
+        let name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => {
+                omitted += 1;
+                continue;
+            }
+        };
+        let child_path = if relative == "." {
+            name.clone()
+        } else {
+            format!("{}/{name}", relative.trim_end_matches('/'))
+        };
+        if check_relative(&child_path).is_err() {
+            omitted += 1;
+            continue;
+        }
+        #[cfg(unix)]
+        let (is_file, is_dir, bytes) = {
+            let stat = match rustix::fs::statat(
+                &directory,
+                name.as_str(),
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(stat) => stat,
+                Err(_) => {
+                    omitted += 1;
+                    continue;
+                }
+            };
+            let kind = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+            (
+                kind == rustix::fs::FileType::RegularFile,
+                kind == rustix::fs::FileType::Directory,
+                stat.st_size.max(0) as u64,
+            )
+        };
+        #[cfg(windows)]
+        let (is_file, is_dir, bytes) = {
+            let metadata = match fs::symlink_metadata(_path.join(&name)) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    omitted += 1;
+                    continue;
+                }
+            };
+            if is_link(&metadata) {
+                omitted += 1;
+                continue;
+            }
+            (metadata.is_file(), metadata.is_dir(), metadata.len())
+        };
+        if (!is_file && !is_dir) || (is_dir && ignored_directory(&name)) {
+            omitted += 1;
+            continue;
+        }
+        entries.push(json!({"name":name,"path":child_path,"kind":if is_dir {"directory"} else {"file"},"bytes":if is_file {Some(bytes)} else {None}}));
+    }
+    entries.sort_by_key(|entry| {
+        (
+            entry["kind"] != "directory",
+            entry["name"].as_str().unwrap_or("").to_lowercase(),
+        )
+    });
+    Ok(json!({"path":relative,"entries":entries,"omitted":omitted,"truncated":truncated}))
+}
+
 /// Validate every component. Links/reparse points are refused even if they point
 /// back into the project. Missing final components are allowed only for creation.
 pub(super) fn resolve(

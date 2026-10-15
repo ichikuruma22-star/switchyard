@@ -1,11 +1,13 @@
-//! Local, explicitly started Codex app-server runs. Discovery never starts a model.
+//! Local, explicitly started agent CLI runs. Discovery never starts a model.
 //!
 //! Runs and their bounded event windows are saved by [`AdapterManager::open`],
 //! so conversations survive host restarts. Saved work is never replayed: a run
 //! that was active when its host stopped is marked for review, and continuing a
-//! conversation resumes the saved Codex thread with only the new message.
+//! conversation resumes the saved agent session with only the new message.
 mod account_process;
 mod accounts;
+mod antigravity;
+mod claude;
 mod discovery;
 mod process_tree;
 mod profile;
@@ -37,9 +39,9 @@ const MAX_ACTIVE_RUNS: usize = 4;
 const MAX_EVENTS: usize = 512;
 const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
 
-const STOPPED_UNCERTAIN: &str = "Switchya stopped while this run was active. Codex may have finished an approved command or file change. Review the project, then acknowledge recovery before continuing. Nothing was replayed.";
+const STOPPED_UNCERTAIN: &str = "Switchya stopped while this run was active. The agent may have finished a command or file change. Review the project, then acknowledge recovery before continuing. Nothing was replayed.";
 const STOPPED_BEFORE_THREAD: &str =
-    "Switchya stopped before Codex created a conversation. No model turn was started.";
+    "Switchya stopped before starting a conversation. No model turn was started.";
 
 #[derive(Clone)]
 pub struct AdapterManager {
@@ -101,7 +103,7 @@ impl Default for AdapterManager {
 }
 
 impl AdapterManager {
-    /// In-memory manager: runs and Codex threads end with this host.
+    /// In-memory manager: runs and agent conversations end with this host.
     pub fn new() -> Self {
         Self::with_store(None, BTreeMap::new(), HashSet::new())
     }
@@ -121,7 +123,7 @@ impl AdapterManager {
             };
             if stored.view.state.is_active() {
                 // A thread may already have received the model turn. Without
-                // Codex's confirmation the outcome is unknown.
+                // the agent's confirmation the outcome is unknown.
                 let uncertain = stored.view.thread_id.is_some();
                 stored.event(
                     "adapter_error",
@@ -183,13 +185,24 @@ impl AdapterManager {
                 "The adapter host is shutting down.".into(),
             ));
         }
-        if request.adapter_id != "codex" {
+        if !matches!(
+            request.adapter_id.as_str(),
+            "codex" | "claude" | "antigravity"
+        ) {
             return Err(AdapterError::Invalid(
-                "Only the Codex adapter can start runs.".into(),
+                "Choose Codex, Claude Code or Antigravity to start an agent conversation.".into(),
             ));
         }
         if let Some(profile) = &request.profile {
             profile::validate(profile, &request.adapter_id)?;
+        }
+        if matches!(request.adapter_id.as_str(), "claude" | "antigravity")
+            && request.profile.is_none()
+        {
+            return Err(AdapterError::Invalid(
+                "Select an account for this agent in Switchya before starting a conversation."
+                    .into(),
+            ));
         }
         if uuid::Uuid::parse_str(&request.command_id).is_err() {
             return Err(AdapterError::Invalid("command_id must be a UUID.".into()));
@@ -216,7 +229,7 @@ impl AdapterManager {
                 "Project path must be a directory.".into(),
             ));
         }
-        let executable = discovery::find_cli("codex").ok_or_else(|| AdapterError::Unavailable("Codex native executable was not found. Install the Codex CLI, then refresh discovery.".into()))?;
+        let executable = discovery::find_cli(&request.adapter_id).ok_or_else(|| AdapterError::Unavailable("The selected agent's native executable was not found. Install its CLI, then refresh discovery.".into()))?;
         self.start_process(request, project, executable, Vec::new())
     }
 
@@ -269,6 +282,7 @@ impl AdapterManager {
             self.prune_locked(&mut runs, &conversation_id)?;
         }
         let ephemeral = self.inner.store.is_none();
+        let adapter_id = request.adapter_id.clone();
         let view = AdapterRun {
             id: id.clone(),
             adapter_id: request.adapter_id,
@@ -290,7 +304,7 @@ impl AdapterManager {
             pending_approvals: Vec::new(),
             ephemeral,
             history_error: None,
-            permission_boundary: types::PERMISSION_BOUNDARY.into(),
+            permission_boundary: types::permission_boundary(&adapter_id).into(),
         };
         let mut stored = StoredRun {
             view,
@@ -315,20 +329,48 @@ impl AdapterManager {
         }
         let state = Arc::new(Mutex::new(stored));
         let (control, receiver) = mpsc::channel(8);
-        let task = tokio::spawn(protocol::run(
-            executable,
-            prefix_args,
-            protocol::RunInput {
-                project,
-                profile: request.profile,
-                prompt: request.prompt,
-                resume_thread,
-                ephemeral,
-            },
-            state.clone(),
-            receiver,
-            self.inner.shutdown.child_token(),
-        ));
+        let input = protocol::RunInput {
+            project,
+            profile: request.profile,
+            prompt: request.prompt,
+            resume_thread,
+            ephemeral,
+        };
+        let task_state = state.clone();
+        let shutdown = self.inner.shutdown.child_token();
+        let task = tokio::spawn(async move {
+            if adapter_id == "antigravity" {
+                antigravity::run(
+                    executable,
+                    prefix_args,
+                    input,
+                    task_state,
+                    receiver,
+                    shutdown,
+                )
+                .await;
+            } else if adapter_id == "claude" {
+                claude::run(
+                    executable,
+                    prefix_args,
+                    input,
+                    task_state,
+                    receiver,
+                    shutdown,
+                )
+                .await;
+            } else {
+                protocol::run(
+                    executable,
+                    prefix_args,
+                    input,
+                    task_state,
+                    receiver,
+                    shutdown,
+                )
+                .await;
+            }
+        });
         let result = state.lock().view.clone();
         runs.insert(
             id,
@@ -590,7 +632,7 @@ impl AdapterManager {
 }
 
 /// Validate a continuation under the runs lock. Returns the conversation and the
-/// saved Codex thread to resume.
+/// saved agent conversation to resume.
 fn continuation(
     runs: &BTreeMap<String, Entry>,
     previous: &str,
@@ -623,7 +665,8 @@ fn continuation(
     }
     let Some(thread) = earlier.thread_id.clone() else {
         return Err(AdapterError::Conflict(
-            "Codex did not create a conversation for this run. Start a new conversation.".into(),
+            "The agent did not create a conversation for this run. Start a new conversation."
+                .into(),
         ));
     };
     if entry.profile != request.profile {
@@ -636,19 +679,19 @@ fn continuation(
             "Continue in the project folder that started this conversation.".into(),
         ));
     }
-    let mut reached_codex = false;
+    let mut reached_agent = false;
     for other in runs.values() {
         let other = other.run.lock();
         if other.view.conversation_id != earlier.conversation_id {
             continue;
         }
-        reached_codex |= other.view.turn_id.is_some();
+        reached_agent |= other.view.turn_id.is_some();
         if other.view.state.is_active() {
             return Err(AdapterError::Conflict(
                 "Another run in this conversation is still active.".into(),
             ));
         }
-        // A continuation that ended before Codex attached to the thread sent
+        // A continuation that ended before the agent attached to the thread sent
         // nothing to it; it does not supersede the run it tried to continue.
         if other.view.continued_from.as_deref() == Some(previous) && other.view.thread_id.is_some()
         {
@@ -658,13 +701,11 @@ fn continuation(
             ));
         }
     }
-    // Codex 0.159.3 saves a thread only once a turn reaches it: resuming a
-    // thread with no turn fails with "no rollout found" (checked live). A
-    // confirmed turn is required, which conservatively also blocks a turn
-    // that was requested but never confirmed.
-    if !reached_codex {
+    // Require an acknowledged turn before resuming a CLI's saved conversation.
+    // This also conservatively blocks input that was sent but never confirmed.
+    if !reached_agent {
         return Err(AdapterError::Conflict(
-            "Codex never confirmed a message in this conversation, so it may not have saved it. Start a new conversation.".into(),
+            "The agent never confirmed a message in this conversation, so it may not have saved it. Start a new conversation.".into(),
         ));
     }
     Ok((earlier.conversation_id, thread))
@@ -778,5 +819,7 @@ fn original_request_hash(request: &StartRequest) -> String {
     }))
 }
 
+#[cfg(test)]
+mod claude_tests;
 #[cfg(test)]
 mod tests;
