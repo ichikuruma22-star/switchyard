@@ -1,9 +1,11 @@
 # Agent tools
 
 `prepare(project_root, name, args)` returns an in-memory `PreparedTool`. The engine
-must retain that exact value while requesting approval and call
+must retain that exact value while obtaining approval and call
 `execute(&prepared, cancellation_token)` only after approval when
-`requires_approval` is true. Do not reconstruct an approved operation from model
+`requires_approval` is true. Approval is a person's decision or, for a project or
+session that opted in, the engine's journalled automatic approval; preparation
+refuses the same protected paths either way. Do not reconstruct an approved operation from model
 arguments. The argument hash includes the canonical project root, operation name,
 and normalized arguments. Public metadata is checked against the sealed plan.
 
@@ -11,8 +13,8 @@ and normalized arguments. Public metadata is checked against the sealed plan.
 | --- | --- | --- |
 | `read_file` | UTF-8 text, default 64 KiB and maximum 256 KiB; hashes only complete reads | No |
 | `search_files` | Literal filename/content search; maximum 100 matches, 2,000 files, 8,000 directory entries and 8 MiB | No |
-| `apply_patch` | Up to 16 exact replacements/creations with current SHA-256 preconditions; 512 KiB total before/after content | Always |
-| `run_command` | Project-relative cwd; default 30 seconds, maximum 5 minutes; 128 KiB per output stream | Always |
+| `apply_patch` | Up to 16 exact replacements/creations with current SHA-256 preconditions; 512 KiB total before/after content | Always (automatic only if opted in) |
+| `run_command` | Project-relative cwd; default 30 seconds, maximum 5 minutes; 128 KiB per output stream | Always (automatic only if opted in) |
 
 File tools reject absolute/traversing paths, symlinks, Windows reparse points,
 repository metadata and common credential filenames. On Windows, each existing

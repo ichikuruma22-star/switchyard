@@ -8,7 +8,7 @@ use crate::{
         HANDSHAKE_TIMEOUT, INTERRUPT_TIMEOUT, Packet, RunInput, TURN_TIMEOUT, discard_stderr, fail,
         read_stdout, valid_id, write,
     },
-    types::CLAUDE_PERMISSION_BOUNDARY,
+    types::{ApprovalKind, AutoApproval, CLAUDE_PERMISSION_BOUNDARY},
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -49,6 +49,7 @@ pub(crate) async fn run(
         prompt,
         resume_thread,
         ephemeral,
+        auto_approve,
     } = input;
     let session = resume_thread
         .clone()
@@ -221,7 +222,7 @@ pub(crate) async fn run(
                                 fail(&state, "Claude Code requested permission before confirming the conversation.", requested);
                                 break;
                             }
-                            if let Err(error) = request(&mut stdin, &state, &mut pending, &mut seen_requests, &message, interrupting).await {
+                            if let Err(error) = request(&mut stdin, &state, &mut pending, &mut seen_requests, &message, interrupting, auto_approve).await {
                                 fail(&state, &error.to_string(), requested);
                                 break;
                             }
@@ -342,6 +343,7 @@ async fn request(
     seen: &mut HashSet<String>,
     message: &Value,
     interrupting: bool,
+    auto_approve: AutoApproval,
 ) -> Result<()> {
     let wire_id = message
         .get("request_id")
@@ -400,6 +402,23 @@ async fn request(
         can_allow_once: !matches!(name, "AskUserQuestion" | "ExitPlanMode" | "EnterPlanMode"),
         permission_boundary: CLAUDE_PERMISSION_BOUNDARY.into(),
     };
+    if approval.can_allow_once && auto_approve.allows(tool_kind(name)) {
+        // Journal the exact request before answering it, as for a human decision.
+        state
+            .lock()
+            .event("approval_requested", json!({"approval":approval}));
+        permission_response(
+            stdin,
+            wire_id,
+            json!({"behavior":"allow","updatedInput":input}),
+        )
+        .await?;
+        state.lock().event(
+            "approval_resolved",
+            json!({"approval_id":approval.id,"decision":"allow_once","decided_by":"auto_approve"}),
+        );
+        return Ok(());
+    }
     pending.insert(
         approval.id.clone(),
         Pending {
@@ -413,6 +432,16 @@ async fn request(
     run.event("approval_requested", json!({"approval":approval}));
     run.state(RunState::AwaitingApproval);
     Ok(())
+}
+
+/// Only Claude Code's built-in file and shell tools have a known category. MCP,
+/// web, agent and other tools always ask, whatever the approval setting.
+pub(crate) fn tool_kind(name: &str) -> Option<ApprovalKind> {
+    match name {
+        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => Some(ApprovalKind::Edit),
+        "Bash" | "PowerShell" => Some(ApprovalKind::Command),
+        _ => None,
+    }
 }
 
 async fn permission_response(stdin: &mut ChildStdin, wire_id: &str, response: Value) -> Result<()> {

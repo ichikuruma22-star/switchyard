@@ -30,6 +30,7 @@ fn fixture_run(state: RunState) -> AdapterRun {
         ephemeral: false,
         history_error: None,
         permission_boundary: "Fixture requires explicit review.".into(),
+        auto_approve: Default::default(),
     }
 }
 
@@ -110,6 +111,7 @@ impl Data {
                 name: "Fixture".into(),
                 root: run.project_path.clone(),
                 created_at_ms: 0,
+                auto_approve: Default::default(),
             },
             run,
             profiles: json!({"defaults":{"codex":"newdefault"},"profiles":[
@@ -1277,4 +1279,19 @@ async fn owned_host_commands_release_the_data_directory_without_starting_an_agen
         .unwrap();
     let manager = switchyard_agent_adapters::AdapterManager::open(&data).unwrap();
     assert!(manager.list_runs().is_empty());
+}
+
+#[test]
+fn auto_approval_is_named_in_the_run_header() {
+    use switchyard_agent_adapters::AutoApproval;
+    assert_eq!(
+        auto_approval_line(AutoApproval::default()),
+        "Approvals: you decide each file change and command."
+    );
+    let line = auto_approval_line(AutoApproval {
+        edits: true,
+        commands: false,
+    });
+    assert!(line.contains("for file changes itself"));
+    assert!(line.contains("still wait for you"));
 }

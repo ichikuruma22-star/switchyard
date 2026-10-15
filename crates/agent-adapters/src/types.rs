@@ -29,6 +29,36 @@ pub struct StartRequest {
     /// Resolved by the trusted account manager, never accepted from HTTP JSON.
     #[serde(skip)]
     pub profile: Option<ProfileBinding>,
+    /// The project's opt-in approval setting when the run starts. Resolved by the
+    /// app from saved project state, never accepted from HTTP JSON.
+    #[serde(skip)]
+    pub auto_approve: AutoApproval,
+}
+
+/// Which complete, single-operation requests Switchya answers itself instead of
+/// asking. Requests that cannot be allowed once (deny-only) always wait for a
+/// person, and the agent's own sandbox and permission mode are unchanged.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoApproval {
+    pub edits: bool,
+    pub commands: bool,
+}
+
+/// The category an approval request belongs to, when Switchya can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApprovalKind {
+    Edit,
+    Command,
+}
+
+impl AutoApproval {
+    pub(crate) fn allows(&self, kind: Option<ApprovalKind>) -> bool {
+        match kind {
+            Some(ApprovalKind::Edit) => self.edits,
+            Some(ApprovalKind::Command) => self.commands,
+            None => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +123,9 @@ pub struct AdapterRun {
     #[serde(default)]
     pub history_error: Option<String>,
     pub permission_boundary: String,
+    /// Approval setting this run started with. Changes apply to later runs.
+    #[serde(default)]
+    pub auto_approve: AutoApproval,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

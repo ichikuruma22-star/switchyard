@@ -45,6 +45,8 @@ pub(crate) async fn run(
         prompt,
         resume_thread,
         ephemeral: _,
+        // Plan mode never asks to edit or run anything.
+        auto_approve: _,
     } = input;
     if prompt.len() > MAX_PROMPT_BYTES {
         fail(

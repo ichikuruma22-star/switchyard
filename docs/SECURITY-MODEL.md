@@ -59,6 +59,39 @@ data directory, restrict retention and access, and enable capture only when
 needed. Windows files inherit their directory's ACLs: choose a private
 directory and review those permissions before storing real credentials.
 
+## Agent approvals and opt-in automatic approval
+
+The built-in agent asks for an exact, single-use human decision before every
+file edit and shell command. A model cannot approve its own operations.
+
+A project, or one session, can opt in to automatic approval of file edits,
+shell commands or both. It is off by default, set only through the app, the
+local API or the CLI (never by the model), and shown wherever work is
+started. Treat **commands** as granting the model your account's full
+operating-system and network permissions for that project's sessions, with
+no review: the project directory is not an OS sandbox, and a prompt injection
+in project files, tool output or fetched content can then run commands.
+Automatic **edits** can rewrite any project file the tools can reach, which
+can include build scripts and other files that later execute.
+
+What automatic approval keeps:
+
+- Every operation is still journalled before it runs, with its exact
+  arguments, argument hash, preview, the `approval.decided` event naming
+  `auto_approve` and the policy source, and the recorded result.
+- The tools still refuse repository metadata, likely secrets, links and
+  reparse points, and Windows short-name aliases. Edits that target the app's
+  data directory or gateway configuration always require a person.
+- Turning the setting off applies to the next proposed operation; an
+  operation already awaiting a decision is not approved retroactively.
+- Uncertain outcomes still require recovery review and are never replayed.
+
+For existing agents (Codex, Claude Code), the same project setting lets
+Switchya answer complete single-operation requests of the matching kind. It
+does not change the agent's own sandbox or permission mode. Deny-only
+requests, broad permission grants, unknown request types and tools without a
+known edit or command category always wait for a person.
+
 ## Verification limits
 
 Automated tests use synthetic fixtures and mock upstreams. They establish

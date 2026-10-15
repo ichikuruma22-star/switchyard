@@ -225,12 +225,10 @@ impl AppRuntime {
             .map_err(|_| AppError::invalid("The gateway configuration could not start. Use `switchyard check --config <path>` to review it."))?;
         let opened =
             client_identity(&gateway, options.client_key_name.as_deref()).and_then(|identity| {
-                AppEngine::open(
-                    gateway.clone(),
-                    identity,
-                    EngineOptions::new(&options.data_dir),
-                )
-                .map_err(AppError::from)
+                let mut engine_options = EngineOptions::new(&options.data_dir);
+                // Trusted projects never auto-approve edits to the gateway configuration.
+                engine_options.review_paths.push(path.clone());
+                AppEngine::open(gateway.clone(), identity, engine_options).map_err(AppError::from)
             });
         match opened {
             Ok(engine) => Ok(Self {

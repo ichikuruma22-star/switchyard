@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use switchyard_agent::{AppEngine, Decision};
+use switchyard_agent::{AppEngine, AutoApprove, Decision};
 use switchyard_agent_adapters::{AdapterManager, ApprovalDecision, StartRequest};
 
 const BODY_LIMIT: usize = 256 * 1024;
@@ -46,6 +46,10 @@ pub(crate) fn router(
             post(crate::providers::refresh),
         )
         .route("/api/projects", get(projects).post(open_project))
+        .route(
+            "/api/projects/{id}/auto-approve",
+            post(set_project_auto_approve),
+        )
         .route(
             "/api/workspace",
             get(crate::workspace::selection).post(crate::workspace::save_selection),
@@ -96,6 +100,10 @@ pub(crate) fn router(
         )
         .route("/api/sessions/{id}/interrupt", post(interrupt))
         .route("/api/sessions/{id}/recovery", post(acknowledge_recovery))
+        .route(
+            "/api/sessions/{id}/auto-approve",
+            post(set_session_auto_approve),
+        )
         .route(
             "/api/account-profiles",
             get(crate::accounts::list).post(crate::accounts::create),
@@ -354,6 +362,46 @@ async fn open_project(
     Ok((StatusCode::CREATED, Json(json!({"project": project}))))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectAutoApprove {
+    edits: bool,
+    commands: bool,
+}
+
+async fn set_project_auto_approve(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Result<Json<Value>> {
+    let input: ProjectAutoApprove = body(request).await?;
+    let project = state.engine.set_project_auto_approve(
+        &id,
+        AutoApprove {
+            edits: input.edits,
+            commands: input.commands,
+        },
+    )?;
+    Ok(Json(json!({"project": project})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionAutoApprove {
+    /// `null` inherits the project's setting.
+    policy: Option<AutoApprove>,
+}
+
+async fn set_session_auto_approve(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Result<Json<Value>> {
+    let input: SessionAutoApprove = body(request).await?;
+    let session = state.engine.set_session_auto_approve(&id, input.policy)?;
+    Ok(Json(json!({"session": session})))
+}
+
 async fn sessions(State(state): State<Arc<AppState>>, request: Request) -> Result<Json<Value>> {
     let values = query(request.uri(), &["project_id"])?;
     let project_id = values.get("project_id").map(String::as_str);
@@ -529,6 +577,10 @@ async fn start_adapter_run(
             prompt: input.prompt,
             command_id: input.command_id,
             continue_run_id: input.continue_run_id,
+            auto_approve: switchyard_agent_adapters::AutoApproval {
+                edits: project.auto_approve.edits,
+                commands: project.auto_approve.commands,
+            },
             profile: None,
         },
         input.profile_id.as_deref(),
@@ -1013,6 +1065,118 @@ mod tests {
                 .count(),
             1
         );
+        harness.runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_approve_routes_are_explicit_validated_and_visible() {
+        let harness = Harness::new().await;
+        let project = harness
+            .runtime
+            .engine
+            .open_project(harness._temp.path())
+            .unwrap();
+        assert_eq!(
+            harness.request("GET", "/api/projects", None).await.1["projects"][0]["auto_approve"],
+            json!({"edits":false,"commands":false})
+        );
+        let project_path = format!("/api/projects/{}/auto-approve", project.id);
+        for invalid in [
+            json!({"edits":true}),
+            json!({"edits":true,"commands":false,"all":true}),
+            json!({"edits":"yes","commands":false}),
+        ] {
+            assert_eq!(
+                harness
+                    .request("POST", &project_path, Some(invalid.clone()))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST,
+                "{invalid}"
+            );
+        }
+        assert_eq!(
+            harness
+                .request(
+                    "POST",
+                    "/api/projects/unknown/auto-approve",
+                    Some(json!({"edits":true,"commands":true}))
+                )
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        let (status, body) = harness
+            .request(
+                "POST",
+                &project_path,
+                Some(json!({"edits":true,"commands":false})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["project"]["auto_approve"],
+            json!({"edits":true,"commands":false})
+        );
+        let (_, session) = harness
+            .request(
+                "POST",
+                "/api/sessions",
+                Some(json!({"project_id":project.id,"model":"mock-echo"})),
+            )
+            .await;
+        let id = session["session"]["id"].as_str().unwrap();
+        let view = harness
+            .request("GET", &format!("/api/sessions/{id}"), None)
+            .await
+            .1;
+        assert_eq!(
+            view["auto_approve"],
+            json!({"edits":true,"commands":false,"source":"project"})
+        );
+        let session_path = format!("/api/sessions/{id}/auto-approve");
+        assert_eq!(
+            harness
+                .request(
+                    "POST",
+                    &session_path,
+                    Some(json!({"policy":{"edits":true,"commands":true,"network":true}}))
+                )
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        let (status, body) = harness
+            .request(
+                "POST",
+                &session_path,
+                Some(json!({"policy":{"edits":false,"commands":true}})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["session"]["auto_approve"],
+            json!({"edits":false,"commands":true})
+        );
+        let view = harness
+            .request("GET", &format!("/api/sessions/{id}"), None)
+            .await
+            .1;
+        assert_eq!(
+            view["auto_approve"],
+            json!({"edits":false,"commands":true,"source":"session"})
+        );
+        assert!(
+            view["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["kind"] == "auto_approve.changed")
+        );
+        let (_, body) = harness
+            .request("POST", &session_path, Some(json!({"policy":null})))
+            .await;
+        assert_eq!(body["session"]["auto_approve"], Value::Null);
         harness.runtime.shutdown().await.unwrap();
     }
 }

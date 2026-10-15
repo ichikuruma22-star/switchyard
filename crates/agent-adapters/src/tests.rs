@@ -30,6 +30,14 @@ fn fixture() -> PathBuf {
 }
 
 fn start(manager: &AdapterManager, scenario: &str) -> (tempfile::TempDir, AdapterRun) {
+    start_with(manager, scenario, AutoApproval::default())
+}
+
+fn start_with(
+    manager: &AdapterManager,
+    scenario: &str,
+    auto_approve: AutoApproval,
+) -> (tempfile::TempDir, AdapterRun) {
     let directory = tempfile::tempdir().unwrap();
     let project = directory.path().canonicalize().unwrap();
     let run = manager
@@ -40,6 +48,7 @@ fn start(manager: &AdapterManager, scenario: &str) -> (tempfile::TempDir, Adapte
                 prompt: "Inspect the fixture; literal $(never execute) `text`.".into(),
                 command_id: uuid::Uuid::new_v4().to_string(),
                 continue_run_id: None,
+                auto_approve,
                 profile: None,
             },
             project,
@@ -281,6 +290,7 @@ async fn retries_are_idempotent_and_changed_requests_conflict() {
         prompt: "Inspect the fixture; literal $(never execute) `text`.".into(),
         command_id: run.command_id.clone(),
         continue_run_id: None,
+        auto_approve: Default::default(),
         profile: None,
     };
     let repeat = manager
@@ -345,6 +355,7 @@ async fn retained_retry_uses_original_binding_without_cli_or_filesystem_readines
         prompt: "Fixture request".into(),
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: None,
+        auto_approve: Default::default(),
         profile: Some(binding.clone()),
     };
     let run = manager
@@ -399,6 +410,7 @@ async fn shutdown_stops_descendants_and_marks_uncertain_runs() {
         prompt: "fixture".into(),
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: None,
+        auto_approve: Default::default(),
         profile: None,
     };
     let run = manager
@@ -451,6 +463,7 @@ fn event_retention_and_cursor_limits_are_explicit() {
         ephemeral: true,
         history_error: None,
         permission_boundary: String::new(),
+        auto_approve: Default::default(),
     };
     let mut run = StoredRun {
         view,
@@ -477,6 +490,7 @@ fn durable_request(project: &std::path::Path, continue_run_id: Option<&str>) -> 
         prompt: "Fixture request".into(),
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: continue_run_id.map(Into::into),
+        auto_approve: Default::default(),
         profile: None,
     }
 }
@@ -665,6 +679,7 @@ async fn runs_active_at_a_crash_are_marked_never_resumed() {
         ephemeral: false,
         history_error: None,
         permission_boundary: String::new(),
+        auto_approve: Default::default(),
     };
     {
         // Simulate a host that died without recording a final state.
@@ -892,6 +907,7 @@ fn retention_removes_the_oldest_inactive_conversations_first() {
             prompt: "Retried after its run was removed".into(),
             command_id: pruned_command,
             continue_run_id: None,
+            auto_approve: Default::default(),
             profile: None,
         },
         project.path().canonicalize().unwrap(),
@@ -1070,6 +1086,7 @@ async fn antigravity_plan_run_streams_text_and_tools_to_completion() {
                 prompt: "Inspect the fixture.".into(),
                 command_id: uuid::Uuid::new_v4().to_string(),
                 continue_run_id: None,
+                auto_approve: Default::default(),
                 profile: None,
             },
             project,
@@ -1104,6 +1121,7 @@ fn antigravity_request(project: &std::path::Path, continue_run_id: Option<&str>)
         prompt: "Inspect the fixture.".into(),
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: continue_run_id.map(Into::into),
+        auto_approve: Default::default(),
         profile: None,
     }
 }
@@ -1168,4 +1186,74 @@ async fn antigravity_conversation_continues_after_restart_in_the_saved_conversat
     assert!(forked.thread_id.is_none());
     assert!(forked.turn_id.is_none());
     manager.shutdown().await;
+}
+
+fn auto_resolved(manager: &AdapterManager, id: &str) -> usize {
+    manager
+        .events(id, 0, 200)
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            e.kind == "approval_resolved"
+                && e.payload["decided_by"] == "auto_approve"
+                && e.payload["decision"] == "allow_once"
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn codex_auto_approval_answers_only_allowed_complete_requests() {
+    let commands = AutoApproval {
+        edits: false,
+        commands: true,
+    };
+    let edits = AutoApproval {
+        edits: true,
+        commands: false,
+    };
+    for (scenario, auto) in [("happy", commands), ("file_preview", edits)] {
+        let manager = AdapterManager::new();
+        let (_directory, run) = start_with(&manager, scenario, auto);
+        assert_eq!(run.auto_approve, auto);
+        let finished = wait_until(&manager, &run.id, |r| !r.state.is_active()).await;
+        assert_eq!(finished.state, RunState::Completed, "{scenario}");
+        assert!(finished.pending_approvals.is_empty());
+        assert_eq!(auto_resolved(&manager, &run.id), 1, "{scenario}");
+        // The exact request is journalled before it is answered.
+        let events = manager.events(&run.id, 0, 200).unwrap();
+        let requested = events
+            .iter()
+            .position(|e| e.kind == "approval_requested")
+            .unwrap();
+        let resolved = events
+            .iter()
+            .position(|e| e.kind == "approval_resolved")
+            .unwrap();
+        assert!(requested < resolved);
+        manager.shutdown().await;
+    }
+    // Another category, or a deny-only request, still waits for a person.
+    let all = AutoApproval {
+        edits: true,
+        commands: true,
+    };
+    for (scenario, auto) in [("happy", edits), ("file_grant_root", all)] {
+        let manager = AdapterManager::new();
+        let (_directory, run) = start_with(&manager, scenario, auto);
+        let pending =
+            wait_until(&manager, &run.id, |r| r.state == RunState::AwaitingApproval).await;
+        let approval = &pending.pending_approvals[0];
+        assert_eq!(auto_resolved(&manager, &run.id), 0, "{scenario}");
+        manager
+            .decide(
+                &run.id,
+                &approval.id,
+                &approval.expected_hash,
+                ApprovalDecision::Deny,
+            )
+            .await
+            .unwrap();
+        wait_until(&manager, &run.id, |r| !r.state.is_active()).await;
+        manager.shutdown().await;
+    }
 }
