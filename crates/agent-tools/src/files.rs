@@ -275,6 +275,47 @@ pub(super) fn directory(root: &Path, relative: &str) -> Result<Value, ToolError>
     Ok(json!({"path":relative,"entries":entries,"omitted":omitted,"truncated":truncated}))
 }
 
+/// NTFS also opens an entry by its 8.3 short name, such as `GIT~1` for `.git`,
+/// which the spelling-based name policy cannot see. Check the long name stored
+/// in the parent directory, and refuse aliases so previews show the real name.
+#[cfg(windows)]
+fn check_stored_name(path: &Path, requested: &std::ffi::OsStr) -> Result<(), ToolError> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        Storage::FileSystem::{FindClose, FindFirstFileW, WIN32_FIND_DATAW},
+    };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut data = WIN32_FIND_DATAW::default();
+    // SAFETY: the path is NUL-terminated and data is a valid output buffer.
+    let search = unsafe { FindFirstFileW(wide.as_ptr(), &mut data) };
+    if search == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: the handle came from a successful FindFirstFileW call.
+    unsafe { FindClose(search) };
+    let length = data
+        .cFileName
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(data.cFileName.len());
+    let stored = std::ffi::OsString::from_wide(&data.cFileName[..length]);
+    let stored = stored.to_string_lossy();
+    if blocked_name(&stored) {
+        return Err(invalid(
+            "repository metadata and likely secret files are blocked",
+        ));
+    }
+    // NTFS compares names through an uppercase table, so a case variant of the
+    // stored name is the same entry rather than an alias.
+    if stored.to_uppercase() != requested.to_string_lossy().to_uppercase() {
+        return Err(invalid(
+            "short (8.3) file names are not allowed; use the full name",
+        ));
+    }
+    Ok(())
+}
+
 /// Validate every component. Links/reparse points are refused even if they point
 /// back into the project. Missing final components are allowed only for creation.
 pub(super) fn resolve(
@@ -297,6 +338,8 @@ pub(super) fn resolve(
                 if is_link(&metadata) {
                     return Err(invalid("symbolic links and reparse points are not allowed"));
                 }
+                #[cfg(windows)]
+                check_stored_name(&path, part)?;
                 if index + 1 < count && !metadata.is_dir() {
                     return Err(invalid("path parent is not a directory"));
                 }
@@ -472,6 +515,18 @@ fn unix_open_at(
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
+/// Decode bytes read up to a limit. A read that stopped at the limit may end
+/// inside a multi-byte character; only that incomplete tail is dropped.
+fn utf8_text(bytes: &[u8], truncated: bool) -> Option<&str> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Some(text),
+        Err(error) if truncated && error.error_len().is_none() => {
+            Some(std::str::from_utf8(&bytes[..error.valid_up_to()]).expect("valid UTF-8 prefix"))
+        }
+        Err(_) => None,
+    }
+}
+
 pub(super) fn read(root: &Path, args: &ReadArgs, cancel: &CancellationToken) -> ToolResult {
     if cancel.is_cancelled() {
         return ToolResult::cancelled();
@@ -487,14 +542,8 @@ pub(super) fn read(root: &Path, args: &ReadArgs, cancel: &CancellationToken) -> 
             bytes.truncate(args.max_bytes);
         }
         let digest = (!truncated).then(|| sha256(&bytes));
-        let content = match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(error) if truncated && error.utf8_error().error_len().is_none() => {
-                let valid = error.utf8_error().valid_up_to();
-                String::from_utf8(error.into_bytes()[..valid].to_vec()).expect("valid UTF-8 prefix")
-            }
-            Err(_) => return Err(invalid("file is not valid UTF-8 text")),
-        };
+        let content =
+            utf8_text(&bytes, truncated).ok_or_else(|| invalid("file is not valid UTF-8 text"))?;
         if content.contains('\0') {
             return Err(invalid("binary files are not supported"));
         }
@@ -518,6 +567,9 @@ pub(super) fn search(root: &Path, args: &SearchArgs, cancel: &CancellationToken)
         let mut files_searched = 0usize;
         let mut entries_seen = 0usize;
         let mut bytes_read = 0usize;
+        // Entries skipped because they could not be validated or read. Only the
+        // requested directory itself is a hard error.
+        let mut omitted = 0usize;
         let mut truncated = false;
         'directories: while let Some((directory, depth)) = stack.pop() {
             if cancel.is_cancelled() {
@@ -531,11 +583,20 @@ pub(super) fn search(root: &Path, args: &SearchArgs, cancel: &CancellationToken)
             } else {
                 relative_dir.to_string_lossy().into_owned()
             };
-            resolve(root, &dir_text, true, false)?;
+            let listing = resolve(root, &dir_text, true, false)
+                .and_then(|_| fs::read_dir(&directory).map_err(ToolError::from));
+            let listing = match listing {
+                Ok(listing) => listing,
+                Err(error) if depth == 0 => return Err(error),
+                Err(_) => {
+                    omitted += 1;
+                    continue;
+                }
+            };
             // The entry metadata is not trusted: each file is reopened through
             // Anchor before its contents are read.
             let mut entries = Vec::new();
-            for entry in fs::read_dir(&directory)? {
+            for entry in listing {
                 if cancel.is_cancelled() {
                     return Ok(ToolResult::cancelled());
                 }
@@ -544,27 +605,48 @@ pub(super) fn search(root: &Path, args: &SearchArgs, cancel: &CancellationToken)
                     truncated = true;
                     break 'directories;
                 }
-                entries.push(entry?);
+                match entry {
+                    Ok(entry) => entries.push(entry),
+                    Err(_) => omitted += 1,
+                }
             }
             entries.sort_by_key(|entry| entry.file_name());
             for entry in entries {
                 if cancel.is_cancelled() {
                     return Ok(ToolResult::cancelled());
                 }
-                let name = entry.file_name().to_string_lossy().into_owned();
+                let Ok(name) = entry.file_name().into_string() else {
+                    omitted += 1;
+                    continue;
+                };
                 if blocked_name(&name) {
                     continue;
                 }
-                let metadata = fs::symlink_metadata(entry.path())?;
+                let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+                    omitted += 1;
+                    continue;
+                };
                 if is_link(&metadata) {
                     continue;
                 }
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map_err(|_| invalid("search escaped the project"))?
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 if metadata.is_dir() {
                     if ignored_directory(&name) {
                         continue;
                     }
                     if depth >= MAX_SEARCH_DEPTH {
                         truncated = true;
+                        continue;
+                    }
+                    // Reserved device names, ':' or a trailing dot would fail
+                    // validation when the directory is listed; skip them now.
+                    if check_relative(&relative).is_err() {
+                        omitted += 1;
                         continue;
                     }
                     stack.push((entry.path(), depth + 1));
@@ -577,25 +659,27 @@ pub(super) fn search(root: &Path, args: &SearchArgs, cancel: &CancellationToken)
                     truncated = true;
                     break 'directories;
                 }
-                let relative = entry
-                    .path()
-                    .strip_prefix(root)
-                    .map_err(|_| invalid("search escaped the project"))?
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                let anchor = match Anchor::new(root, &relative, false) {
-                    Ok(a) => a,
-                    Err(_) => continue,
+                let Ok(anchor) = Anchor::new(root, &relative, false) else {
+                    omitted += 1;
+                    continue;
                 };
-                let file = match anchor.open_read() {
-                    Ok(file) => file,
-                    Err(_) => continue,
+                let Ok(file) = anchor.open_read() else {
+                    omitted += 1;
+                    continue;
                 };
-                files_searched += 1;
                 let limit = (64 * 1024).min(MAX_SEARCH_BYTES - bytes_read);
                 let mut bytes = Vec::new();
-                file.take((limit + 1) as u64).read_to_end(&mut bytes)?;
-                if bytes.len() > limit {
+                if file
+                    .take((limit + 1) as u64)
+                    .read_to_end(&mut bytes)
+                    .is_err()
+                {
+                    omitted += 1;
+                    continue;
+                }
+                files_searched += 1;
+                let file_truncated = bytes.len() > limit;
+                if file_truncated {
                     truncated = true;
                     bytes.truncate(limit);
                 }
@@ -607,25 +691,26 @@ pub(super) fn search(root: &Path, args: &SearchArgs, cancel: &CancellationToken)
                         break 'directories;
                     }
                 }
-                if let Ok(text) = std::str::from_utf8(&bytes) {
-                    if text.contains('\0') {
-                        continue;
-                    }
-                    for (index, line) in text.lines().enumerate() {
-                        if line.contains(&args.query) {
-                            let excerpt: String = line.chars().take(2_000).collect();
-                            matches.push(json!({"path":relative,"line":index + 1,"text":excerpt}));
-                            if matches.len() >= args.max_results {
-                                truncated = true;
-                                break 'directories;
-                            }
+                let Some(text) = utf8_text(&bytes, file_truncated) else {
+                    continue;
+                };
+                if text.contains('\0') {
+                    continue;
+                }
+                for (index, line) in text.lines().enumerate() {
+                    if line.contains(&args.query) {
+                        let excerpt: String = line.chars().take(2_000).collect();
+                        matches.push(json!({"path":relative,"line":index + 1,"text":excerpt}));
+                        if matches.len() >= args.max_results {
+                            truncated = true;
+                            break 'directories;
                         }
                     }
                 }
             }
         }
         let mut result = ToolResult::completed(
-            json!({"matches":matches,"files_searched":files_searched,"bytes_read":bytes_read,"truncated":truncated}),
+            json!({"matches":matches,"files_searched":files_searched,"bytes_read":bytes_read,"omitted":omitted,"truncated":truncated}),
         );
         result.truncated = truncated;
         Ok(result)
@@ -838,11 +923,14 @@ fn replace(anchor: &Anchor, edit: &PreparedEdit) -> Result<(), ToolError> {
         .expect("tempfile has a name")
         .to_os_string();
     drop(temporary);
+    // A new file gets 0o666 minus the process umask, as editors and shells
+    // create it. A replacement copies the original mode before the rename.
+    let mode = if edit.before.is_none() { 0o666 } else { 0o600 };
     let mut file = unix_open_at(
         &anchor.parent,
         &temp_name,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        0o600,
+        mode,
     )?;
     let name_c =
         std::ffi::CString::new(anchor.name.as_bytes()).map_err(|_| invalid("NUL in path"))?;
