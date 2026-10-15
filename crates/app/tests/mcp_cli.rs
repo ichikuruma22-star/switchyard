@@ -16,7 +16,11 @@ struct Client {
 }
 impl Client {
     fn start(directory: &Path, project: &Path) -> Self {
+        Self::start_in(directory, project, &std::env::current_dir().unwrap())
+    }
+    fn start_in(directory: &Path, project: &Path, working_directory: &Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_switchya"))
+            .current_dir(working_directory)
             .arg("--config")
             .arg(directory.join("gateway.toml"))
             .arg("--data-dir")
@@ -154,6 +158,39 @@ async fn real_stdio_clients_discover_one_host_share_context_and_release_it_on_eo
     next.close().await;
     reopened.shutdown().await.unwrap();
     assert!(!record.exists());
+}
+
+#[tokio::test]
+async fn a_relative_project_resolves_in_the_mcp_process_when_it_joins_a_host() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    // This host keeps the test's working directory, which is not the project.
+    let host = start_host(AppOptions::new(
+        temp.path().join("gateway.toml"),
+        temp.path().join("data"),
+    ))
+    .await
+    .unwrap();
+    assert_ne!(
+        std::env::current_dir().unwrap().canonicalize().unwrap(),
+        root.canonicalize().unwrap()
+    );
+    let mut client = Client::start_in(temp.path(), Path::new("."), &root);
+    client.initialize().await;
+    let context = client
+        .request(
+            "tools/call",
+            json!({"name":"switchya_project_context","arguments":{}}),
+        )
+        .await;
+    assert_eq!(
+        context["result"]["structuredContent"]["data"]["project"]["root"],
+        root.canonicalize().unwrap().to_str().unwrap(),
+        "{context}"
+    );
+    client.close().await;
+    host.shutdown().await.unwrap();
 }
 
 #[cfg(unix)]

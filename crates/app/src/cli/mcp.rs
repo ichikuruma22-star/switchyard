@@ -208,6 +208,14 @@ struct ProjectServer {
 }
 impl ProjectServer {
     async fn open(remote: Remote, path: PathBuf) -> Result<Self> {
+        // Resolve a relative path here: a joined host resolves it against its
+        // own working directory, which would expose a different directory.
+        let path = path
+            .canonicalize()
+            .map_err(|_| AppError::invalid("Project path must be an accessible directory."))?;
+        let path = path
+            .to_str()
+            .ok_or_else(|| AppError::invalid("Project path must contain valid Unicode."))?;
         let project = remote
             .request::<ProjectResponse>(Method::POST, "projects", Some(json!({"path":path})))
             .await?

@@ -310,3 +310,24 @@ async fn input_limit_applies_per_message_before_json_decoding() {
         std::io::ErrorKind::InvalidData
     );
 }
+
+#[tokio::test]
+async fn a_project_path_that_is_not_unicode_is_rejected_without_a_request() {
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStrExt;
+        PathBuf::from(std::ffi::OsStr::from_bytes(b"project-\xff"))
+    };
+    #[cfg(windows)]
+    let path = {
+        use std::os::windows::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_wide(&[0x70, 0xD800]))
+    };
+    // No host listens here: the path is refused before any request is made.
+    let remote = Remote::new(LaunchInfo::new(9)).unwrap();
+    let error = match ProjectServer::open(remote, path).await {
+        Err(error) => error,
+        Ok(_) => panic!("a path that is not Unicode opened a project"),
+    };
+    assert_eq!(error.code, "invalid_request");
+}
