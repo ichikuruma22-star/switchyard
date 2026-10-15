@@ -500,14 +500,24 @@ static QUERY_PARAM: LazyLock<Regex> = LazyLock::new(|| {
 /// names, also as the tail of a longer name (`OPENAI_API_KEY`,
 /// `db.password`, `x-goog-api-key`). The value is a quoted string (taken up
 /// to its closing quote), a backslash-escaped quoted string, or a bare
-/// word, optionally wrapped in Rust's `Some(`. A bare word runs on over a
-/// `]` or `}` that more of the word follows (`Abc[123]xyz`), so the part
-/// after the bracket is not left behind.
-/// Groups: 1 name, 2 quote after the name, 3 double-quoted value,
-/// 4 single-quoted value, 5 escaped-quoted value, 6 bare value.
+/// word, optionally wrapped in Rust's `Some(`. A whole secret's bare word
+/// runs on over a `]` or `}` that more of the word follows (`Abc[123]xyz`),
+/// so the part after the bracket is not left behind. A key's or token's
+/// stops there: it never contains one, so the bracket closes around it
+/// (`[api_key=…][password=…]`, `span{api_key=…}:next{…}`).
+/// Groups: 1 key or token name, 2 quote after the name, 3 double-quoted
+/// value, 4 single-quoted value, 5 escaped-quoted value, 6 bare value; 7–12
+/// the same for a whole secret's name.
 static ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
+    let value = |bare: &str| {
+        format!(
+            r#"(\\*["'])?[ \t]*[:=][ \t]*(?:Some\()?(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|\\+"([^"\\\n]*)\\+"|({bare}))"#
+        )
+    };
+    let key = value(&format!("{BARE}{{4,}}"));
+    let secret = value(&format!(r"{BARE}{{4,}}(?:[\]}}]+{BARE}+)*"));
     regex(&format!(
-        r#"(?i)\b(?:[a-z0-9_.\-]*[_.\-])?(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|authorization[_-]token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd)(\\*["'])?[ \t]*[:=][ \t]*(?:Some\()?(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|\\+"([^"\\\n]*)\\+"|({BARE}{{4,}}(?:[\]}}]+{BARE}+)*))"#
+        r"(?i)\b(?:[a-z0-9_.\-]*[_.\-])?(?:(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|authorization[_-]token){key}|(client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd){secret})"
     ))
 });
 
@@ -637,18 +647,21 @@ fn redact_authorization_match(caps: &Captures<'_>) -> String {
 
 fn redact_assignment_match(caps: &Captures<'_>) -> String {
     let unchanged = || caps[0].to_string();
-    let name = &caps[1];
-    let name_quoted = caps.get(2).is_some();
-    let (Some(whole), Some(value)) = (
+    // Only one of the two name branches took part in the match.
+    let group = |n: usize| caps.get(n).or_else(|| caps.get(n + 6));
+    let (Some(whole), Some(name), Some(value)) = (
         caps.get(0),
-        caps.get(3)
-            .or_else(|| caps.get(4))
-            .or_else(|| caps.get(5))
-            .or_else(|| caps.get(6)),
+        group(1),
+        group(3)
+            .or_else(|| group(4))
+            .or_else(|| group(5))
+            .or_else(|| group(6)),
     ) else {
         return unchanged();
     };
-    let bare = caps.get(6).is_some();
+    let name = name.as_str();
+    let name_quoted = group(2).is_some();
+    let bare = group(6).is_some();
     let (core, tail) = if bare {
         split_trailing_backslashes(value.as_str())
     } else {
@@ -1617,6 +1630,38 @@ mod tests {
             "smtp.password = {password}",
         ] {
             assert_eq!(redact_text(code), code);
+        }
+    }
+
+    #[test]
+    fn a_key_ends_at_the_bracket_that_closes_around_it() {
+        // Only a password's bare value runs on over `]` or `}`. A key or
+        // token stops there, so the text after it does not make it look like
+        // code and an assignment after it is still found.
+        for (text, redacted) in [
+            (
+                "[api_key=abcd1234efgh][password=hunter22]",
+                "[api_key=ab…h][password=[redacted]]",
+            ),
+            (
+                "outer{api_key=abcd1234efgh}:inner{id=5}: x",
+                "outer{api_key=ab…h}:inner{id=5}: x",
+            ),
+            (
+                "[access_token=abc123def456](https://x)",
+                "[access_token=ab…6](https://x)",
+            ),
+            (
+                "new Client({apiKey:abc123def456})",
+                "new Client({apiKey:ab…6})",
+            ),
+            (
+                "[api_key=abc123def456][client=<anon>]",
+                "[api_key=ab…6][client=<anon>]",
+            ),
+            ("{auth_token=abc123def456}<br>", "{auth_token=ab…6}<br>"),
+        ] {
+            assert_eq!(redact_text(text), redacted, "{text}");
         }
     }
 
