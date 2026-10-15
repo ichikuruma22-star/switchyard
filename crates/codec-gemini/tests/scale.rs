@@ -8,12 +8,18 @@
 //! still tell the two apart.
 
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use switchyard_codec_gemini::{GeminiCodec, sanitize_schema, sanitize_schema_legacy};
-use switchyard_core::ir::{FunctionTool, Message, Part, Request, Role, Tool};
-use switchyard_core::{Codec, Protocol, RequestPath, UpstreamCtx};
+use switchyard_core::ir::{
+    FinishReason, FunctionTool, Message, Part, Request, Response, Role, Tool, ToolChoice,
+};
+use switchyard_core::{ClientCtx, Codec, Protocol, RequestPath, UpstreamCtx};
 
 const WIDE: usize = 40_000;
+/// Function names are short, so comparing two costs next to nothing: lists
+/// of names are made longer than [`WIDE`] for a quadratic pass to show.
+const NAMES: usize = 200_000;
 const LIMIT: Duration = Duration::from_secs(20);
 
 fn timed<T>(what: &str, work: impl FnOnce() -> T) -> T {
@@ -70,6 +76,97 @@ fn schema_with_a_very_wide_union() {
     let schema = json!({"type": "object", "properties": {"v": {"anyOf": branches}}});
     let cleaned = timed("flattening a wide union", || sanitize_schema(&schema));
     assert_eq!(cleaned["properties"]["v"]["type"], json!("t0"));
+}
+
+#[test]
+fn schema_with_a_very_wide_union_of_object_variants() {
+    // Every variant has a discriminator value and a property of its own.
+    let branches: Vec<Value> = (0..WIDE)
+        .map(|i| {
+            let mut properties = Map::new();
+            properties.insert(
+                "kind".into(),
+                json!({"type": "string", "enum": [format!("k{i}")]}),
+            );
+            properties.insert(format!("p{i}"), json!({"type": "string"}));
+            json!({"type": "object", "properties": properties, "required": ["kind", format!("p{i}")]})
+        })
+        .collect();
+    let schema = json!({"type": "object", "properties": {"v": {"oneOf": branches}}});
+    let cleaned = timed("merging a wide union of objects", || {
+        sanitize_schema(&schema)
+    });
+    let merged = &cleaned["properties"]["v"];
+    assert_eq!(
+        merged["properties"].as_object().map(Map::len),
+        Some(WIDE + 1)
+    );
+    assert_eq!(
+        merged["properties"]["kind"]["enum"]
+            .as_array()
+            .map(Vec::len),
+        Some(WIDE)
+    );
+    assert_eq!(merged["required"], json!(["kind"]));
+}
+
+#[test]
+fn very_many_allowed_function_names_narrow_the_tool_list_in_linear_time() {
+    let declarations: Vec<Value> = (0..NAMES)
+        .map(|i| json!({"name": format!("t{i}")}))
+        .collect();
+    // Every other declared function is allowed; the other names in the list
+    // match no declaration.
+    let allowed: Vec<String> = (0..NAMES)
+        .map(|i| {
+            if i % 2 == 0 {
+                format!("t{i}")
+            } else {
+                format!("a{i}")
+            }
+        })
+        .collect();
+    let body = json!({
+        "contents": [{"role": "user", "parts": [{"text": "go"}]}],
+        "tools": [{"functionDeclarations": declarations}],
+        "toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": allowed}}
+    });
+    let path = RequestPath {
+        model: Some("gemini-2.5-pro"),
+        stream: Some(false),
+    };
+    let request = timed("narrowing a wide tool list", || {
+        GeminiCodec
+            .decode_request(&body, &path)
+            .expect("request decodes")
+    });
+    assert_eq!(request.tool_choice, Some(ToolChoice::Required));
+    assert_eq!(request.tools.len(), NAMES / 2);
+    assert_eq!(request.tools[1].name(), Some("t2"));
+}
+
+#[test]
+fn reply_to_a_request_declaring_very_many_functions_encodes_in_linear_time() {
+    // Declared names the client is handed back in its own spelling.
+    let declarations: Vec<Value> = (0..NAMES)
+        .map(|i| json!({"name": format!("mcp.f{i}")}))
+        .collect();
+    let ctx = ClientCtx::new("gemini-2.5-pro").with_request(Arc::new(json!({
+        "contents": [{"role": "user", "parts": [{"text": "go"}]}],
+        "tools": [{"functionDeclarations": declarations}]
+    })));
+    let mut response = Response::new("chatcmpl-1", "upstream-model");
+    response.parts = vec![Part::tool_call("call_1", "mcp_f7", "{}")];
+    response.finish = FinishReason::ToolCalls;
+    let body = timed("encoding a reply", || {
+        GeminiCodec
+            .encode_response(&response, &ctx)
+            .expect("response encodes")
+    });
+    assert_eq!(
+        body["candidates"][0]["content"]["parts"][0]["functionCall"]["name"],
+        json!("mcp.f7")
+    );
 }
 
 #[test]

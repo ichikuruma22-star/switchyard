@@ -4,7 +4,8 @@
 use crate::parts::{
     SKIP_SIGNATURE, call_args_text, call_name, candidate_metadata, decode_file_data,
     decode_function_response, decode_inline_data, encode_function_response, encode_media,
-    explicit_id, is_metadata_only, opaque, request_signature, split_redacted, upstream_signature,
+    explicit_id, is_metadata_only, media_settings, opaque, request_signature, split_redacted,
+    upstream_signature, with_media_settings,
 };
 use crate::raw::{empty_user_turn, request_meta, request_root};
 use crate::reasoning::{read_reasoning, set_include_thoughts, write_reasoning};
@@ -172,10 +173,12 @@ pub(crate) fn decode_request(body: &Value, path: &RequestPath<'_>) -> Result<Req
         // functions itself is narrowed: passing on the mode with every
         // function declared would let the model call exactly the ones the
         // client excluded. Provider-executed tools are not function calls
-        // and are not affected.
+        // and are not affected. Both lists come from the client and may be
+        // of any length, so the allowed names are looked up in a set.
         if let Some(allowed) = decoded.restricted_to {
+            let allowed: HashSet<&str> = allowed.iter().map(String::as_str).collect();
             request.tools.retain(|tool| match tool.name() {
-                Some(name) => allowed.iter().any(|allowed| allowed == name),
+                Some(name) => allowed.contains(name),
                 None => true,
             });
             if !request.tools.iter().any(|tool| tool.name().is_some()) {
@@ -460,11 +463,11 @@ fn decode_part(
     }
 
     if let Some(inline) = pick_in(map, &["inlineData", "inline_data"]) {
-        out.extend(decode_inline_data(inline));
+        push_media(decode_inline_data(inline), map, out);
         return;
     }
     if let Some(file) = pick_in(map, &["fileData", "file_data"]) {
-        out.extend(decode_file_data(file));
+        push_media(decode_file_data(file), map, out);
         return;
     }
     if is_metadata_only(map) {
@@ -474,6 +477,16 @@ fn decode_part(
         return;
     }
     out.push(opaque(part));
+}
+
+/// A decoded media part, followed by the settings the client put next to its
+/// payload (clip offsets, frame rate, resolution; see [`media_settings`]).
+fn push_media(media: Option<Part>, part: &Map<String, Value>, out: &mut Vec<Part>) {
+    let Some(media) = media else {
+        return;
+    };
+    out.push(media);
+    out.extend(media_settings(part));
 }
 
 /// A thought part. Consecutive thought parts are one reasoning block, up to
@@ -913,11 +926,17 @@ fn text_piece(text: &TextPart) -> Option<Piece> {
     Some(Piece::Text(Value::Object(part)))
 }
 
+/// A Gemini part the canonical model keeps verbatim. One without payload
+/// (the media settings that ride behind a media part, which
+/// [`with_media_settings`] has put back on it) is not a part of its own.
 fn native_opaque(part: &Part) -> Option<Piece> {
     match part {
         Part::Opaque(opaque)
             if opaque.origin.family() == Family::Google
-                && opaque.raw.is_object()
+                && opaque
+                    .raw
+                    .as_object()
+                    .is_some_and(|raw| !is_metadata_only(raw))
                 && candidate_metadata(&opaque.raw).is_none() =>
         {
             Some(Piece::Other(opaque.raw.clone()))
@@ -926,9 +945,15 @@ fn native_opaque(part: &Part) -> Option<Piece> {
     }
 }
 
+/// A media part, with the settings that follow it in the message (`next`)
+/// put back on it.
+fn media_piece(part: &Part, next: Option<&Part>, native: bool) -> Option<Piece> {
+    encode_media(part, native).map(|media| Piece::Other(with_media_settings(media, next)))
+}
+
 fn model_pieces(message: &Message, native: bool) -> Vec<Piece> {
     let mut pieces = Vec::new();
-    for part in &message.parts {
+    for (index, part) in message.parts.iter().enumerate() {
         match part {
             Part::Text(text) => pieces.extend(text_piece(text)),
             Part::Reasoning(reasoning) => {
@@ -992,7 +1017,7 @@ fn model_pieces(message: &Message, native: bool) -> Vec<Piece> {
                 });
             }
             Part::Image(_) | Part::Audio(_) | Part::Document(_) => {
-                pieces.extend(encode_media(part, native).map(Piece::Other));
+                pieces.extend(media_piece(part, message.parts.get(index + 1), native));
             }
             Part::Refusal(refusal) => {
                 if !refusal.text.is_empty() {
@@ -1019,7 +1044,7 @@ fn call_names(request: &Request) -> HashMap<&str, &str> {
 
 fn user_pieces(message: &Message, call_names: &HashMap<&str, &str>, native: bool) -> Vec<Piece> {
     let mut pieces = Vec::new();
-    for part in &message.parts {
+    for (index, part) in message.parts.iter().enumerate() {
         match part {
             Part::Text(text) => pieces.extend(text_piece(text)),
             Part::ToolResult(result) => {
@@ -1039,7 +1064,7 @@ fn user_pieces(message: &Message, call_names: &HashMap<&str, &str>, native: bool
                 });
             }
             Part::Image(_) | Part::Audio(_) | Part::Document(_) => {
-                pieces.extend(encode_media(part, native).map(Piece::Other));
+                pieces.extend(media_piece(part, message.parts.get(index + 1), native));
             }
             Part::Opaque(_) => pieces.extend(native_opaque(part)),
             Part::ToolCall(_) | Part::Reasoning(_) | Part::Refusal(_) => {}

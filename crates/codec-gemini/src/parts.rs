@@ -1,7 +1,7 @@
 //! Conversions between Gemini `Part` objects and canonical parts that are
 //! shared by the request, response and stream code.
 
-use crate::util::{pick, pick_str, sanitize_function_name};
+use crate::util::{pick, pick_in, pick_str, sanitize_function_name};
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use serde_json::{Map, Value, json};
@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use switchyard_core::ir::{
     MediaPart, MediaSource, OpaquePart, Part, Signature, ToolResult, parse_data_uri,
 };
-use switchyard_core::{Protocol, sig};
+use switchyard_core::{Family, Protocol, sig};
 
 /// The value Google documents for skipping thought-signature validation on a
 /// `functionCall` part that did not originate from Gemini.
@@ -394,6 +394,53 @@ pub(crate) fn encode_media(part: &Part, native: bool) -> Option<Value> {
             Some(json!({"fileData": file}))
         }
     }
+}
+
+/// Settings a Gemini client may put on a media part next to its payload, in
+/// both spellings: `videoMetadata` (clip offsets, frame rate) and
+/// `mediaResolution`.
+const MEDIA_SETTINGS: [[&str; 2]; 2] = [
+    ["videoMetadata", "video_metadata"],
+    ["mediaResolution", "media_resolution"],
+];
+
+/// The settings of a client's media part (see [`MEDIA_SETTINGS`]), as a
+/// Gemini opaque part that goes right behind the decoded media part. The
+/// canonical media part has no slot for them. Other protocols drop the
+/// opaque part and keep the media; the Gemini encoder puts the settings back
+/// on the media part ([`with_media_settings`]). `None` when there are none.
+pub(crate) fn media_settings(part: &Map<String, Value>) -> Option<Part> {
+    let mut settings = Map::new();
+    for spellings in MEDIA_SETTINGS {
+        if let Some(value) = pick_in(part, &spellings) {
+            settings.insert(spellings[0].to_string(), value.clone());
+        }
+    }
+    (!settings.is_empty()).then(|| opaque(&Value::Object(settings)))
+}
+
+/// The settings [`media_settings`] put in an opaque part, if `part` is one.
+fn as_media_settings(part: &Part) -> Option<&Map<String, Value>> {
+    let Part::Opaque(opaque) = part else {
+        return None;
+    };
+    let settings = opaque.raw.as_object()?;
+    let only_settings = !settings.is_empty()
+        && settings
+            .keys()
+            .all(|key| MEDIA_SETTINGS.iter().any(|[camel, _]| key == camel));
+    (opaque.origin.family() == Family::Google && only_settings).then_some(settings)
+}
+
+/// An encoded media part with the settings that follow its canonical part
+/// (`next`, see [`media_settings`]) put back next to its payload.
+pub(crate) fn with_media_settings(mut media: Value, next: Option<&Part>) -> Value {
+    if let (Value::Object(map), Some(settings)) = (&mut media, next.and_then(as_media_settings)) {
+        for (key, value) in settings {
+            map.insert(key.clone(), value.clone());
+        }
+    }
+    media
 }
 
 fn plain(value: &Value) -> String {

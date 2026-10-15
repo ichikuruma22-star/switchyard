@@ -794,6 +794,74 @@ fn fill_missing(target: &mut Map<String, Value>, source: &Map<String, Value>) {
     }
 }
 
+/// Folds the further object variants of a union into the first one,
+/// `chosen`, so that the result accepts each of them: their properties are
+/// added (a property several variants define keeps its first definition,
+/// except that string enums, such as the converted `const` of a
+/// discriminator, are combined), and only the names every variant requires
+/// stay required.
+fn merge_variants<'a>(chosen: &mut Map<String, Value>, variants: impl Iterator<Item = &'a Value>) {
+    // The values of each combined enum so far, by property, so that a union
+    // of any width is merged in linear time.
+    let mut combined: HashMap<String, HashSet<String>> = HashMap::new();
+    for variant in variants {
+        let Some(variant) = variant.as_object() else {
+            continue;
+        };
+        let required = match variant.get("required") {
+            Some(Value::Array(names)) => string_set(names),
+            _ => HashSet::new(),
+        };
+        if let Some(Value::Array(names)) = chosen.get_mut("required") {
+            names.retain(|name| name.as_str().is_some_and(|n| required.contains(n)));
+        }
+        let Some(Value::Object(extra)) = variant.get("properties") else {
+            continue;
+        };
+        if !matches!(chosen.get("properties"), Some(Value::Object(_))) {
+            chosen.insert("properties".to_string(), Value::Object(Map::new()));
+        }
+        let Some(Value::Object(properties)) = chosen.get_mut("properties") else {
+            continue;
+        };
+        for (name, schema) in extra {
+            let Some(own) = properties.get_mut(name) else {
+                properties.insert(name.clone(), schema.clone());
+                continue;
+            };
+            if let (Some(Value::Array(values)), Some(Value::Array(incoming))) =
+                (own.get_mut("enum"), schema.get("enum"))
+            {
+                let listed = combined
+                    .entry(name.clone())
+                    .or_insert_with(|| string_set(values));
+                for value in incoming {
+                    if let Some(text) = value.as_str()
+                        && listed.insert(text.to_string())
+                    {
+                        values.push(value.clone());
+                    }
+                }
+            }
+        }
+    }
+    if chosen
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        chosen.shift_remove("required");
+    }
+    // A combined enum is hinted once, with all of its values.
+    if let Some(Value::Object(properties)) = chosen.get_mut("properties") {
+        for name in combined.keys() {
+            if let Some(Value::Object(property)) = properties.get_mut(name) {
+                settle_enum(property);
+            }
+        }
+    }
+}
+
 fn is_null_branch(branch: &Value) -> bool {
     branch
         .get("type")
@@ -905,6 +973,17 @@ fn flatten(map: &mut Map<String, Value>) {
             Value::Object(branch) => branch.clone(),
             _ => Map::new(),
         };
+        // Several object branches are variants of one object (a
+        // discriminated union). The first alone would make the others
+        // impossible to produce, so the later ones are folded into it.
+        if branch_score(&branches[best]) == 3 {
+            merge_variants(
+                &mut chosen,
+                branches[best + 1..]
+                    .iter()
+                    .filter(|branch| branch_score(branch) == 3),
+            );
+        }
         let parent_description = map
             .get("description")
             .and_then(Value::as_str)

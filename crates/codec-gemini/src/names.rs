@@ -10,6 +10,7 @@
 //! exactly one declared function fits.
 
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// The key two spellings of one function name share.
 fn loose(name: &str) -> String {
@@ -37,6 +38,9 @@ impl ClientNames {
     /// the client's original request; empty when that is unavailable.
     pub(crate) fn from_request(request: &Value) -> Self {
         let mut declared: Vec<String> = Vec::new();
+        // A request may declare any number of functions; duplicates are
+        // found through a set rather than by scanning `declared`.
+        let mut seen: HashSet<&str> = HashSet::new();
         let tools = match request.get("tools") {
             Some(Value::Array(tools)) => tools.as_slice(),
             Some(tool @ Value::Object(_)) => std::slice::from_ref(tool),
@@ -50,7 +54,7 @@ impl ClientNames {
             for declaration in declarations.into_iter().flatten() {
                 if let Some(name) = declaration.get("name").and_then(Value::as_str)
                     && !name.is_empty()
-                    && !declared.iter().any(|d| d == name)
+                    && seen.insert(name)
                 {
                     declared.push(name.to_string());
                 }
@@ -100,5 +104,17 @@ mod tests {
             ClientNames::from_request(&Value::Null).restore("x_y"),
             "x_y"
         );
+    }
+
+    #[test]
+    fn a_name_declared_twice_is_listed_once() {
+        let request = json!({"tools": [
+            {"functionDeclarations": [{"name": "a.b"}, {"name": "c"}]},
+            {"functionDeclarations": [{"name": "a.b"}, {"name": ""}]}
+        ]});
+        let names = ClientNames::from_request(&request);
+        assert_eq!(names.declared, ["a.b", "c"]);
+        // Repeating a declaration does not make its name ambiguous.
+        assert_eq!(names.restore("a_b"), "a.b");
     }
 }
