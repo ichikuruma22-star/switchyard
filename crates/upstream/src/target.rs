@@ -42,7 +42,9 @@ pub struct Target {
 impl Target {
     /// Assembles a target from configuration: base URL, extra headers,
     /// project/location and the proxy precedence (credential > provider >
-    /// `upstream.proxy`). The secret must already be resolved into `auth`.
+    /// `upstream.proxy`). The secret must already be resolved into `auth`;
+    /// header values are taken as written, so a caller that resolves secret
+    /// references among them replaces `headers`.
     pub fn for_provider(
         provider: &ProviderConfig,
         credential: &CredentialConfig,

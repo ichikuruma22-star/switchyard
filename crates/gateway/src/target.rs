@@ -376,14 +376,22 @@ impl Inner {
             proxy: credential.proxy.clone(),
             ..CredentialConfig::default()
         };
-        Ok(Target::for_provider(
+        let mut target = Target::for_provider(
             provider,
             &as_configured,
             &config.upstream.proxy,
             protocol,
             model,
             auth,
-        ))
+        );
+        // The view's headers have their secret references resolved; the
+        // provider entry's are as written.
+        target.headers = credential
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        Ok(target)
     }
 
     /// The parsed service-account key file at `file` (relative to the

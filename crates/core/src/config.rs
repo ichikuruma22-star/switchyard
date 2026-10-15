@@ -4,9 +4,10 @@
 //! it (preserving comments), and the running gateway hot-reloads it. Every
 //! field has a default, so an empty file is a valid configuration.
 //!
-//! Secrets (API keys, the admin secret) may be written literally or as a
-//! reference to an environment variable — `env:NAME` or `${NAME}` — which is
-//! resolved when the value is used (see [`resolve_secret`]).
+//! Secrets (API keys, the admin secret, provider header values) may be
+//! written literally or as a reference to an environment variable —
+//! `env:NAME` or `${NAME}` — which is resolved when the value is used (see
+//! [`resolve_secret`]).
 
 use crate::model::ModelInfo;
 use crate::protocol::Protocol;
@@ -510,7 +511,8 @@ pub struct ProviderConfig {
     /// Outbound proxy for this provider (same syntax as `upstream.proxy`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub proxy: String,
-    /// Extra headers sent on every upstream request.
+    /// Extra headers sent on every upstream request. Values may be secret
+    /// references, resolved like API keys.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub headers: IndexMap<String, String>,
     /// Models this provider serves. When empty the built-in catalog for the
@@ -1026,6 +1028,8 @@ impl Config {
                     );
                 } else if value.trim().is_empty() {
                     issue(format!("{path}.headers.{name}"), "needs a value");
+                } else if let Some(message) = empty_reference_issue(value) {
+                    issue(format!("{path}.headers.{name}"), message);
                 } else if value.chars().any(|c| c.is_control()) {
                     issue(
                         format!("{path}.headers.{name}"),
@@ -1743,6 +1747,19 @@ targets = ["loop"]
         );
         assert!(
             issue_paths(&format!("{base}headers = {{ \"X-Title\" = \"my app\" }}\n")).is_empty()
+        );
+        // A header value may be a secret reference, as long as it names a
+        // variable.
+        assert_eq!(
+            issue_paths(&format!("{base}headers = {{ \"X-Key\" = \"env:\" }}\n")),
+            vec!["providers[0].headers.X-Key".to_string()]
+        );
+        assert_eq!(
+            issue_paths(&format!("{base}headers = {{ \"X-Key\" = \"${{ }}\" }}\n")),
+            vec!["providers[0].headers.X-Key".to_string()]
+        );
+        assert!(
+            issue_paths(&format!("{base}headers = {{ \"X-Key\" = \"env:KEY\" }}\n")).is_empty()
         );
         assert_eq!(
             issue_paths(&format!(

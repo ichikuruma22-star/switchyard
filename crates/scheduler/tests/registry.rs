@@ -1248,6 +1248,61 @@ api_keys = ["sk-b-aaaaaaaaaaaaaaaaaaaaaa"]
     assert!(f.scheduler.credentials("nope").is_empty());
 }
 
+/// Regression: a header value written as a secret reference was handed to
+/// the transport as written, and sent upstream as the literal `env:NAME`.
+#[test]
+fn header_references_are_resolved_like_keys() {
+    let f = fixture(
+        r#"
+[[providers]]
+name = "proxied"
+kind = "openai"
+headers = { "Helicone-Auth" = "env:SET_HELICONE_KEY", "X-Title" = "switchyard" }
+[[providers.credentials]]
+api_key = "sk-proxied-aaaaaaaaaaaaaaaa"
+label = "proxied"
+
+[[providers]]
+name = "broken"
+kind = "openai"
+headers = { "X-Api-Key" = "${MISSING_HEADER_KEY}" }
+[[providers.credentials]]
+api_key = "sk-broken-aaaaaaaaaaaaaaaaa"
+label = "broken"
+"#,
+    );
+    let proxied = f.scheduler.credentials("proxied");
+    let headers: Vec<(&str, &str)> = proxied[0]
+        .headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(
+        headers,
+        vec![
+            ("Helicone-Auth", "sk-from-env-SET_HELICONE_KEY"),
+            ("X-Title", "switchyard")
+        ]
+    );
+    assert!(f.credential_by_label("proxied").usable);
+
+    // One that cannot be resolved takes the provider's credentials out of
+    // rotation and says why, as an unset key does.
+    let broken = f.credential_by_label("broken");
+    assert!(!broken.usable);
+    assert_eq!(broken.status, CredentialStatus::Unusable);
+    assert_eq!(
+        broken.unusable_reason.as_deref(),
+        Some("header `X-Api-Key`: environment variable MISSING_HEADER_KEY is not set")
+    );
+    assert!(f.scheduler.credentials("broken").is_empty());
+    let warnings = f.scheduler.warnings();
+    assert!(
+        warnings.iter().any(|w| w.contains("MISSING_HEADER_KEY")),
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn debug_output_never_shows_the_key() {
     let f = fixture(OPENAI);
