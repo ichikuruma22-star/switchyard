@@ -58,14 +58,16 @@ pub(crate) struct FailureMark {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ModelState {
     pub cooldown: Option<Cooldown>,
+    /// The failure behind `cooldown`: when it happened and its one-line
+    /// description (`"429 slow down"`), scrubbed. A later failure that does
+    /// not lengthen the rest does not replace it.
+    pub cooldown_cause: Option<(Ms, String)>,
     /// Consecutive rate-limit windows without a success in between; drives
     /// the exponential backoff.
     pub rate_limit_streak: u32,
     /// The most recent failed attempt that no success has followed. Recorded
     /// whether or not the failure started a cooldown.
     pub last_failure: Option<FailureMark>,
-    /// One-line description of that failure (`"429 slow down"`), scrubbed.
-    pub last_failure_summary: String,
 }
 
 /// Health and counters of one credential.
@@ -139,15 +141,12 @@ impl CredState {
             (Some(_), None) => false,
             (None, None) => return None,
         };
-        if model_is_the_cause {
-            let state = self.models.get(model)?;
-            let mark = state.last_failure?;
-            Some((mark.at, state.last_failure_summary.as_str()))
+        let cause = if model_is_the_cause {
+            self.models.get(model)?.cooldown_cause.as_ref()
         } else {
-            self.cooldown_cause
-                .as_ref()
-                .map(|(at, summary)| (*at, summary.as_str()))
-        }
+            self.cooldown_cause.as_ref()
+        };
+        cause.map(|(at, summary)| (*at, summary.as_str()))
     }
 
     /// The last failed attempt on `model` that no success has followed, while
@@ -208,13 +207,13 @@ impl CredState {
         self.models.retain(|_, m| {
             if m.cooldown.is_some_and(|c| !c.active(now)) {
                 m.cooldown = None;
+                m.cooldown_cause = None;
             }
             if m.cooldown.is_none()
                 && m.last_failure
                     .is_some_and(|f| now.saturating_sub(f.at) >= FAILURE_MEMORY_MS)
             {
                 m.last_failure = None;
-                m.last_failure_summary = String::new();
             }
             m.cooldown.is_some() || m.rate_limit_streak > 0 || m.last_failure.is_some()
         });
@@ -269,7 +268,6 @@ impl CredState {
             seq: self.failure_seq,
             at: now,
         });
-        state.last_failure_summary = summary.clone();
         if !config.enabled {
             return;
         }
@@ -287,10 +285,11 @@ impl CredState {
                 let state = self.models.entry(model.to_string()).or_default();
                 // Requests that were already in flight when the first 429
                 // arrived fail inside the same window; they must not each
-                // double the backoff.
-                let window_open = state
-                    .cooldown
-                    .is_some_and(|c| c.active(now) && c.reason == FailureClass::RateLimit);
+                // double the backoff. Nothing new is sent to a resting
+                // model, so this holds whatever the running rest is for: a
+                // 429 that lands in a rest started by a 5xx came from a
+                // request that was in flight when that rest began.
+                let window_open = state.cooldown.is_some_and(|c| c.active(now));
                 if !window_open {
                     state.rate_limit_streak = state.rate_limit_streak.saturating_add(1);
                 }
@@ -301,7 +300,9 @@ impl CredState {
                         state.rate_limit_streak,
                     )
                 });
-                extend(&mut state.cooldown, wait, FailureClass::RateLimit, now);
+                if extend(&mut state.cooldown, wait, FailureClass::RateLimit, now) {
+                    state.cooldown_cause = Some((now, summary));
+                }
             }
             // The two credential-wide classes rest the credential for at
             // least the configured time: a short `Retry-After` on a rejected
@@ -324,12 +325,16 @@ impl CredState {
             FailureClass::ModelNotFound => {
                 let wait = hint.unwrap_or_else(|| secs(config.model_not_found_secs));
                 let state = self.models.entry(model.to_string()).or_default();
-                extend(&mut state.cooldown, wait, FailureClass::ModelNotFound, now);
+                if extend(&mut state.cooldown, wait, FailureClass::ModelNotFound, now) {
+                    state.cooldown_cause = Some((now, summary));
+                }
             }
             FailureClass::Server | FailureClass::Transport => {
                 let wait = hint.unwrap_or_else(|| secs(config.transient_secs));
                 let state = self.models.entry(model.to_string()).or_default();
-                extend(&mut state.cooldown, wait, error.class, now);
+                if extend(&mut state.cooldown, wait, error.class, now) {
+                    state.cooldown_cause = Some((now, summary));
+                }
             }
         }
     }
@@ -495,7 +500,8 @@ fn mask_key_like(text: &str) -> String {
 // Rotation
 // ---------------------------------------------------------------------------
 
-/// Rotation scope: one client-facing model (lower-cased) at one priority.
+/// Rotation scope: one client-facing model as registered, over one set of
+/// providers, at one priority.
 pub(crate) type RotationKey = (String, i32);
 
 /// Cursors of the rotating strategies.
@@ -866,6 +872,62 @@ mod tests {
         assert!(state.cooldown_cause.is_none());
         state.clear_cooldowns();
         assert_eq!(state.rest_cause("n", later), None);
+    }
+
+    /// Regression: every failure on a model replaced the description of its
+    /// rest, so a straggler that did not lengthen the rest was quoted as its
+    /// cause.
+    #[test]
+    fn a_failure_that_does_not_lengthen_a_models_rest_is_not_its_cause() {
+        let mut state = CredState::default();
+        let config = CooldownConfig::default();
+        state.record_failure("m", &error(FailureClass::Server, 500, None), &config, "", 0);
+        state.record_failure(
+            "m",
+            &error(FailureClass::RateLimit, 429, Some(2_000)),
+            &config,
+            "",
+            1_000,
+        );
+        assert_eq!(
+            state.blocked("m", 1_001).unwrap().reason,
+            FailureClass::Server
+        );
+        assert_eq!(state.rest_cause("m", 1_001), Some((0, "500 boom")));
+
+        state.record_failure(
+            "n",
+            &error(FailureClass::ModelNotFound, 404, None),
+            &config,
+            "",
+            0,
+        );
+        state.record_failure(
+            "n",
+            &error(FailureClass::Transport, 0, None),
+            &config,
+            "",
+            10,
+        );
+        assert_eq!(state.rest_cause("n", 11), Some((0, "404 boom")));
+        // A credential-wide failure is not the model's cause either.
+        state.record_failure("n", &error(FailureClass::Quota, 402, None), &config, "", 20);
+        assert_eq!(state.rest_cause("n", 21), Some((0, "404 boom")));
+        // One that does lengthen the rest, is.
+        state.record_failure(
+            "n",
+            &error(FailureClass::ModelNotFound, 404, None),
+            &config,
+            "",
+            30,
+        );
+        assert_eq!(state.rest_cause("n", 31), Some((30, "404 boom")));
+
+        // The cause goes with the rest.
+        state.prune(70_000);
+        assert!(state.models["m"].cooldown.is_none());
+        assert!(state.models["m"].cooldown_cause.is_none());
+        assert!(state.models["n"].cooldown_cause.is_some());
     }
 
     #[test]

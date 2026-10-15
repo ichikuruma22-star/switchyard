@@ -827,10 +827,29 @@ impl AliasExpander<'_> {
                         ));
                         continue;
                     }
+                    let mut nested = Vec::new();
                     stack.push(next);
-                    self.expand(next, stack, pinned, Some(origin), out);
+                    self.expand(next, stack, pinned, Some(origin), &mut nested);
                     stack.pop();
-                    direct.push(Found::Alias(next));
+                    // An alias without a routable target is ignored, and its
+                    // name then stands for the real model of that name, as
+                    // it does for clients.
+                    let instead = nested
+                        .is_empty()
+                        .then(|| self.table.find(parsed.base))
+                        .flatten();
+                    match instead {
+                        Some(model) => {
+                            push(model, pinned);
+                            direct.push(Found::Model(model));
+                        }
+                        None => {
+                            for target in nested {
+                                push(target.model, target.pinned);
+                            }
+                            direct.push(Found::Alias(next));
+                        }
+                    }
                 }
                 Some(Found::Model(model)) => {
                     push(model, pinned);

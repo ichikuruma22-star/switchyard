@@ -879,6 +879,106 @@ targets = [\"also-missing\"]
     assert!(!visible_ids(&f.scheduler).contains(&"broken".to_string()));
 }
 
+/// Regression: an alias ignored for want of a routable target still took
+/// its name over when other aliases named it, although for clients the
+/// name meant the real model of that name.
+#[test]
+fn an_ignored_alias_does_not_capture_its_name_in_other_aliases() {
+    let f = fixture(
+        r#"
+[[providers]]
+name = "openai"
+kind = "openai"
+api_keys = ["sk-openai-aaaaaaaaaaaaaaaaaaaa"]
+
+[[providers.models]]
+id = "gpt-5.5"
+
+[[providers.models]]
+id = "gpt-4o"
+
+[[providers]]
+name = "parked"
+kind = "anthropic"
+enabled = false
+api_keys = ["sk-ant-aaaaaaaaaaaaaaaaaaaa"]
+
+[[providers.models]]
+id = "claude-opus-4-6"
+
+[[aliases]]
+name = "gpt-5.5"
+targets = ["claude-opus-4-6"]
+
+[[aliases]]
+name = "fast"
+targets = ["gpt-5.5"]
+
+[[aliases]]
+name = "both"
+targets = ["gpt-5.5", "gpt-4o"]
+hide_targets = true
+"#,
+    );
+    let client_models = |name: &str| -> Vec<String> {
+        f.scheduler
+            .resolve(name)
+            .unwrap()
+            .targets
+            .into_iter()
+            .map(|t| t.client_model)
+            .collect()
+    };
+    let lease = f.pick("gpt-5.5").unwrap();
+    assert_eq!(
+        (
+            lease.credential.provider.as_str(),
+            lease.upstream_model.as_str()
+        ),
+        ("openai", "gpt-5.5")
+    );
+    assert_eq!(client_models("fast"), vec!["gpt-5.5"]);
+    let lease = f.pick("fast").unwrap();
+    assert_eq!(
+        (
+            lease.credential.provider.as_str(),
+            lease.upstream_model.as_str()
+        ),
+        ("openai", "gpt-5.5")
+    );
+    assert_eq!(client_models("both"), vec!["gpt-5.5", "gpt-4o"]);
+
+    // `hide_targets` hides the model the name stands for.
+    assert_eq!(visible_ids(&f.scheduler), vec!["both", "fast"]);
+    let table = f.scheduler.models();
+    let flags: Vec<(&str, bool, bool)> = table
+        .iter()
+        .map(|m| (m.name.as_str(), m.hidden, m.ignored))
+        .collect();
+    assert_eq!(
+        flags,
+        vec![
+            ("both", false, false),
+            ("fast", false, false),
+            ("gpt-4o", true, false),
+            ("gpt-5.5", true, false),
+        ]
+    );
+    let warnings = f.scheduler.warnings();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("alias `gpt-5.5` has no routable target")),
+        "{warnings:?}"
+    );
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.contains("`fast`") || w.contains("`both`")),
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn alias_targets_may_use_prefixed_names() {
     let f = fixture(&format!(
