@@ -423,6 +423,24 @@ async fn legacy_completions_are_served_through_chat() {
     assert_eq!(body["error"]["code"], "model_not_found");
 }
 
+#[tokio::test]
+async fn legacy_completions_refuse_token_id_prompts() {
+    let server = TestServer::start().await;
+    for stream in [false, true] {
+        let response = post(
+            &server,
+            "/v1/completions",
+            &json!({"model": "mock-echo", "prompt": [1212, 318, 257, 1332],
+                    "max_tokens": 20, "stream": stream}),
+        )
+        .await;
+        assert_eq!(response.status(), 400, "stream: {stream}");
+        let body = json_of(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error", "{body}");
+        assert_eq!(body["error"]["param"], "prompt", "{body}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------

@@ -111,7 +111,8 @@ mod stream_dec;
 mod stream_enc;
 
 pub use completions::{
-    chat_chunk_to_completions, chat_response_to_completions, completions_request_to_chat,
+    CompletionsStream, chat_chunk_to_completions, chat_response_to_completions,
+    completions_request_to_chat,
 };
 
 use serde_json::Value;

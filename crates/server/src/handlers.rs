@@ -12,7 +12,9 @@ use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderMap, HeaderValue, Method};
 use serde_json::{Value, json};
 use std::time::Duration;
-use switchyard_codecs::chat::{chat_response_to_completions, completions_request_to_chat};
+use switchyard_codecs::chat::{
+    CompletionsStream, chat_response_to_completions, completions_request_to_chat,
+};
 use switchyard_core::{ApiError, Protocol};
 use switchyard_gateway::{ClientRequest, Gateway, RawRequest, Reply};
 use tokio_util::sync::CancellationToken;
@@ -286,7 +288,7 @@ fn reply_to_response(
                 },
                 StreamShape::JsonArray => Framing::JsonArray,
             };
-            respond::stream(stream, framing, job.map, guard)
+            respond::stream(stream, framing, job.map.clone(), guard)
         }
     }
 }
@@ -314,13 +316,17 @@ async fn count(context: Context, job: Job) -> Response {
 /// shape.
 async fn completions(context: Context, body: Bytes) -> Response {
     let mut job = Job::new(Protocol::OpenaiChat, "POST /v1/completions", body);
-    job.map = EventMap::LegacyCompletions;
+    job.map = EventMap::LegacyCompletions(CompletionsStream::default());
     // A body that is not JSON goes to the pipeline as it is, which answers
     // with the proper 400.
     if let Ok(legacy) = serde_json::from_slice::<Value>(&job.body)
         && legacy.is_object()
     {
-        job.body = Bytes::from(completions_request_to_chat(&legacy).to_string());
+        match completions_request_to_chat(&legacy) {
+            Ok(chat) => job.body = Bytes::from(chat.to_string()),
+            // A prompt that is not text (token ids): nothing to send.
+            Err(error) => return context.error(&ApiError::from(error)),
+        }
     }
     let (reply, guard) = run(&context, &job).await;
     let reply = match reply {

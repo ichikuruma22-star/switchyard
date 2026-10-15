@@ -9,7 +9,7 @@ use http::{HeaderName, HeaderValue, StatusCode};
 use serde_json::Value;
 use std::convert::Infallible;
 use std::time::Duration;
-use switchyard_codecs::chat::chat_chunk_to_completions;
+use switchyard_codecs::chat::CompletionsStream;
 use switchyard_core::{ApiError, Protocol, SseEvent, sse};
 use switchyard_gateway::{FullReply, Gateway, StreamReply};
 use tokio::sync::mpsc;
@@ -78,25 +78,26 @@ pub(crate) fn json(value: &Value) -> Response {
 }
 
 /// What is done to each event of a stream before it is written.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EventMap {
     /// Written as the gateway produced it.
     Verbatim,
     /// Chat Completions chunks rewritten as legacy `text_completion`
-    /// chunks; chunks with nothing for such a client are dropped.
-    LegacyCompletions,
+    /// chunks; chunks with nothing for such a client are dropped. The
+    /// rewriter remembers the log-probability offsets of this stream.
+    LegacyCompletions(CompletionsStream),
 }
 
 impl EventMap {
-    fn apply(self, event: SseEvent) -> Option<SseEvent> {
+    fn apply(&mut self, event: SseEvent) -> Option<SseEvent> {
         match self {
             EventMap::Verbatim => Some(event),
-            EventMap::LegacyCompletions => {
+            EventMap::LegacyCompletions(rewriter) => {
                 if event.is_done_marker() {
                     return Some(event);
                 }
                 match serde_json::from_str::<Value>(&event.data) {
-                    Ok(chunk) => chat_chunk_to_completions(&chunk).map(|rewritten| SseEvent {
+                    Ok(chunk) => rewriter.rewrite(&chunk).map(|rewritten| SseEvent {
                         event: event.event,
                         data: rewritten.to_string(),
                     }),
@@ -414,7 +415,7 @@ mod tests {
         let response = stream(
             reply(rx),
             Framing::Sse { keepalive: None },
-            EventMap::LegacyCompletions,
+            EventMap::LegacyCompletions(CompletionsStream::default()),
             CancellationToken::new().drop_guard(),
         );
         let chunk = |delta: Value, finish: Value| {
@@ -443,6 +444,39 @@ mod tests {
         assert_eq!(second["choices"][0]["finish_reason"], "stop");
         assert!(written[2].contains("\"boom\""));
         assert_eq!(written[3], "data: [DONE]\n\n");
+    }
+
+    #[tokio::test]
+    async fn legacy_completions_logprob_offsets_continue_across_chunks() {
+        let (tx, rx) = mpsc::channel(8);
+        let response = stream(
+            reply(rx),
+            Framing::Sse { keepalive: None },
+            EventMap::LegacyCompletions(CompletionsStream::default()),
+            CancellationToken::new().drop_guard(),
+        );
+        let chunk = |token: &str| {
+            json!({"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                   "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": null,
+                                "logprobs": {"content": [{"token": token, "logprob": -0.5,
+                                                          "top_logprobs": []}],
+                                             "refusal": null}}]})
+            .to_string()
+        };
+        for data in [chunk(" Par"), chunk("is"), "[DONE]".to_string()] {
+            tx.send(SseEvent::data(data)).await.unwrap();
+        }
+        drop(tx);
+        let written = chunks(response).await;
+        assert_eq!(written.len(), 3, "{written:?}");
+        let logprobs = |frame: &str| -> Value {
+            let chunk: Value =
+                serde_json::from_str(frame.trim().strip_prefix("data: ").unwrap()).unwrap();
+            chunk["choices"][0]["logprobs"].clone()
+        };
+        assert_eq!(logprobs(&written[0])["text_offset"], json!([0]));
+        assert_eq!(logprobs(&written[1])["tokens"], json!(["is"]));
+        assert_eq!(logprobs(&written[1])["text_offset"], json!([4]));
     }
 
     #[test]
