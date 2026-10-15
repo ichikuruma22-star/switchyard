@@ -30,6 +30,12 @@ pub const DEFAULT_MAX_BODY_BYTES: usize = 256 * 1024;
 /// a body is bounded whatever a client sends.
 const REDACTION_SCAN_LIMIT: usize = 8 * 1024 * 1024;
 
+/// How much of what a body holds beyond the limit is kept out of the output
+/// whatever redaction does: the start of a secret whose end was cut off
+/// matches no redaction rule. As much as the gateway captures beyond the
+/// limit.
+const CUT_MARGIN: usize = 1024;
+
 /// The bodies and headers of one request.
 ///
 /// Fill the bodies with the raw text; [`BodyStore`] redacts and truncates
@@ -95,12 +101,23 @@ fn truncate_with_extra(body: &str, max_bytes: usize, already_cut: usize) -> Stri
 /// Redacts secrets in a body, then truncates it to `max_bytes`.
 ///
 /// Redaction comes first so a secret can never survive by straddling the
-/// cut. Only a body beyond 8 MiB is cut before it is scanned, to bound the
-/// cost of redaction.
+/// cut. Only a body beyond 8 MiB (or beyond the limit plus 1 KiB, when that
+/// is larger) is cut before it is scanned, to bound the cost of redaction.
+///
+/// A body over the limit may end in the middle of a secret, cut here or by
+/// the caller (the gateway captures 1 KiB beyond the limit), and no rule
+/// recognises such a fragment. What the scanned text holds beyond the limit,
+/// up to 1 KiB of it, therefore stays out of the output even when redaction
+/// shortened the text before it.
 pub fn prepare_body(body: &str, max_bytes: usize) -> String {
-    let scan_limit = max_bytes.max(REDACTION_SCAN_LIMIT);
+    let scan_limit = max_bytes
+        .saturating_add(CUT_MARGIN)
+        .max(REDACTION_SCAN_LIMIT);
     let scanned = &body[..floor_char_boundary(body, scan_limit)];
-    truncate_with_extra(&redact_body(scanned), max_bytes, body.len() - scanned.len())
+    let redacted = redact_body(scanned);
+    let margin = scanned.len().saturating_sub(max_bytes).min(CUT_MARGIN);
+    let keep = max_bytes.min(redacted.len().saturating_sub(margin));
+    truncate_with_extra(&redacted, keep, body.len() - scanned.len())
 }
 
 /// Whether an id is safe to use as a file name: short, and made of letters,
@@ -851,6 +868,58 @@ mod tests {
                 "y".repeat(1024),
                 REDACTION_SCAN_LIMIT + 5_000 - 1024
             )
+        );
+    }
+
+    #[test]
+    fn a_secret_at_the_cut_of_a_huge_limit_is_redacted_not_split() {
+        // From 8 MiB up the scan is cut too: it must not stop at the very
+        // byte the output does, inside the secret.
+        let max = REDACTION_SCAN_LIMIT;
+        for (name, secret, leaked) in [
+            ("password", "correct-horse-battery-staple", "correct-ho"),
+            ("api_key", KEY, "sk-proj-ab"),
+        ] {
+            let head = format!(r#"{{"note":"{}","{name}":""#, "a".repeat(max - 40));
+            let start = head.len();
+            assert!(start < max && start + secret.len() > max);
+            let body = format!(r#"{head}{secret}","pad":"{}"}}"#, "b".repeat(4096));
+            let out = prepare_body(&body, max);
+            assert!(out.len() <= max + 64, "{}", out.len());
+            assert!(!out.contains(leaked), "{name}: {}", &out[start - 20..]);
+            assert!(out.ends_with(" bytes]"), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_secret_at_a_cut_made_by_the_caller_is_dropped_even_when_redaction_shrinks_the_body() {
+        // The gateway keeps 1 KiB beyond the limit. A private key redacted
+        // earlier in the body pulls the fragment at that cut below the
+        // limit; it must not be kept.
+        let max = 2048;
+        let clip = max + 1024;
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\\n{}\\n-----END PRIVATE KEY-----",
+            "M".repeat(1500)
+        );
+        let lead = format!(r#"{{"key":"{pem}","note":""#);
+        let tail = r#"","password":""#;
+        // The password starts 10 bytes before the caller's cut.
+        let filler = "a".repeat(clip - 10 - lead.len() - tail.len());
+        let full = format!(r#"{lead}{filler}{tail}correct-horse-battery-staple"}}"#);
+        let out = prepare_body(&full[..clip], max);
+        assert!(
+            out.starts_with(r#"{"key":"[redacted]","note":"aaa"#),
+            "{out}"
+        );
+        assert!(!out.contains("correct"), "{out}");
+        assert!(out.ends_with(" bytes]"), "{out}");
+        // Without redaction a body just over the limit still keeps all of
+        // the limit.
+        let plain = "a".repeat(max + 100);
+        assert_eq!(
+            prepare_body(&plain, max),
+            format!("{}…[truncated 100 bytes]", &plain[..max])
         );
     }
 

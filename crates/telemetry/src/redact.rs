@@ -168,6 +168,22 @@ fn redact_authorization(value: &str) -> String {
     mask(value)
 }
 
+/// Whether the value of a secret with this name is secret in its entirety
+/// (passwords, cookies, generic "secret" and private keys), so that it is
+/// replaced by [`REDACTED`] rather than masked.
+fn is_whole_secret(name: &str) -> bool {
+    let c = compact(name);
+    const FULL: [&str; 6] = [
+        "password",
+        "passwd",
+        "passphrase",
+        "secret",
+        "privatekey",
+        "cookie",
+    ];
+    FULL.iter().any(|needle| c.contains(needle))
+}
+
 /// Redacts the value of a field whose name [`is_secret_key`].
 ///
 /// * `authorization`-like names keep a known scheme word: `Bearer
@@ -179,18 +195,10 @@ pub fn redact_secret_value(name: &str, value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
-    let c = compact(name);
-    const FULL: [&str; 6] = [
-        "password",
-        "passwd",
-        "passphrase",
-        "secret",
-        "privatekey",
-        "cookie",
-    ];
-    if FULL.iter().any(|needle| c.contains(needle)) {
+    if is_whole_secret(name) {
         return REDACTED.to_string();
     }
+    let c = compact(name);
     if c.contains("auth") {
         return redact_authorization(value.trim());
     }
@@ -492,13 +500,26 @@ static QUERY_PARAM: LazyLock<Regex> = LazyLock::new(|| {
 /// names, also as the tail of a longer name (`OPENAI_API_KEY`,
 /// `db.password`, `x-goog-api-key`). The value is a quoted string (taken up
 /// to its closing quote), a backslash-escaped quoted string, or a bare
-/// word, optionally wrapped in Rust's `Some(`.
+/// word, optionally wrapped in Rust's `Some(`. A bare word runs on over a
+/// `]` or `}` that more of the word follows (`Abc[123]xyz`), so the part
+/// after the bracket is not left behind.
 /// Groups: 1 name, 2 quote after the name, 3 double-quoted value,
 /// 4 single-quoted value, 5 escaped-quoted value, 6 bare value.
 static ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
     regex(&format!(
-        r#"(?i)\b(?:[a-z0-9_.\-]*[_.\-])?(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|authorization[_-]token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd)(\\*["'])?[ \t]*[:=][ \t]*(?:Some\()?(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|\\+"([^"\\\n]*)\\+"|({BARE}{{4,}}))"#
+        r#"(?i)\b(?:[a-z0-9_.\-]*[_.\-])?(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|authorization[_-]token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd)(\\*["'])?[ \t]*[:=][ \t]*(?:Some\()?(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|\\+"([^"\\\n]*)\\+"|({BARE}{{4,}}(?:[\]}}]+{BARE}+)*))"#
     ))
+});
+
+/// A bare value that is unmistakably source code or a placeholder: a call
+/// without arguments or with simple ones (`getpass.getpass()`, `input(…`,
+/// `load_key())`), a subscript (`os.environ[…`) or a placeholder (`<your
+/// password>`, `{password}`, `${DB_PASSWORD}`), as far as a bare value
+/// runs.
+static EXPRESSION: LazyLock<Regex> = LazyLock::new(|| {
+    regex(
+        r"^(?:[A-Za-z_][A-Za-z0-9_.]*(?:\[|\((?:[A-Za-z0-9_.]*\))?\)*)|\$?[<{\[]+[A-Za-z0-9_.\-]*>?)$",
+    )
 });
 
 /// Whether a word that follows `Bearer` or `Basic` in free text is a
@@ -521,7 +542,8 @@ fn is_literal(value: &str) -> bool {
 
 /// Whether a bare word is source code or a placeholder rather than a value
 /// (`os.environ[…`, `input(…`, `<your key>`, `{api_key}`). Keys, tokens
-/// and base64 never contain brackets.
+/// and base64 never contain brackets; passwords may, so they must pass the
+/// stricter [`EXPRESSION`] test instead.
 fn looks_like_code(value: &str) -> bool {
     value.contains(['(', ')', '[', '{', '<', '>'])
 }
@@ -634,11 +656,20 @@ fn redact_assignment_match(caps: &Captures<'_>) -> String {
     };
     // A bare value after a quoted name is a JSON literal or number
     // (`"api_key":null`); bare `None` / `null` / `false` say "no value";
-    // a bare value with brackets is source code or a placeholder
-    // (`api_key = os.environ[…`, `password = input(…`, `api_key=<your key>`).
+    // a bare key with brackets is source code or a placeholder
+    // (`api_key = os.environ[…`, `api_key=<your key>`). A password may
+    // contain brackets itself (`x7{Kq9!m`), so it is only left alone when
+    // the whole value is an expression (`password = input(…`).
+    let code = |core: &str| {
+        if is_whole_secret(name) {
+            EXPRESSION.is_match(core)
+        } else {
+            looks_like_code(core)
+        }
+    };
     if core.is_empty()
         || already_redacted(core)
-        || (bare && (name_quoted || is_literal(core) || looks_like_code(core)))
+        || (bare && (name_quoted || is_literal(core) || code(core)))
     {
         return unchanged();
     }
@@ -1560,6 +1591,33 @@ mod tests {
             redact_text("api_key = \"abcdef0123456789\"  # do not commit"),
             "api_key = \"abc…89\"  # do not commit"
         );
+    }
+
+    #[test]
+    fn passwords_with_brackets_are_not_mistaken_for_code() {
+        for (text, redacted) in [
+            ("DB_PASSWORD=x7{Kq9!mZ#2", "DB_PASSWORD=[redacted]"),
+            ("MYSQL_PASSWORD=P(ssw0rd)2024", "MYSQL_PASSWORD=[redacted]"),
+            ("password=hunter2<3 set", "password=[redacted] set"),
+            ("SMTP_PASSWORD=Abc[123]xyz", "SMTP_PASSWORD=[redacted]"),
+            (
+                "SECRET_KEY=django-insecure-x7(k!m)q",
+                "SECRET_KEY=[redacted]",
+            ),
+        ] {
+            assert_eq!(redact_text(text), redacted, "{text}");
+        }
+        // Code and placeholders on a password line are still left alone.
+        for code in [
+            "password = input(\"Password: \")",
+            "password = os.environ[\"DB_PASSWORD\"]",
+            "client_secret = load_secret())",
+            "DB_PASSWORD=<your password>",
+            "DB_PASSWORD=${DB_PASSWORD}",
+            "smtp.password = {password}",
+        ] {
+            assert_eq!(redact_text(code), code);
+        }
     }
 
     #[test]
