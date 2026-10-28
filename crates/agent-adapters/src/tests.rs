@@ -1332,7 +1332,7 @@ fn decisions_outlive_other_events_in_a_long_run() {
     let retained: Vec<_> = run.events.iter().skip(1).map(|e| e.seq).collect();
     assert_eq!(
         retained,
-        (run.view.first_retained_seq..=600).collect::<Vec<_>>()
+        (run.view.first_retained_seq..=run.view.last_seq).collect::<Vec<_>>()
     );
     // Decisions keep at most half the window.
     for i in 0..600 {

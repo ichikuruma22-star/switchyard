@@ -449,15 +449,23 @@ async fn claude_requires_an_explicit_valid_account() {
 
 #[tokio::test]
 async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests() {
-    let start_auto = |manager: &AdapterManager, scenario: &str, auto_approve: AutoApproval| {
+    // `account_inside` keeps the fixture account's own folder in the project.
+    let start_auto = |manager: &AdapterManager,
+                      scenario: &str,
+                      auto_approve: AutoApproval,
+                      account_inside: bool| {
         let directory = tempfile::tempdir().unwrap();
+        let account = tempfile::tempdir().unwrap();
         let project = directory.path().canonicalize().unwrap();
         let mut request = request(&project, None);
         request.auto_approve = AutoApprovalSource::new(move || auto_approve);
+        if !account_inside {
+            request.profile.as_mut().unwrap().home = account.path().to_owned();
+        }
         let run = manager
             .start_process(request, project, fixture(), vec![scenario.into()])
             .unwrap();
-        (directory, run)
+        (directory, account, run)
     };
     let edits = AutoApproval {
         edits: true,
@@ -465,26 +473,37 @@ async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests
     };
     // Write is a file edit: it is answered without a prompt.
     let manager = AdapterManager::new();
-    let (directory, run) = start_auto(&manager, "allow", edits);
+    let (directory, _account, run) = start_auto(&manager, "allow", edits, false);
     let finished = wait(&manager, &run.id, |run| !run.state.is_active()).await;
     assert_eq!(finished.state, RunState::Completed);
     manager.shutdown().await;
     assert!(directory.path().join("approved.txt").exists());
     let events = manager.events(&run.id, 0, 200).unwrap();
     assert!(events.iter().any(|e| e.kind == "approval_requested"));
-    assert!(events.iter().any(|e| e.kind == "approval_resolved"
-        && e.payload["decided_by"] == "auto_approve"
-        && e.payload["decision"] == "allow_once"));
+    let decision = events
+        .iter()
+        .find(|e| e.kind == "approval_resolved")
+        .unwrap();
+    assert_eq!(decision.payload["decided_by"], "auto_approve");
+    assert_eq!(decision.payload["decision"], "allow_once");
+    assert_eq!(decision.payload["request"]["tool"], "Write");
+    assert!(
+        decision.payload["request"]["paths"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("approved.txt")
+    );
 
-    // Commands-only trust does not cover Write; deny-only plan changes and a
-    // write to a Git hook always ask.
-    for (scenario, auto) in [
+    // Commands-only trust does not cover Write; deny-only plan changes, a write
+    // to a Git hook and a write into the account's own folder always ask.
+    for (scenario, auto, account_inside) in [
         (
             "allow",
             AutoApproval {
                 edits: false,
                 commands: true,
             },
+            false,
         ),
         (
             "deny_only",
@@ -492,11 +511,13 @@ async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests
                 edits: true,
                 commands: true,
             },
+            false,
         ),
-        ("write_hook", edits),
+        ("write_hook", edits, false),
+        ("allow", edits, true),
     ] {
         let manager = AdapterManager::new();
-        let (directory, run) = start_auto(&manager, scenario, auto);
+        let (directory, _account, run) = start_auto(&manager, scenario, auto, account_inside);
         let pending = wait(&manager, &run.id, |run| {
             run.state == RunState::AwaitingApproval
         })
