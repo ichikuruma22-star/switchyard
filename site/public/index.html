@@ -3,12 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f6f8fb">
-  <meta name="description" content="Switchya is a desktop coding workspace and CLI. Open a local project, use the model providers you choose, and review proposed changes. Windows preview.">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fb">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#151f2a">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="A desktop coding workspace and CLI. Open a local project, use OpenAI, Anthropic, Gemini or a local Ollama model, and review proposed changes. Open source.">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Switchya">
+  <meta property="og:locale" content="en_US">
   <meta property="og:title" content="Switchya — A coding workspace. Your choice of models.">
-  <meta property="og:description" content="A desktop app and CLI for your projects and model providers. Windows x64 portable preview 0.1.0-preview.4.">
+  <meta property="og:description" content="A desktop app and CLI for your projects, with OpenAI, Anthropic, Gemini or local Ollama models. Open source. Windows x64 portable preview 0.1.0-preview.4.">
   <meta property="og:url" content="https://switchya.com/">
   <meta property="og:image" content="https://switchya.com/assets/social-card.png">
   <meta property="og:image:type" content="image/png">
@@ -24,6 +27,43 @@
   <link rel="preload" href="/assets/fonts/archivo-latin-var.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/site.css">
   <script src="/site.js" defer></script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "name": "Switchya",
+        "description": "A desktop coding workspace and CLI. Open a local project, use the model providers you choose, and review proposed changes alongside the conversation.",
+        "url": "https://switchya.com/",
+        "image": "https://switchya.com/assets/social-card.png",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Windows 10, Windows 11",
+        "softwareVersion": "0.1.0-preview.4",
+        "downloadUrl": "https://github.com/ichikuruma22-star/switchyard/releases/download/switchya-v0.1.0-preview.4/switchya-0.1.0-preview.4-windows-x86_64-portable.zip",
+        "releaseNotes": "https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4",
+        "fileSize": "20.7MB",
+        "license": "https://opensource.org/license/mit",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "codeRepository": "https://github.com/ichikuruma22-star/switchyard"
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          { "@type": "Question", "name": "Is Switchya free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Switchya and Switchyard Gateway are open source under the MIT License. Cloud model providers bill their usage to your own account or subscription." } },
+          { "@type": "Question", "name": "Does my code leave my computer?", "acceptedAnswer": { "@type": "Answer", "text": "Switchya has no analytics or telemetry. A task sends the conversation and the files the agent reads to the model provider you chose for it. With a local Ollama model it stays on your machine. Codex, Claude Code and Antigravity handle data under their own terms." } },
+          { "@type": "Question", "name": "Which models can I use?", "acceptedAnswer": { "@type": "Answer", "text": "The setup dialog connects OpenAI, Anthropic, Gemini or a local Ollama server, and the model list shows the IDs your connection offers. Switchyard Gateway's configuration adds compatible endpoints, aliases and failover. You can also work through your own Codex, Claude Code or Antigravity setup." } },
+          { "@type": "Question", "name": "Will it change my files without asking?", "acceptedAnswer": { "@type": "Answer", "text": "Not with the native engine: file edits are shown as diffs and commands wait for your approval before they run. Codex and Claude Code approval requests appear in the conversation for your decision, and Antigravity runs in read-only plan mode." } },
+          { "@type": "Question", "name": "Where are my projects and conversations stored?", "acceptedAnswer": { "@type": "Answer", "text": "Your code stays in your project folder, and Switchya edits it in place. Settings and saved conversations are in %LOCALAPPDATA%\\Switchya on your PC, not in the ZIP. Keep gateway.toml there private: it holds the API keys you saved." } },
+          { "@type": "Question", "name": "Why does Windows warn when I open it?", "acceptedAnswer": { "@type": "Answer", "text": "The preview isn't code-signed yet, so Microsoft Defender SmartScreen may warn about an unrecognized app. Compare the ZIP's SHA-256 with the value listed under Downloads before you run it, for example with Get-FileHash in PowerShell." } },
+          { "@type": "Question", "name": "Is there a Mac or Linux version?", "acceptedAnswer": { "@type": "Answer", "text": "Not as a desktop download yet. The browser workspace and CLI build from source, and their tests pass on Linux and macOS, but the desktop shell isn't released there. Switchyard Gateway has release builds for Windows, Linux and macOS." } },
+          { "@type": "Question", "name": "How do Switchya and Switchyard Gateway relate?", "acceptedAnswer": { "@type": "Answer", "text": "Switchya is the app and CLI. Switchyard Gateway is a standalone API gateway that the native engine uses for model access. You can also run the Gateway on its own for other tools and SDKs." } }
+        ]
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -31,8 +71,10 @@
     <a class="wordmark" href="/" aria-label="Switchya home"><img src="/assets/switchya-mark.svg" width="35" height="35" alt=""><span>Switchya</span></a>
     <nav aria-label="Main navigation">
       <a href="#workspace">Workspace</a>
-      <a href="#architecture">Model access</a>
+      <a class="nav-wide" href="#architecture">Model access</a>
+      <a href="#start">Get started</a>
       <a href="#availability">Downloads</a>
+      <a href="#faq">FAQ</a>
     </nav>
     <a class="header-link" href="https://github.com/ichikuruma22-star/switchyard">Source on GitHub <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 4h10v10M16 4 4 16"/></svg></a>
   </header>
@@ -107,7 +149,7 @@
       <div class="workspace-heading"><h2 id="workspace-title">Work from an<br>existing project.</h2><p>Understand a file, investigate a failure, or make a change. The workspace is built around the code you’re already working on.</p></div>
       <dl class="workspace-details">
         <div><dt>Start from a local folder</dt><dd>Open an existing project folder. Its conversations, proposed changes and results stay together.</dd></div>
-        <div><dt>Connect your model providers</dt><dd>Give the native engine model access through Switchyard Gateway, or work through your own Codex, Claude Code or Antigravity setup.</dd></div>
+        <div><dt>Connect your model providers</dt><dd>Give the native engine model access through Switchyard Gateway, with OpenAI, Anthropic, Gemini or a local Ollama model, or work through your own Codex, Claude Code or Antigravity setup.</dd></div>
         <div><dt>Switch accounts, not tools</dt><dd>Keep named Codex, Claude Code and Antigravity accounts side by side and pick one per conversation. Sign-in stays with each agent’s official CLI.</dd></div>
         <div><dt>Inspect what changed</dt><dd>Proposed file edits are shown as diffs before you approve them, next to tool actions and their results.</dd></div>
       </dl>
@@ -115,7 +157,7 @@
 
     <section class="architecture-section section-space" id="architecture" aria-labelledby="architecture-title">
       <div class="wrap architecture-layout">
-        <div class="architecture-copy"><h2 id="architecture-title"><span>Use your providers.</span> <span>Or your own agent setup.</span></h2><p>The native engine uses Switchyard Gateway for model access. The Codex, Claude Code and Antigravity integrations connect to your own installations.</p><p class="architecture-note">Named profiles keep each agent’s accounts separate. Codex, Claude Code and Antigravity conversations run inside the workspace; managed Claude Code and Antigravity profiles can also open in their own terminal.</p></div>
+        <div class="architecture-copy"><h2 id="architecture-title"><span>Use your providers.</span> <span>Or your own agent setup.</span></h2><p>The native engine uses Switchyard Gateway for model access: OpenAI, Anthropic, Gemini, or a local Ollama server with no API key. The Codex, Claude Code and Antigravity integrations connect to your own installations.</p><p class="architecture-note">Named profiles keep each agent’s accounts separate. Codex, Claude Code and Antigravity conversations run inside the workspace; managed Claude Code and Antigravity profiles can also open in their own terminal.</p></div>
         <div class="architecture-diagram" role="img" aria-label="Switchya, the app and CLI, works in your project workspace. Its native engine reaches your API providers through Switchyard Gateway. The Codex, Claude Code and Antigravity integrations use the CLI setups you installed and signed in to.">
           <div class="architecture-entry"><img src="/assets/switchya-mark.svg" width="34" height="34" alt=""><strong>Switchya</strong><span>App + CLI</span></div>
           <div class="architecture-shared">Your project workspace</div>
@@ -126,6 +168,16 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <section class="start-section wrap section-space" id="start" aria-labelledby="start-title">
+      <div class="section-heading"><h2 id="start-title">From download<br>to first task.</h2><p>Four steps on Windows 10 or 11. The <a href="https://github.com/ichikuruma22-star/switchyard/blob/main/docs/SWITCHYA.md">user guide</a> covers each one in detail.</p></div>
+      <ol class="start-steps">
+        <li><h3>Download and extract</h3><p>Extract the whole <a href="#availability">Windows ZIP</a> to a folder. Install the <a href="https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170">Visual C++ x64 runtime</a> and the <a href="https://developer.microsoft.com/en-us/microsoft-edge/webview2/">WebView2 Runtime</a> if they’re missing.</p></li>
+        <li><h3>Open your project</h3><p>Start <code>switchya-desktop.exe</code>, choose <strong>Open a project</strong> and enter an existing folder. Switchya works on the files where they are.</p></li>
+        <li><h3>Connect a model</h3><p>Choose <strong>Connect a provider</strong>: OpenAI, Anthropic or Gemini with your API key, or a local Ollama server with no key. Codex, Claude Code and Antigravity keep their own sign-in.</p></li>
+        <li><h3>Send a task, then review</h3><p>Describe the task and choose <strong>Send task</strong>. With the native engine, file edits appear as diffs and commands wait for your decision.</p></li>
+      </ol>
     </section>
 
     <section class="gateway-section wrap section-space" id="gateway" aria-labelledby="gateway-title">
@@ -163,8 +215,22 @@
       </ul>
     </section>
 
+    <section class="faq-section wrap section-space" id="faq" aria-labelledby="faq-title">
+      <div class="faq-heading"><h2 id="faq-title">Questions.</h2><p>Short answers about cost, data, models and platforms. The <a href="https://github.com/ichikuruma22-star/switchyard/blob/main/docs/SWITCHYA.md">user guide</a> and <a href="https://github.com/ichikuruma22-star/switchyard/blob/main/docs/SECURITY-MODEL.md">security model</a> have the details.</p></div>
+      <div class="faq-list">
+        <details><summary>Is Switchya free?</summary><p>Yes. Switchya and Switchyard Gateway are open source under the <a href="https://github.com/ichikuruma22-star/switchyard/blob/main/LICENSE">MIT License</a>. Cloud model providers bill their usage to your own account or subscription.</p></details>
+        <details><summary>Does my code leave my computer?</summary><p>Switchya has no analytics or telemetry. A task sends the conversation and the files the agent reads to the model provider you chose for it. With a local Ollama model it stays on your machine. Codex, Claude Code and Antigravity handle data under their own terms.</p></details>
+        <details><summary>Which models can I use?</summary><p>The setup dialog connects OpenAI, Anthropic, Gemini or a local Ollama server, and the model list shows the IDs your connection offers. Switchyard Gateway’s configuration adds compatible endpoints, aliases and failover. You can also work through your own Codex, Claude Code or Antigravity setup.</p></details>
+        <details><summary>Will it change my files without asking?</summary><p>Not with the native engine: file edits are shown as diffs and commands wait for your approval before they run. Codex and Claude Code approval requests appear in the conversation for your decision, and Antigravity runs in read-only plan mode.</p></details>
+        <details><summary>Where are my projects and conversations stored?</summary><p>Your code stays in your project folder, and Switchya edits it in place. Settings and saved conversations are in <code>%LOCALAPPDATA%\Switchya</code> on your PC, not in the ZIP. Keep <code>gateway.toml</code> there private: it holds the API keys you saved.</p></details>
+        <details><summary>Why does Windows warn when I open it?</summary><p>The preview isn’t code-signed yet, so Microsoft Defender SmartScreen may warn about an unrecognized app. Compare the ZIP’s SHA-256 with the value listed under <a href="#availability">Downloads</a> before you run it:</p><pre tabindex="0" role="region" aria-label="PowerShell command to check the download"><code>Get-FileHash .\switchya-0.1.0-preview.4-windows-x86_64-portable.zip</code></pre></details>
+        <details><summary>Is there a Mac or Linux version?</summary><p>Not as a desktop download yet. The browser workspace and CLI build from source, and their tests pass on Linux and macOS, but the desktop shell isn’t released there. Switchyard Gateway has <a href="https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1">release builds</a> for Windows, Linux and macOS.</p></details>
+        <details><summary>How do Switchya and Switchyard Gateway relate?</summary><p>Switchya is the app and CLI. Switchyard Gateway is a standalone API gateway that the native engine uses for model access. You can also run the Gateway on its own for other tools and SDKs.</p></details>
+      </div>
+    </section>
+
   </main>
 
-  <footer class="site-footer wrap"><a class="wordmark" href="/" aria-label="Switchya home"><img src="/assets/switchya-mark.svg" width="28" height="28" alt=""><span>Switchya</span></a><p>Powered by Switchyard Gateway</p><nav aria-label="Footer navigation"><a href="#availability">Downloads</a><a href="https://github.com/ichikuruma22-star/switchyard">Source on GitHub</a></nav></footer>
+  <footer class="site-footer wrap"><a class="wordmark" href="/" aria-label="Switchya home"><img src="/assets/switchya-mark.svg" width="28" height="28" alt=""><span>Switchya</span></a><p>Open source under the <a href="https://github.com/ichikuruma22-star/switchyard/blob/main/LICENSE">MIT License</a>. Powered by Switchyard Gateway.</p><nav aria-label="Footer navigation"><a href="#availability">Downloads</a><a href="https://github.com/ichikuruma22-star/switchyard/blob/main/docs/SWITCHYA.md">User guide</a><a href="https://github.com/ichikuruma22-star/switchyard/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/ichikuruma22-star/switchyard/blob/main/docs/SECURITY-MODEL.md">Security</a><a href="https://github.com/ichikuruma22-star/switchyard">Source on GitHub</a></nav></footer>
 </body>
 </html>

@@ -53,10 +53,21 @@ Work from an existing project    Local project / provider setup / changes
 Use your providers.              Native engine → Gateway → API providers
 Or your Codex setup.             Codex integration → your Codex setup
 
+From download to first task      01 extract · 02 open · 03 connect · 04 review
+
 Switchyard Gateway              Actual download, setup, protocol details
 
 Downloads and status             Windows app / CLI preview; Gateway release
+
+Questions.                       Cost, data, models, approvals, storage,
+                                 unsigned ZIP, platforms, Gateway relation
 ```
+
+The getting-started steps and the questions are plain lists, not cards. Each
+answer states only what the docs and code support; the FAQ structured data in
+`index.html` must repeat the visible questions (`npm run check` enforces it).
+The site follows the visitor's light or dark system setting; the product
+illustration stays light in both themes, like a screenshot.
 
 Content stays left aligned and prose measures stay below roughly 75 characters. The hero preview is explicitly labeled as an interface concept until replaced by a screenshot of a verified build. It contains no invented customers, success counts, test results, or activity feed. Its only live controls switch explanatory views.
 
