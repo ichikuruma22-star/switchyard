@@ -1,5 +1,7 @@
 # Switchya & Switchyard Gateway
 
+**Website: [switchya.com](https://switchya.com/)** · [Windows preview download](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4) · [User guide](docs/SWITCHYA.md) · [Gateway v0.1.1](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1)
+
 **Switchya** is a local coding workspace with a browser interface, a terminal
 CLI, and a native desktop shell. Open a project, choose a model,
 send a task, and review proposed edits and commands alongside their results.

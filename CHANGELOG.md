@@ -37,6 +37,19 @@
 - The product illustration uses the app's real wording and keeps the review
   pane at every width; tabs show a clear selected state, and small text,
   focus rings and the 404 page are fixed.
+- A "From download to first task" section walks through the four steps:
+  extract the ZIP and its runtimes, open a project, connect a model, then
+  send a task and review it.
+- A Questions section answers what Switchya costs, what data leaves your
+  computer, which models work, whether files change without asking, where
+  data is stored, why Windows warns about the unsigned ZIP (with a
+  `Get-FileHash` check), Mac and Linux availability, and how the app relates
+  to Switchyard Gateway.
+- The page names local Ollama models next to OpenAI, Anthropic and Gemini,
+  follows the visitor's light or dark system theme, and publishes
+  SoftwareApplication and FAQ structured data for search engines. The footer
+  links the user guide, changelog, security model and MIT License, and
+  responses add a `Cross-Origin-Opener-Policy` header.
 
 ## Switchya 0.1.0-preview.4 (2026-10-15)
 
