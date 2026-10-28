@@ -89,7 +89,9 @@ standalone gateway's default `switchyard.toml`.
    the project rail to reopen setup. If only starter mock models are
    available, the workspace prompts for a real provider.
 2. Choose **OpenAI**, **Anthropic**, **Gemini**, or **Ollama — local**, and give
-   the connection a unique configuration name.
+   the connection a unique configuration name: lowercase letters, digits,
+   hyphens or underscores, starting with a letter. The form says when a name
+   does not fit.
 3. For a cloud provider, choose **Save an API key** or **Use an environment
    variable**. Enter the variable's name, not its value, for the latter. The
    app process must inherit it; set a missing variable and restart the app.
@@ -187,7 +189,7 @@ or services outside the project if their normal permissions allow it.
 ### Approve automatically (opt-in)
 
 Every edit and command asks for a decision by default. For a project you
-trust, select the approval note beside the model picker (it reads **Writes
+trust, select the approval note beside the model picker (it reads **Edits
 and commands need approval**) to open **Approval settings**:
 
 - **Apply file edits without asking** applies the agent's file edits as soon as
@@ -198,9 +200,10 @@ and commands need approval**) to open **Approval settings**:
 
 Choose either or both for the whole project. In an open session you can
 instead **Set for this session only**, which overrides the project setting for
-that session, or return to **Use the project setting**. While anything is
-automatic, the composer note turns amber (edits) or red (commands) and the
-header shows **Auto-approve on**.
+that session, or return to **Use the project setting**. Opened from
+**Existing agents**, the dialog shows only the project setting, which is the
+one those runs follow. While anything is automatic, the composer note turns
+amber (edits) or red (commands) and the header shows **Auto-approve on**.
 
 Automatic approval only replaces the click. Each operation is still proposed,
 recorded with its exact arguments and diff, and marked **Auto-approved** in the
@@ -331,16 +334,23 @@ Use the current `revision` from `sessions`; recovery never reruns an action.
 **Existing agents** runs installed Codex, Claude Code or Antigravity CLIs with
 their own model, account and configuration. Select the agent and account, then
 choose **Start new conversation**. Starting a turn may consume that account's
-usage. Review its tool activity and exact permission requests in **Agent
-review**. Antigravity runs in plan mode: it can inspect and answer but cannot
-apply edits, and Switchya cannot check its sign-in status (see
-[Accounts](ACCOUNTS.md#antigravity-accounts)).
+usage. Review its tool activity and exact permission requests under **Agent
+requests** in the review pane. Antigravity runs in plan mode: it can inspect
+and answer but cannot apply edits, and Switchya cannot check its sign-in
+status (see [Accounts](ACCOUNTS.md#antigravity-accounts)).
+
+If none of these CLIs is found, the view says **No agent CLI found** and opens
+**Installed agents and setup**, which lists what it checked. Install one, then
+choose **Check installed agents**, or choose **Use the built-in agent** to work
+with a model provider instead. Switchya looks for the native `codex`, `claude`
+and `agy` programs in their usual per-user install folders and on `PATH`; on
+Windows it does not use `.cmd` or `.bat` wrappers.
 
 Existing-agent conversations are saved on this computer and remain after
 Switchya restarts. They are separate from built-in Switchya sessions. Choose
-one under **Conversations in this project** and **Send** a message to continue
-it; it keeps the account that started it. Choose **New conversation** for
-separate work. Opening or refreshing a conversation never starts work.
+one under **Conversations** in the project rail and **Send** a message to
+continue it; it keeps the account that started it. Choose **New conversation**
+for separate work. Opening or refreshing a conversation never starts work.
 
 If Switchya stopped while a run was active, that run shows **Review the
 interrupted run**. The agent may already have run a command or changed a file.

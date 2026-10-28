@@ -18,7 +18,8 @@ export const displayPath = path => {
 export const modelId = model => typeof model?.id === 'string' ? model.id : '';
 export const isMockModel = model => modelId(model).startsWith('mock-') || model?.owned_by === 'mock' || model?.provider === 'mock';
 export const toolName = name => ({read_file:'Read file',search:'Search project',search_files:'Search project',list_files:'List files',apply_patch:'Edit files',run_command:'Run command'}[name] || String(name||'Tool operation').replaceAll('_',' '));
-export const toolStateLabel = state => ({proposed:'Proposed',pending:'Proposed',awaiting_approval:'Needs approval',approved:'Approved once',auto_approved:'Auto-approved',denied:'Denied',running:'Running',completed:'Completed',ok:'Completed',error:'Failed',failed:'Failed',interrupted:'Interrupted'}[state] || String(state||'Proposed').replaceAll('_',' '));
+// Commands also end as cancelled (interrupted) or timed_out; the review result uses the same words.
+export const toolStateLabel = state => ({proposed:'Proposed',pending:'Proposed',awaiting_approval:'Needs approval',approved:'Approved once',auto_approved:'Auto-approved',denied:'Denied',running:'Running',completed:'Completed',ok:'Completed',error:'Failed',failed:'Failed',cancelled:'Cancelled',timed_out:'Timed out',interrupted:'Interrupted'}[state] || String(state||'Proposed').replaceAll('_',' '));
 
 /** Plain description of a journalled session approval-setting change. */
 export function autoApproveChange(payload={}) {

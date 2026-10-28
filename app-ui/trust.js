@@ -16,7 +16,7 @@ export function autoApproveLabel(policy){
   if(edits&&commands)return 'Edits and commands run without asking';
   if(edits)return 'Edits apply without asking · commands need approval';
   if(commands)return 'Commands run without asking · edits need approval';
-  return 'Writes and commands need approval';
+  return 'Edits and commands need approval';
 }
 
 export const autoApproveTone=policy=>normalPolicy(policy).commands?'stop':normalPolicy(policy).edits?'caution':'neutral';
@@ -31,8 +31,16 @@ export function trustWarning(projectPolicy,sessionPolicy){
   return null;
 }
 
-function Toggles({value,onChange,disabled,idPrefix}){
-  return html`<fieldset class="trust-toggles" disabled=${disabled}><label class="trust-toggle" for=${`${idPrefix}-edits`}><input id=${`${idPrefix}-edits`} type="checkbox" checked=${value.edits} onChange=${event=>onChange({...value,edits:event.currentTarget.checked})}/><span><strong>Apply file edits without asking</strong><span class="field-hint">Edits are still journalled with their diff. Repository metadata, likely secrets, links and short-name aliases stay blocked. Edits outside the project, to Switchya’s own state, gateway or agent account settings, and to files other programs load by themselves (shell profiles, Git, editor and agent settings) still ask, as does every edit in a project that contains your home folder.</span></span></label><label class="trust-toggle" for=${`${idPrefix}-commands`}><input id=${`${idPrefix}-commands`} type="checkbox" checked=${value.commands} onChange=${event=>onChange({...value,commands:event.currentTarget.checked})}/><span><strong>Run shell commands without asking</strong><span class="field-hint">Commands run with your account’s full machine and network access. The project folder is not a sandbox.</span></span></label></fieldset>`;
+/** One toggle. Its name is the short title; the explanation is its description, so a
+ * screen reader does not read the whole paragraph as the checkbox's name. */
+function Toggle({id,checked,onChange,title,hint}){
+  return html`<label class="trust-toggle" for=${id}><input id=${id} type="checkbox" checked=${checked} aria-labelledby=${`${id}-title`} aria-describedby=${`${id}-hint`} onChange=${event=>onChange(event.currentTarget.checked)}/><span><strong id=${`${id}-title`}>${title}</strong><span class="field-hint" id=${`${id}-hint`}>${hint}</span></span></label>`;
+}
+
+/** The project and the session each have a set; the group takes its section's heading
+ * as its name so the two identical sets stay distinguishable. */
+function Toggles({value,onChange,disabled,idPrefix,labelledBy}){
+  return html`<fieldset class="trust-toggles" disabled=${disabled} aria-labelledby=${labelledBy}><${Toggle} id=${`${idPrefix}-edits`} checked=${value.edits} onChange=${edits=>onChange({...value,edits})} title="Apply file edits without asking" hint="Each edit is still recorded with its diff. Repository metadata (.git), likely secrets, links and Windows short-name aliases stay blocked. These still ask: edits outside the project; edits to Switchya’s own data or gateway configuration, or to an agent account’s settings; edits to files other programs load by themselves (shell profiles, Git, editor and agent settings); and every edit in a project that contains your home folder."/><${Toggle} id=${`${idPrefix}-commands`} checked=${value.commands} onChange=${commands=>onChange({...value,commands})} title="Run shell commands without asking" hint="Commands run with your account’s full machine and network access. The project folder is not a sandbox."/></fieldset>`;
 }
 
 export function TrustDialog({open,onClose,project,view,onSaveProject,onSaveSession}){
@@ -60,9 +68,9 @@ export function TrustDialog({open,onClose,project,view,onSaveProject,onSaveSessi
     finally{setBusy(false);}
   }
   return html`<${Dialog} open=${open} onClose=${()=>!busy&&onClose()} title="Approval settings" class="trust-dialog"><form onSubmit=${save}><div class="dialog-body">
-    <p class="field-hint">Off by default. When on, the built-in agent and existing agents proceed without a per-operation prompt. Every edit and command is still recorded, and you can interrupt at any time. A change applies at once, including to running work: operations that have not started use the new setting, and one already waiting still needs your decision.</p>
-    <section class="trust-section" aria-labelledby="trust-project"><h3 id="trust-project">Project: ${project?.name||'No project'}</h3><${Toggles} idPrefix="trust-project" value=${projectPolicy} onChange=${setProjectPolicy} disabled=${busy||!project}/></section>
-    ${session&&html`<section class="trust-section" aria-labelledby="trust-session"><h3 id="trust-session">This session</h3><div class="trust-mode" role="radiogroup" aria-labelledby="trust-session"><label><input type="radio" name="trust-mode" checked=${sessionMode==='inherit'} onChange=${()=>setSessionMode('inherit')} disabled=${busy}/> Use the project setting</label><label><input type="radio" name="trust-mode" checked=${sessionMode==='custom'} onChange=${()=>setSessionMode('custom')} disabled=${busy}/> Set for this session only</label></div>${sessionMode==='custom'&&html`<${Toggles} idPrefix="trust-session" value=${sessionPolicy} onChange=${setSessionPolicy} disabled=${busy}/>`}</section>`}
+    <p class="field-hint">Off by default. When on, the built-in agent and existing agents go ahead without asking you about each edit or command. Every edit and command is still recorded, and you can interrupt at any time. A change applies at once, also to work in progress: operations that have not started follow the new setting, and a request already waiting still needs your decision.</p>
+    <section class="trust-section" aria-labelledby="trust-project"><h3 id="trust-project">Project: ${project?.name||'No project'}</h3><${Toggles} idPrefix="trust-project" labelledBy="trust-project" value=${projectPolicy} onChange=${setProjectPolicy} disabled=${busy||!project}/></section>
+    ${session&&html`<section class="trust-section" aria-labelledby="trust-session"><h3 id="trust-session">This session</h3><div class="trust-mode" role="radiogroup" aria-labelledby="trust-session"><label><input type="radio" name="trust-mode" checked=${sessionMode==='inherit'} onChange=${()=>setSessionMode('inherit')} disabled=${busy}/> Use the project setting</label><label><input type="radio" name="trust-mode" checked=${sessionMode==='custom'} onChange=${()=>setSessionMode('custom')} disabled=${busy}/> Set for this session only</label></div>${sessionMode==='custom'&&html`<${Toggles} idPrefix="trust-session" labelledBy="trust-session" value=${sessionPolicy} onChange=${setSessionPolicy} disabled=${busy}/>`}</section>`}
     ${warning==='commands'?html`<${Notice} title="Commands will run without review" tone="stop">The agent can run any shell command with your permissions, including commands that delete files, change other projects or use the network. The project setting also applies to its other sessions and to existing-agent runs. Turn this on only for projects and models you trust.<//>`:warning==='edits'?html`<${Notice} title="Edits will apply without review" tone="caution">Review the recorded changes and diffs afterwards. Edits are not rolled back automatically. The project setting also applies to its other sessions and to existing-agent runs.<//>`:null}
     ${error&&html`<p class="field-error" role="alert">${error}</p>`}
   </div><footer class="form-actions"><${Button} onClick=${onClose} disabled=${busy}>Cancel<//><${Button} type="submit" variant="primary" disabled=${busy||!project} busy=${busy}>${busy?'Saving…':'Save'}<//></footer></form><//>`;

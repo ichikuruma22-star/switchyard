@@ -1,6 +1,6 @@
-import { html, useState } from './vendor/preact-htm.js';
+import { html, useEffect, useRef, useState } from './vendor/preact-htm.js';
 import { Icon } from './icons.js';
-import { Button, Notice, RawValue, CopyButton, SignalLight, downloadText } from './components.js';
+import { Button, Notice, RawValue, CopyButton, SignalLight, downloadText, useFocusRecovery } from './components.js';
 import { DiffView } from './diff.js';
 import { reviewOperations, toolName, toolStateLabel } from './presentation.js';
 
@@ -67,13 +67,20 @@ export function Result({operation}) {
 
 export function ReviewPane({pendingOperation,events=[],selectedOperationId='',onSelectOperation,onDecision,decisionBusy=false,decisionError='',disabled=false}) {
   const [tab,setTab]=useState('changes');
+  const heading=useRef(null), selectedHeading=useRef(null);
   const {history,changes,checks,pendingChanges,changeCount}=reviewSummary(events,pendingOperation);
   const visible=tab==='changes'?changes:checks;
   const selected=history.find(operation=>operation.id===selectedOperationId);
-  return html`<header class="review-header"><div><p class="eyebrow">REVIEW</p><h2>Actions & results</h2></div><${SignalLight} count=${pendingOperation?1:0}/></header><div class="review-content">
+  const trackFocus=useFocusRecovery(`${pendingOperation?.id||''}:${selected?.id||''}`,heading);
+  // Opening a transcript row's details moves focus to them, which also scrolls them
+  // into view. Only the request itself moves focus: details that appear later (a
+  // pending operation once decided) or a pane mounting with them open do not.
+  const requestedSelection=useRef(selectedOperationId);
+  useEffect(()=>{if(selectedOperationId!==requestedSelection.current&&selected)selectedHeading.current?.focus();requestedSelection.current=selectedOperationId;},[selectedOperationId]);
+  return html`<header class="review-header"><div><p class="eyebrow">REVIEW</p><h2 ref=${heading} tabindex="-1">Actions & results</h2></div><${SignalLight} count=${pendingOperation?1:0}/></header><div class="review-content" onfocusin=${trackFocus}>
     ${pendingOperation&&html`<section class="approval" aria-label="Pending approval"><p class="eyebrow">YOUR APPROVAL IS REQUIRED</p><h3>${pendingOperation.name==='apply_patch'?'Review proposed edits':pendingOperation.name==='run_command'?'Review command':pendingOperation.name}</h3><p class="field-hint">Allow once applies only to this exact recorded request.</p><${Proposal} operation=${pendingOperation}/><${Identity} operation=${pendingOperation}/>${decisionError&&html`<p class="field-error" role="alert">${decisionError}</p>`}<div class="approval-actions"><${Button} onClick=${()=>onDecision(pendingOperation,'deny')} disabled=${disabled||decisionBusy}>Deny<//><${Button} variant="primary" icon="check" onClick=${()=>onDecision(pendingOperation,'allow_once')} disabled=${disabled||decisionBusy} busy=${decisionBusy}>${decisionBusy?'Confirming…':'Allow once'}<//></div></section>`}
     ${!pendingOperation&&decisionError&&html`<${Notice} title="Approval status" tone="stop">${decisionError}<//>`}
-    ${selected&&html`<section class="selected-operation"><div class="check-heading"><h3>${toolName(selected.name)}</h3><${Button} onClick=${()=>onSelectOperation?.('')}>Close details<//></div><${Proposal} operation=${selected}/><${Result} operation=${selected}/><${Identity} operation=${selected}/></section>`}
+    ${selected&&html`<section class="selected-operation"><div class="check-heading"><h3 ref=${selectedHeading} tabindex="-1">${toolName(selected.name)}</h3><${Button} onClick=${()=>onSelectOperation?.('')}>Close details<//></div><${Proposal} operation=${selected}/><${Result} operation=${selected}/><${Identity} operation=${selected}/></section>`}
     <div class="review-tabs" role="group" aria-label="Review category"><button type="button" aria-pressed=${tab==='changes'} data-active=${tab==='changes'} aria-label=${`Proposals: ${changeCount} proposal${changeCount===1?'':'s'}${pendingChanges?', including one awaiting approval':''}`} onClick=${()=>setTab('changes')}>Proposals <span>${changeCount}</span></button><button type="button" aria-pressed=${tab==='checks'} data-active=${tab==='checks'} onClick=${()=>setTab('checks')}>Results <span>${checks.length}</span></button></div>
     ${tab==='changes'&&pendingChanges&&html`<p class="field-hint review-pending-note">The change proposal above is awaiting your decision. It has not been applied.</p>`}
     ${visible.length===0&&!(tab==='changes'&&pendingChanges)&&html`<div class="empty-review"><${Icon} name=${tab==='changes'?'edit':'command'}/><h3>${tab==='changes'?'No proposals in this activity.':'No tool results in this activity.'}</h3><p>${tab==='changes'?'File edits are shown as diffs before you approve them.':'Commands include their actual output and exit status when available.'}</p></div>`}
