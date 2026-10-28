@@ -19,11 +19,22 @@ for (const name of ['index.html', '404.html']) {
     if (/^https:\/\//.test(target)) { new URL(target); continue; }
     if (target.startsWith('#')) { assert.ok(ids.has(target.slice(1)), `${name}: missing ${target}`); continue; }
     if (!target.startsWith('/')) { assert.ok(ids.has(target), `${name}: missing control ${target}`); continue; }
-    const file = resolve(root, `.${target === '/' ? '/index.html' : target}`);
+    const [path, fragment] = target.split('#');
+    const file = resolve(root, `.${path === '/' ? '/index.html' : path}`);
     assert.ok((await stat(file)).isFile(), `${name}: missing ${target}`);
+    // A same-site link to a section (/#availability) must name an ID on that page.
+    if (fragment) assert.ok((await readFile(file, 'utf8')).includes(` id="${fragment}"`), `${name}: missing ${target}`);
     localReferences++;
   }
 }
+// Structured data must parse, and the FAQ it describes must be the one on the page.
+const home = await readFile(resolve(root, 'index.html'), 'utf8');
+const structured = JSON.parse(home.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)[1]);
+const faq = structured['@graph'].find(item => item['@type'] === 'FAQPage').mainEntity.map(question => question.name);
+const summaries = [...home.matchAll(/<summary>([^<]+)<\/summary>/g)].map(match => match[1]);
+assert.deepEqual(faq, summaries, 'index.html: FAQ structured data does not match the visible questions');
+const app = structured['@graph'].find(item => item['@type'] === 'SoftwareApplication');
+assert.ok(home.includes(`href="${app.downloadUrl}"`), 'index.html: structured downloadUrl is not the page download link');
 const css = await readFile(resolve(root, 'site.css'), 'utf8');
 for (const [, target] of css.matchAll(/url\(['"]?(\/[^)'"\s]+)['"]?\)/g)) {
   assert.ok((await stat(resolve(root, `.${target}`))).isFile(), `CSS: missing ${target}`);
