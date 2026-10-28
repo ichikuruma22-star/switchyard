@@ -1127,6 +1127,9 @@ async fn trust_never_unblocks_protected_paths_or_the_apps_own_state() {
         )
         .unwrap();
     let session = h.engine.create_session(&outer.id, "fixture").unwrap();
+    // On a case-sensitive filesystem `STATE` is its own folder; create it so the
+    // edit reaches the approval check there too (elsewhere it is `state`).
+    std::fs::create_dir_all(h.temp.path().join("STATE")).unwrap();
     h.fake.script(
         UPSTREAM_KEY,
         [
