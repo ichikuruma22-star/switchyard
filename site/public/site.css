@@ -469,6 +469,10 @@ h1{font-size:clamp(38px,8.8vw,55px);margin-top:19px}
 @media(max-width:360px){.preview[data-enhanced] .preview-panel{min-height:640px}
 }
 
+@media(forced-colors:active){.preview-tabs button[aria-selected=true]{border-color:Highlight;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:5px}
+.architecture-line,.route-connector,.architecture-junction::before,.architecture-junction::after,.status-dot,.route-dot,.requirements li::before{background:CanvasText}
+}
+
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}
 *,*::before,*::after{animation:none!important;transition:none!important}
 }

@@ -60,7 +60,8 @@ Switchyard Gateway              Actual download, setup, protocol details
 Downloads and status             Windows app / CLI preview; Gateway release
 
 Questions.                       Cost, data, models, approvals, storage,
-                                 unsigned ZIP, platforms, Gateway relation
+                                 unsigned ZIP, updates, platforms,
+                                 Gateway relation, help
 ```
 
 The getting-started steps and the questions are plain lists, not cards. Each
@@ -77,6 +78,6 @@ The refined website was visually approved and published on 3 October 2026 as ver
 
 ## Accessibility and publication
 
-Keep keyboard focus visible, touch targets at least 44 CSS pixels, and the page readable at narrow widths and 200% zoom. Tabs use keyboard navigation and announce selection. The page's content remains available without JavaScript. Respect reduced-motion preferences and avoid automatic movement.
+Keep keyboard focus visible, touch targets at least 44 CSS pixels, and the page readable at narrow widths and 200% zoom. Tabs use keyboard navigation and announce selection. The page's content remains available without JavaScript. Respect reduced-motion preferences and avoid automatic movement. In Windows contrast themes (forced colors), shadows and background colours disappear: give selected states a border or underline in system colours, and draw diagram lines with `CanvasText`.
 
 The website has no account signup, mailing-list form, analytics, or tracking scripts. Do not imply those services exist. Do not add an app download link until an actual app artifact is available. Verify source links against published branches before publication. Domain ownership does not mean the website has been deployed.

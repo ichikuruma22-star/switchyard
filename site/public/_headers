@@ -11,3 +11,14 @@
 /assets/fonts/*
   ! Cache-Control
   Cache-Control: public, max-age=2592000, no-transform
+
+# HTML keeps no-transform so Cloudflare serves it byte for byte, with no
+# injected scripts. no-transform also turns off Cloudflare's compression, so
+# the stylesheet and script drop it and are served with Brotli or gzip.
+/site.css
+  ! Cache-Control
+  Cache-Control: public, max-age=0, must-revalidate
+
+/site.js
+  ! Cache-Control
+  Cache-Control: public, max-age=0, must-revalidate
