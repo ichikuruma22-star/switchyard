@@ -26,8 +26,14 @@ export function commandResultPresentation(result={}) {
   };
 }
 
+export function approvalText(approval) {
+  if(approval.decision==='deny')return 'You denied it.';
+  if(approval.auto)return `Auto-approved by ${approval.source==='session'?'this session’s':'the project’s'} approval setting, without a prompt.`;
+  return 'You allowed it once.';
+}
+
 function Identity({operation}) {
-  return html`<details class="operation-details"><summary>Exact request details</summary><dl><dt>Tool</dt><dd><code>${operation.name}</code></dd><dt>Operation</dt><dd><code>${operation.id}</code></dd><dt>Argument hash</dt><dd><code>${operation.arguments_hash||'Not present in retained events'}</code></dd></dl>${operation.arguments&&html`<${RawValue} value=${operation.arguments} label="Exact tool arguments"/>`}</details>`;
+  return html`<details class="operation-details"><summary>Exact request details</summary><dl><dt>Tool</dt><dd><code>${operation.name}</code></dd><dt>Operation</dt><dd><code>${operation.id}</code></dd><dt>Argument hash</dt><dd><code>${operation.arguments_hash||'Not present in retained events'}</code></dd>${operation.approval&&html`<dt>Decision</dt><dd>${approvalText(operation.approval)}</dd>`}</dl>${operation.arguments&&html`<${RawValue} value=${operation.arguments} label="Exact tool arguments"/>`}</details>`;
 }
 
 function Proposal({operation}) {

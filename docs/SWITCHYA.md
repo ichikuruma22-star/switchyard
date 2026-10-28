@@ -184,6 +184,54 @@ runs with your account's operating-system permissions and network access;
 its project working directory is not an OS sandbox. Commands may affect files
 or services outside the project if their normal permissions allow it.
 
+### Approve automatically (opt-in)
+
+Every edit and command asks for a decision by default. For a project you
+trust, select the approval note beside the model picker (it reads **Writes
+and commands need approval**) to open **Approval settings**:
+
+- **Apply file edits without asking** applies the agent's file edits as soon as
+  they are proposed.
+- **Run shell commands without asking** runs proposed commands immediately,
+  with your account's full machine and network access. The project folder is
+  not a sandbox.
+
+Choose either or both for the whole project. In an open session you can
+instead **Set for this session only**, which overrides the project setting for
+that session, or return to **Use the project setting**. While anything is
+automatic, the composer note turns amber (edits) or red (commands) and the
+header shows **Auto-approve on**.
+
+Automatic approval only replaces the click. Each operation is still proposed,
+recorded with its exact arguments and diff, and marked **Auto-approved** in the
+transcript and review pane, followed by its real result. The tools still
+refuse repository metadata (`.git`), likely secrets such as `.env` and `.ssh`,
+links and Windows short-name aliases. Some edits always ask, even in a
+trusted project: edits to Switchya's own data directory or gateway
+configuration, to files other programs load by themselves (shell startup files
+and PowerShell profiles, `.gitconfig`, `.husky`, `.githooks`,
+`.pre-commit-config.yaml`, `.envrc`, `.vscode`, `.mcp.json`, `.claude.json`),
+and every edit in a project that is, or contains, your home folder.
+**Interrupt** stops the run at any time; nothing is rolled back. A change
+applies at once to every operation that has not started, even one waiting
+behind another session's change; one already waiting for your decision still
+needs it. Running sessions that follow the project show the change in their
+history.
+
+The same project setting applies to **Existing agents** runs, including ones
+already running: Switchya reads it when each request arrives. Switchya then
+answers complete single-operation requests from Codex (commands, file changes)
+and Claude Code (Write, Edit, MultiEdit, NotebookEdit for edits; Bash and
+PowerShell for commands) itself and records them as **Approved
+automatically**, with the files or command they covered. A file change
+qualifies only when every file it writes is an ordinary file inside the
+project, under the same rules as the built-in agent, and outside the agent
+account's own settings. Requests that cannot be allowed once (deny-only, such
+as a broad Codex write grant or Claude's plan-mode and question tools) and any
+other tool, including MCP and web tools, still wait for you. The agents keep
+their own policies: Codex stays in its read-only sandbox with on-request
+approvals and Claude Code in default permission mode.
+
 After an operation, inspect the recorded result, output, file changes and
 command exit code. **Completed** means the model finished the run. It does
 not mean the project passed tests, the change was reviewed or a release was
@@ -223,9 +271,25 @@ switchya chat --session 'SESSION_ID'
 
 Use an actual model ID from `models` and an actual session ID from `sessions`
 or the `Session:` line printed when the CLI creates one. `chat` is interactive;
-enter `/exit` to leave. `run` submits one prompt. Neither command replaces
-human approval with automatic permission: a noninteractive run that needs
-an edit or command decision stops instead of approving it.
+enter `/exit` to leave. `run` submits one prompt. Without an approval setting,
+a noninteractive run that needs an edit or command decision stops instead of
+approving it.
+
+To skip the prompts, opt in explicitly. `trust` changes the project setting
+shown in the app; `--auto-approve` saves a setting for one session:
+
+```powershell
+switchya trust --project 'C:\projects\my-app'
+switchya trust --project 'C:\projects\my-app' --edits on --commands on
+switchya run --project 'C:\projects\my-app' --model 'MODEL_ID' --auto-approve all --prompt 'Fix the failing test and run the suite.'
+switchya chat --session 'SESSION_ID' --auto-approve edits
+```
+
+`--auto-approve` accepts `edits`, `commands`, `all`, `off` (ask for
+everything, even if the project is trusted) and `inherit` (follow the project
+again). `chat` and `run` print the setting in force, and each automatically
+approved operation is printed with its command or file paths. The limits in
+[Approve automatically](#approve-automatically-opt-in) apply unchanged.
 
 In an interactive terminal, review the displayed operation and type
 `allow_once OPERATION_ID` or `deny OPERATION_ID` exactly. Attaching `chat` to
@@ -363,7 +427,9 @@ the runs they start.
 
 Interactive approval requires typing `allow_once APPROVAL_ID` or
 `deny APPROVAL_ID` for the exact displayed request. Deny-only requests cannot
-be approved. Without an interactive terminal, approval-required work that this
+be approved. When the project auto-approves edits or commands, `agent run` and
+`agent continue` print that setting and each request Switchya approved
+automatically; see [Approve automatically](#approve-automatically-opt-in). Without an interactive terminal, approval-required work that this
 CLI started stops without approval. For a started run, Ctrl-C requests
 interruption; the CLI reads back the outcome and reports when it is still
 uncertain.

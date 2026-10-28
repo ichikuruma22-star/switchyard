@@ -234,3 +234,8 @@ test('transcript tool rows use readable names and keep unknown names exactly',as
   // Approval titles always keep the exact tool name.
   assert.equal(approvalSummary({method:'claude/can_use_tool',preview:{request:{tool_name:'Bash',input:{command:'ls'}}}}).title,'Allow Claude Code to use Bash?');
 });
+test('an existing-agent request answered by the approval setting is recorded as automatic',()=>{
+  const [auto,human]=adapterTranscript([event(1,'approval_resolved',{approval_id:'a',decision:'allow_once',decided_by:'auto_approve'}),event(2,'approval_resolved',{approval_id:'b',decision:'allow_once'})]);
+  assert.equal(auto.type,'decision');assert.equal(auto.auto,true);
+  assert.equal(human.type,'decision');assert.equal(human.auto,false);
+});

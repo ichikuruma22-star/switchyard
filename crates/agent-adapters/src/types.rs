@@ -1,3 +1,4 @@
+use crate::trust::AutoApprovalSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -29,6 +30,57 @@ pub struct StartRequest {
     /// Resolved by the trusted account manager, never accepted from HTTP JSON.
     #[serde(skip)]
     pub profile: Option<ProfileBinding>,
+    /// Reads the project's opt-in approval setting whenever a request arrives.
+    /// Resolved by the app from saved project state, never accepted from HTTP
+    /// JSON; the default asks a person every time.
+    #[serde(skip)]
+    pub auto_approve: AutoApprovalSource,
+    /// Files and folders whose edits always go to a person, such as the app's
+    /// data and gateway configuration. A managed account's home is added.
+    #[serde(skip)]
+    pub review_paths: Vec<PathBuf>,
+}
+
+/// Which complete, single-operation requests Switchya answers itself instead of
+/// asking. Requests that cannot be allowed once (deny-only) always wait for a
+/// person, and the agent's own sandbox and permission mode are unchanged.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoApproval {
+    pub edits: bool,
+    pub commands: bool,
+}
+
+/// The category an approval request belongs to, when Switchya can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApprovalKind {
+    Edit,
+    Command,
+}
+
+impl AutoApproval {
+    pub(crate) fn allows(&self, kind: Option<ApprovalKind>) -> bool {
+        match kind {
+            Some(ApprovalKind::Edit) => self.edits,
+            Some(ApprovalKind::Command) => self.commands,
+            None => false,
+        }
+    }
+}
+
+/// A run history's description of a changed approval setting.
+pub(crate) fn auto_approval_text(policy: AutoApproval) -> &'static str {
+    match (policy.edits, policy.commands) {
+        (false, false) => "Every file change and command now waits for you.",
+        (true, false) => {
+            "Switchya now approves complete changes to ordinary project files itself; commands wait for you."
+        }
+        (false, true) => {
+            "Switchya now approves complete commands itself; file changes wait for you."
+        }
+        (true, true) => {
+            "Switchya now approves complete commands and changes to ordinary project files itself."
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +145,11 @@ pub struct AdapterRun {
     #[serde(default)]
     pub history_error: Option<String>,
     pub permission_boundary: String,
+    /// The project's approval setting as this run last saw it: read when the run
+    /// starts and updated when the setting changes while it is active. Every
+    /// request reads the current setting.
+    #[serde(default)]
+    pub auto_approve: AutoApproval,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

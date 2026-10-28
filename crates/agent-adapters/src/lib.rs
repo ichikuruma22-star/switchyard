@@ -16,6 +16,7 @@ mod store;
 mod terminal;
 #[cfg(unix)]
 mod terminal_unix;
+mod trust;
 mod types;
 
 pub use accounts::*;
@@ -30,6 +31,7 @@ use std::{
 pub use terminal::launch_profile_terminal;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+pub use trust::AutoApprovalSource;
 pub use types::*;
 
 /// Runs retained across restarts. The oldest inactive conversations are removed
@@ -305,6 +307,7 @@ impl AdapterManager {
             ephemeral,
             history_error: None,
             permission_boundary: types::permission_boundary(&adapter_id).into(),
+            auto_approve: request.auto_approve.current(),
         };
         let mut stored = StoredRun {
             view,
@@ -329,7 +332,24 @@ impl AdapterManager {
         }
         let state = Arc::new(Mutex::new(stored));
         let (control, receiver) = mpsc::channel(8);
+        // Edits to the agent account's own settings always go to a person: a
+        // managed profile's home, or the folders the agents' variables select.
+        let mut review_paths = request.review_paths;
+        review_paths.extend(
+            request
+                .profile
+                .as_ref()
+                .filter(|profile| profile.managed)
+                .map(|profile| profile.home.clone()),
+        );
+        review_paths.extend(
+            ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
+                .into_iter()
+                .filter_map(std::env::var_os)
+                .map(PathBuf::from),
+        );
         let input = protocol::RunInput {
+            trust: trust::Trust::new(request.auto_approve, project.clone(), review_paths),
             project,
             profile: request.profile,
             prompt: request.prompt,
@@ -490,6 +510,30 @@ impl AdapterManager {
             let run = entry.run.lock();
             run.view.profile_id.as_deref() == Some(profile_id) && run.view.state.is_active()
         })
+    }
+
+    /// Record a project's new approval setting in its active runs. Their
+    /// requests already read the setting live; this keeps each run's view and
+    /// history in step with it.
+    pub fn note_auto_approve(&self, project: &Path, policy: AutoApproval) {
+        let project = project
+            .canonicalize()
+            .unwrap_or_else(|_| project.to_owned());
+        let project = project.to_string_lossy();
+        for entry in self.inner.runs.lock().values() {
+            let mut run = entry.run.lock();
+            if !run.view.state.is_active()
+                || run.view.project_path != project
+                || run.view.auto_approve == policy
+            {
+                continue;
+            }
+            run.view.auto_approve = policy;
+            run.event(
+                "auto_approve_changed",
+                json!({"policy":policy,"message":types::auto_approval_text(policy)}),
+            );
+        }
     }
 
     pub fn run(&self, id: &str) -> Result<AdapterRun> {
@@ -744,15 +788,27 @@ impl StoredRun {
         self.event_bytes += event_size(&event);
         self.events.push_back(event.clone());
         while self.events.len() > MAX_EVENTS || self.event_bytes > MAX_EVENT_BYTES {
-            let Some(oldest) = self.events.pop_front() else {
+            // Decisions outlive other events while they fit in half the window,
+            // so a long run still shows what was approved, and by whom.
+            let (count, bytes) = self
+                .events
+                .iter()
+                .filter(|e| kept_longer(e))
+                .fold((0, 0), |(count, bytes), e| {
+                    (count + 1, bytes + event_size(e))
+                });
+            let index = if count > MAX_EVENTS / 2 || bytes > MAX_EVENT_BYTES / 2 {
+                self.events.iter().position(kept_longer)
+            } else {
+                self.events.iter().position(|e| !kept_longer(e))
+            };
+            let Some(oldest) = self.events.remove(index.unwrap_or(0)) else {
                 break;
             };
             self.event_bytes = self.event_bytes.saturating_sub(event_size(&oldest));
             removed.push(oldest.seq);
-            self.view.first_retained_seq = self
-                .events
-                .front()
-                .map_or(self.view.last_seq + 1, |e| e.seq);
+            // Every event from here on is retained; older decisions may remain.
+            self.view.first_retained_seq = self.view.first_retained_seq.max(oldest.seq + 1);
         }
         self.persist(Some(&event), &removed);
     }
@@ -779,6 +835,10 @@ impl StoredRun {
             self.view.history_error = Some("Switchya could not save this run's history. Its output remains visible until the host exits; after a restart it will require review.".into());
         }
     }
+}
+
+fn kept_longer(event: &AdapterEvent) -> bool {
+    event.kind == "approval_resolved"
 }
 
 fn event_size(event: &AdapterEvent) -> usize {

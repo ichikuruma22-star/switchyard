@@ -42,6 +42,8 @@ fn request(project: &Path, previous: Option<String>) -> StartRequest {
         .into(),
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: previous,
+        auto_approve: Default::default(),
+        review_paths: Vec::new(),
         profile: Some(ProfileBinding {
             id: "claude-fixture".into(),
             name: "Claude fixture".into(),
@@ -443,4 +445,105 @@ async fn claude_requires_an_explicit_valid_account() {
         AdapterManager::new().start(request),
         Err(AdapterError::Invalid(_))
     ));
+}
+
+#[tokio::test]
+async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests() {
+    // `account_inside` keeps the fixture account's own folder in the project.
+    let start_auto = |manager: &AdapterManager,
+                      scenario: &str,
+                      auto_approve: AutoApproval,
+                      account_inside: bool| {
+        let directory = tempfile::tempdir().unwrap();
+        let account = tempfile::tempdir().unwrap();
+        let project = directory.path().canonicalize().unwrap();
+        let mut request = request(&project, None);
+        request.auto_approve = AutoApprovalSource::new(move || auto_approve);
+        if !account_inside {
+            request.profile.as_mut().unwrap().home = account.path().to_owned();
+        }
+        let run = manager
+            .start_process(request, project, fixture(), vec![scenario.into()])
+            .unwrap();
+        (directory, account, run)
+    };
+    let edits = AutoApproval {
+        edits: true,
+        commands: false,
+    };
+    // Write is a file edit: it is answered without a prompt.
+    let manager = AdapterManager::new();
+    let (directory, _account, run) = start_auto(&manager, "allow", edits, false);
+    let finished = wait(&manager, &run.id, |run| !run.state.is_active()).await;
+    assert_eq!(finished.state, RunState::Completed);
+    manager.shutdown().await;
+    assert!(directory.path().join("approved.txt").exists());
+    let events = manager.events(&run.id, 0, 200).unwrap();
+    assert!(events.iter().any(|e| e.kind == "approval_requested"));
+    let decision = events
+        .iter()
+        .find(|e| e.kind == "approval_resolved")
+        .unwrap();
+    assert_eq!(decision.payload["decided_by"], "auto_approve");
+    assert_eq!(decision.payload["decision"], "allow_once");
+    assert_eq!(decision.payload["request"]["tool"], "Write");
+    assert!(
+        decision.payload["request"]["paths"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("approved.txt")
+    );
+
+    // Commands-only trust does not cover Write; deny-only plan changes, a write
+    // to a Git hook and a write into the account's own folder always ask.
+    for (scenario, auto, account_inside) in [
+        (
+            "allow",
+            AutoApproval {
+                edits: false,
+                commands: true,
+            },
+            false,
+        ),
+        (
+            "deny_only",
+            AutoApproval {
+                edits: true,
+                commands: true,
+            },
+            false,
+        ),
+        ("write_hook", edits, false),
+        ("allow", edits, true),
+    ] {
+        let manager = AdapterManager::new();
+        let (directory, _account, run) = start_auto(&manager, scenario, auto, account_inside);
+        let pending = wait(&manager, &run.id, |run| {
+            run.state == RunState::AwaitingApproval
+        })
+        .await;
+        let approval = &pending.pending_approvals[0];
+        manager
+            .decide(
+                &run.id,
+                &approval.id,
+                &approval.expected_hash,
+                ApprovalDecision::Deny,
+            )
+            .await
+            .unwrap();
+        wait(&manager, &run.id, |run| !run.state.is_active()).await;
+        manager.shutdown().await;
+        assert!(
+            !directory.path().join("approved.txt").exists(),
+            "{scenario}"
+        );
+    }
+    assert_eq!(claude::tool_kind("Edit"), Some(types::ApprovalKind::Edit));
+    assert_eq!(
+        claude::tool_kind("PowerShell"),
+        Some(types::ApprovalKind::Command)
+    );
+    assert_eq!(claude::tool_kind("WebFetch"), None);
+    assert_eq!(claude::tool_kind("mcp__server__tool"), None);
 }

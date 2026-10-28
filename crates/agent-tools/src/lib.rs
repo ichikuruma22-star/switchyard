@@ -68,6 +68,46 @@ pub fn project_root(root: &Path) -> Result<PathBuf, ToolError> {
     files::resolve(root, ".", true, false)
 }
 
+/// Check one project-relative path for an edit that no person reviews (an
+/// auto-approved edit): the file tools' checks, plus files that other programs
+/// load and act on by themselves. A project that contains the user's home
+/// folder never qualifies. Missing files pass; the edit would create them.
+pub fn check_unreviewed_edit(root: &Path, path: &str) -> Result<(), ToolError> {
+    files::check_unreviewed_edit(root, path)
+}
+
+/// Component-wise prefix test for protected locations. It ignores letter case
+/// and Windows `\\?\` prefixes on every platform, because a false match only
+/// sends an edit to a person.
+pub fn path_within(path: &Path, base: &Path) -> bool {
+    let (path, base) = (comparable(path), comparable(base));
+    !base.is_empty() && path.len() >= base.len() && path[..base.len()] == base[..]
+}
+
+fn comparable(path: &Path) -> Vec<String> {
+    use std::path::{Component, Prefix};
+    path.components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .map(|component| {
+            let text = match component {
+                Component::Prefix(prefix) => match prefix.kind() {
+                    Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+                        format!("{}:", char::from(drive))
+                    }
+                    Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => format!(
+                        r"\\{}\{}",
+                        server.to_string_lossy(),
+                        share.to_string_lossy()
+                    ),
+                    _ => component.as_os_str().to_string_lossy().into_owned(),
+                },
+                _ => component.as_os_str().to_string_lossy().into_owned(),
+            };
+            text.to_lowercase()
+        })
+        .collect()
+}
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -99,6 +139,13 @@ pub struct PreparedTool {
     plan: Plan,
     sealed_preview: Value,
     sealed_hash: String,
+}
+
+impl PreparedTool {
+    /// The canonical project root this plan reads and writes under.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
 }
 
 #[derive(Clone, Debug)]

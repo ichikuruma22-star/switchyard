@@ -378,6 +378,20 @@ pub(crate) fn get_session(connection: &Connection, id: &str) -> Result<Session> 
     decode(text.ok_or_else(|| AgentError::NotFound("session not found".into()))?)
 }
 
+/// A project's sessions with a run in progress.
+pub(crate) fn running_sessions(connection: &Connection, project: &str) -> Result<Vec<Session>> {
+    let mut query = connection.prepare("SELECT value FROM sessions WHERE project_id=?1")?;
+    let rows = query.query_map([project], |r| r.get::<_, String>(0))?;
+    let mut sessions = Vec::new();
+    for row in rows {
+        let session: Session = decode(row?)?;
+        if session.active_run_id.is_some() {
+            sessions.push(session);
+        }
+    }
+    Ok(sessions)
+}
+
 pub(crate) fn save_session(tx: &Transaction<'_>, session: &Session) -> Result<()> {
     tx.execute(
         "UPDATE sessions SET value=?2 WHERE id=?1",
@@ -512,9 +526,9 @@ mod tests {
 
     fn seed_running(store: &Store, operation_state: &str, mutating: bool) {
         store.transaction(|tx| {
-            let project = Project { id: "p".into(), name: "Project".into(), root: "project".into(), created_at_ms: 1 };
+            let project = Project { id: "p".into(), name: "Project".into(), root: "project".into(), created_at_ms: 1, auto_approve: AutoApprove::OFF };
             tx.execute("INSERT INTO projects(id,root,value) VALUES('p','project',?1)", [serde_json::to_string(&project)?])?;
-            let session = Session { id: "s".into(), project_id: "p".into(), model: "fixture".into(), title: "Session".into(), state: SessionState::Running, active_run_id: Some("r".into()), revision: 0, last_seq: 0, created_at_ms: 1, updated_at_ms: 1 };
+            let session = Session { id: "s".into(), project_id: "p".into(), model: "fixture".into(), title: "Session".into(), state: SessionState::Running, active_run_id: Some("r".into()), revision: 0, last_seq: 0, created_at_ms: 1, updated_at_ms: 1, auto_approve: None };
             tx.execute("INSERT INTO sessions(id,project_id,value,transcript) VALUES('s','p',?1,?2)", params![serde_json::to_string(&session)?,json!([{"type":"function_call","call_id":"call1","name":"run_command","arguments":"{}"}]).to_string()])?;
             let run = Run { id: "r".into(), session_id: "s".into(), command_id: "c".into(), state: SessionState::Running, started_at_ms: 1, ended_at_ms: None };
             tx.execute("INSERT INTO runs(id,session_id,command_id,fingerprint,value) VALUES('r','s','c','fingerprint',?1)", [serde_json::to_string(&run)?])?;

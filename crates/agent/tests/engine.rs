@@ -8,7 +8,7 @@ use fake::{Answer, Behaviour, Fake, Kind};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
-use switchyard_agent::{AppEngine, Decision, EngineOptions, Session, SessionState};
+use switchyard_agent::{AppEngine, Decision, EngineOptions, Operation, Session, SessionState};
 use switchyard_gateway::{Gateway, GatewayOptions, PresentedCredentials};
 use tempfile::TempDir;
 
@@ -25,6 +25,12 @@ struct Harness {
 
 impl Harness {
     async fn new(protocol: &str) -> Self {
+        Self::with_review_files(protocol, &[]).await
+    }
+
+    /// Like `new`, with empty files in the temporary folder that the engine
+    /// protects as it protects the gateway configuration.
+    async fn with_review_files(protocol: &str, review: &[&str]) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let fake = Fake::start().await;
         let project = temp.path().join("project");
@@ -74,12 +80,13 @@ id = "fixture"
                 ..Default::default()
             })
             .unwrap();
-        let engine = AppEngine::open(
-            gateway.clone(),
-            identity,
-            EngineOptions::new(temp.path().join("state")),
-        )
-        .unwrap();
+        let mut options = EngineOptions::new(temp.path().join("state"));
+        for file in review {
+            let path = temp.path().join(file);
+            std::fs::write(&path, "").unwrap();
+            options.review_paths.push(path);
+        }
+        let engine = AppEngine::open(gateway.clone(), identity, options).unwrap();
         let project = engine.open_project(&project).unwrap();
         let session = engine.create_session(&project.id, "fixture").unwrap();
         Self {
@@ -903,4 +910,395 @@ async fn human_recovery_review_requires_a_new_turn_and_does_not_replay_unknown_c
     );
     engine.shutdown().await.unwrap();
     gateway.shutdown().await;
+}
+
+fn edit(path: &str, before: Option<&[u8]>, content: &str) -> Answer {
+    Answer::tool(
+        "apply_patch",
+        json!({"edits":[{"path":path,"before_sha256":before.map(|b| format!("{:x}",Sha256::digest(b))),"content":content}]}),
+    )
+}
+
+fn auto_decisions(events: &[switchyard_agent::Event]) -> Vec<&serde_json::Value> {
+    events
+        .iter()
+        .filter(|e| e.kind == "approval.decided" && e.payload["decided_by"] == "auto_approve")
+        .map(|e| &e.payload)
+        .collect()
+}
+
+#[tokio::test]
+async fn trusted_project_applies_edits_without_a_prompt_but_still_asks_for_commands() {
+    use switchyard_agent::{AutoApprove, PolicySource};
+    let h = Harness::new("responses").await;
+    let view = h.engine.session(&h.session.id).unwrap();
+    assert_eq!(view.project.auto_approve, AutoApprove::OFF);
+    assert!(!view.auto_approve.edits && !view.auto_approve.commands);
+    let project = h
+        .engine
+        .set_project_auto_approve(
+            &h.session.project_id,
+            AutoApprove {
+                edits: true,
+                commands: false,
+            },
+        )
+        .unwrap();
+    assert!(project.auto_approve.edits && !project.auto_approve.commands);
+    let view = h.engine.session(&h.session.id).unwrap();
+    assert!(view.auto_approve.edits && !view.auto_approve.commands);
+    assert_eq!(view.auto_approve.source, PolicySource::Project);
+    h.fake.script(
+        UPSTREAM_KEY,
+        [
+            Behaviour::Reply(patch()),
+            Behaviour::Reply(Answer::tool(
+                "run_command",
+                json!({"command":"echo not-auto-approved"}),
+            )),
+            Behaviour::text("Edited; the command was denied."),
+        ],
+    );
+    h.engine
+        .submit_turn(&h.session.id, "trust-1", "Edit then test")
+        .unwrap();
+    h.wait(SessionState::AwaitingApproval).await;
+    // The edit landed without a decision; the command is waiting for one.
+    let path = h.temp.path().join("project/hello.txt");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "reviewed edit\n");
+    let pending = h
+        .engine
+        .session(&h.session.id)
+        .unwrap()
+        .pending_operation
+        .unwrap();
+    assert_eq!(pending.name, "run_command");
+    h.engine
+        .decide_operation(
+            &h.session.id,
+            &pending.id,
+            &pending.arguments_hash,
+            Decision::Deny,
+        )
+        .unwrap();
+    h.wait(SessionState::Completed).await;
+    let events = h.engine.events(&h.session.id, 0, 500).unwrap();
+    let auto = auto_decisions(&events);
+    assert_eq!(auto.len(), 1);
+    assert_eq!(auto[0]["decision"], "allow_once");
+    assert_eq!(auto[0]["policy_source"], "project");
+    // Every auto-approved operation keeps its full journal trail.
+    let operation_id = auto[0]["operation_id"].as_str().unwrap();
+    for kind in ["tool.proposed", "tool.started", "tool.completed"] {
+        assert!(
+            events.iter().any(|e| e.kind == kind
+                && (e.payload["id"] == operation_id || e.payload["operation_id"] == operation_id)),
+            "missing {kind}"
+        );
+    }
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.kind == "approval.required" && e.payload["id"] == operation_id)
+    );
+    h.close().await;
+}
+
+#[tokio::test]
+async fn trusted_commands_run_and_session_override_takes_precedence() {
+    use switchyard_agent::{AutoApprove, PolicySource};
+    let h = Harness::new("responses").await;
+    h.engine
+        .set_project_auto_approve(
+            &h.session.project_id,
+            AutoApprove {
+                edits: true,
+                commands: true,
+            },
+        )
+        .unwrap();
+    h.fake.script(
+        UPSTREAM_KEY,
+        [
+            Behaviour::Reply(Answer::tool(
+                "run_command",
+                json!({"command":"echo trusted-run"}),
+            )),
+            Behaviour::text("Ran the command."),
+            Behaviour::Reply(patch()),
+            Behaviour::text("Edit was denied."),
+        ],
+    );
+    h.engine
+        .submit_turn(&h.session.id, "trust-cmd", "Run it")
+        .unwrap();
+    h.wait(SessionState::Completed).await;
+    let events = h.engine.events(&h.session.id, 0, 500).unwrap();
+    assert_eq!(auto_decisions(&events).len(), 1);
+    let completed = events.iter().find(|e| e.kind == "tool.completed").unwrap();
+    assert_eq!(completed.payload["result"]["exit_code"], 0);
+    assert!(
+        completed.payload["result"]["output"]
+            .to_string()
+            .contains("trusted-run")
+    );
+
+    // A session that opts out asks again, even though the project trusts all.
+    let session = h
+        .engine
+        .set_session_auto_approve(&h.session.id, Some(AutoApprove::OFF))
+        .unwrap();
+    assert_eq!(session.auto_approve, Some(AutoApprove::OFF));
+    let view = h.engine.session(&h.session.id).unwrap();
+    assert_eq!(view.auto_approve.source, PolicySource::Session);
+    assert!(!view.auto_approve.edits && !view.auto_approve.commands);
+    let changed = view
+        .events
+        .iter()
+        .find(|e| e.kind == "auto_approve.changed")
+        .unwrap();
+    assert_eq!(changed.payload["effective"]["source"], "session");
+    h.engine
+        .submit_turn(&h.session.id, "trust-off", "Edit the file")
+        .unwrap();
+    h.wait(SessionState::AwaitingApproval).await;
+    let pending = h
+        .engine
+        .session(&h.session.id)
+        .unwrap()
+        .pending_operation
+        .unwrap();
+    h.engine
+        .decide_operation(
+            &h.session.id,
+            &pending.id,
+            &pending.arguments_hash,
+            Decision::Deny,
+        )
+        .unwrap();
+    h.wait(SessionState::Completed).await;
+    assert_eq!(
+        std::fs::read_to_string(h.temp.path().join("project/hello.txt")).unwrap(),
+        "initial content\n"
+    );
+    // Inheriting again restores the project's setting.
+    h.engine
+        .set_session_auto_approve(&h.session.id, None)
+        .unwrap();
+    let view = h.engine.session(&h.session.id).unwrap();
+    assert_eq!(view.auto_approve.source, PolicySource::Project);
+    assert!(view.auto_approve.edits && view.auto_approve.commands);
+    h.close().await;
+}
+
+async fn next_pending(h: &Harness, session: &str, after: Option<&str>) -> Operation {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(operation) = h
+                .engine
+                .session(session)
+                .unwrap()
+                .pending_operation
+                .filter(|operation| Some(operation.id.as_str()) != after)
+            {
+                return operation;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn trust_never_unblocks_protected_paths_or_the_apps_own_state() {
+    use switchyard_agent::AutoApprove;
+    let h = Harness::with_review_files("responses", &["gateway.toml"]).await;
+    // A project root that contains the engine's data directory and the
+    // gateway configuration.
+    let outer = h.engine.open_project(h.temp.path()).unwrap();
+    h.engine
+        .set_project_auto_approve(
+            &outer.id,
+            AutoApprove {
+                edits: true,
+                commands: true,
+            },
+        )
+        .unwrap();
+    let session = h.engine.create_session(&outer.id, "fixture").unwrap();
+    // On a case-sensitive filesystem `STATE` is its own folder; create it so the
+    // edit reaches the approval check there too (elsewhere it is `state`).
+    std::fs::create_dir_all(h.temp.path().join("STATE")).unwrap();
+    h.fake.script(
+        UPSTREAM_KEY,
+        [
+            Behaviour::Reply(edit(".env", None, "SECRET=1\n")),
+            // Protected locations compare case-insensitively on every platform.
+            Behaviour::Reply(edit("STATE/notes.txt", None, "not without review\n")),
+            Behaviour::Reply(edit("gateway.toml", Some(b""), "[upstream]\n")),
+            Behaviour::Reply(edit(".bashrc", None, "echo loaded\n")),
+            Behaviour::Reply(edit("project/new.txt", None, "trusted\n")),
+            Behaviour::text("Done."),
+        ],
+    );
+    h.engine
+        .submit_turn(&session.id, "protected", "Try protected paths")
+        .unwrap();
+    let mut previous: Option<String> = None;
+    for expected in ["notes.txt", "gateway.toml", ".bashrc"] {
+        let pending = next_pending(&h, &session.id, previous.as_deref()).await;
+        assert!(
+            pending.arguments.to_string().contains(expected),
+            "{expected}: {}",
+            pending.arguments
+        );
+        h.engine
+            .decide_operation(
+                &session.id,
+                &pending.id,
+                &pending.arguments_hash,
+                Decision::Deny,
+            )
+            .unwrap();
+        previous = Some(pending.id);
+    }
+    h.wait_session(&session.id, SessionState::Completed).await;
+    let events = h.engine.events(&session.id, 0, 500).unwrap();
+    assert!(events.iter().any(|e| e.kind == "tool.rejected"));
+    assert!(!h.temp.path().join(".env").exists());
+    assert!(!h.temp.path().join("state/notes.txt").exists());
+    assert!(!h.temp.path().join("STATE/notes.txt").exists());
+    assert!(!h.temp.path().join(".bashrc").exists());
+    assert_eq!(
+        std::fs::read_to_string(h.temp.path().join("gateway.toml")).unwrap(),
+        ""
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.temp.path().join("project/new.txt")).unwrap(),
+        "trusted\n"
+    );
+    let auto = auto_decisions(&events);
+    assert_eq!(auto.len(), 1);
+    // Each automatic decision names the setting that made it.
+    assert_eq!(auto[0]["policy"], json!({"edits":true,"commands":true}));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn trust_turned_off_while_an_edit_waits_for_another_change_sends_it_to_a_person() {
+    use switchyard_agent::AutoApprove;
+    // PowerShell can take many seconds to start on hosted Windows runners.
+    const BARRIER_WAIT: Duration = Duration::from_secs(60);
+    const COMMAND_TIMEOUT_MS: u64 = 120_000;
+    struct ReleaseCommand(std::path::PathBuf);
+    impl Drop for ReleaseCommand {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, "release");
+        }
+    }
+    let h = Harness::new("responses").await;
+    let project = h.temp.path().join("project");
+    let release = ReleaseCommand(project.join("release-command"));
+    #[cfg(windows)]
+    let command = r#"
+$ErrorActionPreference = 'Stop'
+[IO.File]::WriteAllText((Join-Path (Get-Location) 'command-ready'), 'ready')
+while (-not (Test-Path -LiteralPath 'release-command')) { Start-Sleep -Milliseconds 10 }
+"#;
+    #[cfg(unix)]
+    let command = r#"
+printf ready > command-ready
+while [ ! -e release-command ]; do sleep 0.01; done
+"#;
+    // Edits are trusted; the command that holds the mutation lock is reviewed.
+    h.engine
+        .set_project_auto_approve(
+            &h.session.project_id,
+            AutoApprove {
+                edits: true,
+                commands: false,
+            },
+        )
+        .unwrap();
+    let edit_session = h
+        .engine
+        .create_session(&h.session.project_id, "fixture")
+        .unwrap();
+    h.fake.script(
+        UPSTREAM_KEY,
+        [
+            Behaviour::Reply(Answer::tool(
+                "run_command",
+                json!({"command":command,"timeout_ms":COMMAND_TIMEOUT_MS}),
+            )),
+            Behaviour::Reply(patch()),
+        ],
+    );
+    h.fake
+        .always(UPSTREAM_KEY, Behaviour::text("Reported the tool result."));
+    h.engine
+        .submit_turn(&h.session.id, "hold-mutation", "Hold the project")
+        .unwrap();
+    let command = next_pending(&h, &h.session.id, None).await;
+    h.engine
+        .decide_operation(
+            &h.session.id,
+            &command.id,
+            &command.arguments_hash,
+            Decision::AllowOnce,
+        )
+        .unwrap();
+    tokio::time::timeout(BARRIER_WAIT, async {
+        while !project.join("command-ready").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the approved command must start");
+    // The edit is trusted when proposed, then waits behind the running command.
+    h.engine
+        .submit_turn(&edit_session.id, "queued-edit", "Edit hello.txt")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !h
+            .engine
+            .events(&edit_session.id, 0, 500)
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "tool.proposed")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    h.engine
+        .set_project_auto_approve(&h.session.project_id, AutoApprove::OFF)
+        .unwrap();
+    drop(release);
+    let pending = next_pending(&h, &edit_session.id, None).await;
+    assert_eq!(pending.name, "apply_patch");
+    let path = project.join("hello.txt");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "initial content\n");
+    let events = h.engine.events(&edit_session.id, 0, 500).unwrap();
+    assert!(auto_decisions(&events).is_empty());
+    // The running session that follows the project recorded the change.
+    assert!(events.iter().any(|e| e.kind == "auto_approve.changed"
+        && e.payload["scope"] == "project"
+        && e.payload["effective"]["edits"] == false));
+    h.engine
+        .decide_operation(
+            &edit_session.id,
+            &pending.id,
+            &pending.arguments_hash,
+            Decision::Deny,
+        )
+        .unwrap();
+    h.wait_session(&edit_session.id, SessionState::Completed)
+        .await;
+    h.wait(SessionState::Completed).await;
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "initial content\n");
+    h.close().await;
 }

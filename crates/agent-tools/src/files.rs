@@ -87,6 +87,71 @@ fn ignored_directory(name: &str) -> bool {
         )
 }
 
+/// Files other programs load and act on without being asked: shell startup
+/// files, PowerShell profiles, Git configuration and hook managers, and editor
+/// and agent settings. Reading them and reviewed edits are allowed; edits no
+/// person reviews are not. A short list of well-known names, not a guarantee.
+fn auto_loaded_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        ".bashrc"
+            | ".bash_profile"
+            | ".bash_login"
+            | ".bash_logout"
+            | ".profile"
+            | ".zshrc"
+            | ".zshenv"
+            | ".zprofile"
+            | ".zlogin"
+            | ".zlogout"
+            | ".cshrc"
+            | ".tcshrc"
+            | ".kshrc"
+            | ".envrc"
+            | ".gitconfig"
+            | ".githooks"
+            | ".husky"
+            | ".pre-commit-config.yaml"
+            | ".vscode"
+            | ".mcp.json"
+            | ".claude.json"
+    ) || n.ends_with("profile.ps1")
+}
+
+pub(super) fn check_unreviewed_edit(root: &Path, relative: &str) -> Result<(), ToolError> {
+    let parts = relative_parts(relative, false)?;
+    if parts
+        .iter()
+        .any(|part| auto_loaded_name(&part.to_string_lossy()))
+    {
+        return Err(invalid(
+            "files that other programs load or run automatically need a person's review",
+        ));
+    }
+    if contains_home(root) {
+        return Err(invalid(
+            "every edit in a project that contains the home folder needs a person's review",
+        ));
+    }
+    match resolve(root, relative, false, false) {
+        Err(ToolError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result.map(|_| ()),
+    }
+}
+
+/// Whether `root` is the user's home folder or one of its parents.
+fn contains_home(root: &Path) -> bool {
+    let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+    else {
+        return false;
+    };
+    let home = home.canonicalize().unwrap_or(home);
+    super::path_within(&home, root)
+}
+
 fn is_link(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;

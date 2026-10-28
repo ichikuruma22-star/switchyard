@@ -18,7 +18,14 @@ export const displayPath = path => {
 export const modelId = model => typeof model?.id === 'string' ? model.id : '';
 export const isMockModel = model => modelId(model).startsWith('mock-') || model?.owned_by === 'mock' || model?.provider === 'mock';
 export const toolName = name => ({read_file:'Read file',search:'Search project',search_files:'Search project',list_files:'List files',apply_patch:'Edit files',run_command:'Run command'}[name] || String(name||'Tool operation').replaceAll('_',' '));
-export const toolStateLabel = state => ({proposed:'Proposed',pending:'Proposed',awaiting_approval:'Needs approval',approved:'Approved once',denied:'Denied',running:'Running',completed:'Completed',ok:'Completed',error:'Failed',failed:'Failed',interrupted:'Interrupted'}[state] || String(state||'Proposed').replaceAll('_',' '));
+export const toolStateLabel = state => ({proposed:'Proposed',pending:'Proposed',awaiting_approval:'Needs approval',approved:'Approved once',auto_approved:'Auto-approved',denied:'Denied',running:'Running',completed:'Completed',ok:'Completed',error:'Failed',failed:'Failed',interrupted:'Interrupted'}[state] || String(state||'Proposed').replaceAll('_',' '));
+
+/** Plain description of a journalled session approval-setting change. */
+export function autoApproveChange(payload={}) {
+  const effective=payload.effective||{};
+  const what=effective.edits&&effective.commands?'File edits and commands now run without asking':effective.edits?'File edits now apply without asking; commands need approval':effective.commands?'Commands now run without asking; file edits need approval':'Every edit and command now needs your approval';
+  return `${what} (${payload.session_override?'this session only':'following the project setting'}).`;
+}
 
 export function mergeEvents(previous, incoming, sessionId) {
   const bySequence = new Map();
@@ -67,7 +74,14 @@ export function transcript(events) {
       if (tools.has(payload.operation_id)) Object.assign(tools.get(payload.operation_id),{status:payload.result?.status || 'completed',result:payload.result});
       else items.push({...base,type:'tool',operation:{id:payload.operation_id,name:payload.name},status:payload.result?.status || 'completed',result:payload.result});
     } else if (event.kind === 'approval.decided') {
-      if (tools.has(payload.operation_id)) tools.get(payload.operation_id).status = payload.decision === 'deny' ? 'denied' : 'approved';
+      const tool = tools.get(payload.operation_id);
+      if (tool) {
+        tool.autoApproved = payload.decided_by === 'auto_approve';
+        tool.status = payload.decision === 'deny' ? 'denied' : tool.autoApproved ? 'auto_approved' : 'approved';
+      }
+    } else if (event.kind === 'auto_approve.changed') {
+      stream = null;
+      items.push({...base,type:'state',kind:event.kind,text:autoApproveChange(payload),payload});
     } else if (['run.completed','run.failed','run.interrupted','recovery.required'].includes(event.kind)) {
       stream = null;
       items.push({...base,type:'state',kind:event.kind,text:payload.message || '',payload});
@@ -81,7 +95,7 @@ export function reviewOperations(events) {
   for (const event of events) {
     const p = event.payload || {};
     if (event.kind === 'tool.proposed' || event.kind === 'approval.required') operations.set(p.id,{...(operations.get(p.id)||{}),...p});
-    if (event.kind === 'approval.decided' && operations.has(p.operation_id)) operations.get(p.operation_id).state=p.decision==='deny'?'denied':'approved';
+    if (event.kind === 'approval.decided' && operations.has(p.operation_id)) Object.assign(operations.get(p.operation_id),{state:p.decision==='deny'?'denied':p.decided_by==='auto_approve'?'auto_approved':'approved',approval:{decision:p.decision,auto:p.decided_by==='auto_approve',source:p.policy_source}});
     if (event.kind === 'tool.started' && operations.has(p.operation_id)) operations.get(p.operation_id).state='running';
     if (event.kind === 'tool.completed') operations.set(p.operation_id,{...(operations.get(p.operation_id)||{}),id:p.operation_id,name:p.name,result:p.result});
   }

@@ -776,9 +776,10 @@ async fn watch(
         () = cancelled.cancelled() => Err(AppError::new(StatusCode::CONFLICT, "interrupted", "Interruption requested.")),
         result = async {
             let run = read_run(remote, id).await?;
-            write_stderr(&format!("Run: {}\nConversation: {}\nAccount: {}\n{}\n",
+            write_stderr(&format!("Run: {}\nConversation: {}\nAccount: {}\n{}\n{}\n",
                 terminal_text(&run.id), terminal_text(&run.conversation_id),
-                terminal_text(run.profile_name.as_deref().unwrap_or("Unknown")), terminal_text(&run.permission_boundary)))?;
+                terminal_text(run.profile_name.as_deref().unwrap_or("Unknown")), terminal_text(&run.permission_boundary),
+                auto_approval_line(run.auto_approve)))?;
             drive(remote, id, input, Role::Owner).await
         } => result,
     };
@@ -1191,6 +1192,32 @@ fn append_output(text: &mut String, output: Option<&str>, run_id: &str) {
     }
 }
 
+/// The project's approval setting as the run last saw it, in the words of the
+/// trust settings. Each request reads the current setting.
+fn auto_approval_line(auto: switchyard_agent_adapters::AutoApproval) -> String {
+    let what = match (auto.edits, auto.commands) {
+        (false, false) => return "Approvals: you decide each file change and command.".into(),
+        (true, false) => "file changes",
+        (false, true) => "commands",
+        (true, true) => "file changes and commands",
+    };
+    format!(
+        "Approvals: under the project setting, Switchya approves complete single-operation requests for {what} itself. Changes outside ordinary project files, and requests it cannot allow once, still wait for you."
+    )
+}
+
+/// What an automatic approval covered, from its decision record.
+fn approved_request(request: &Value) -> String {
+    if let Some(paths) = request["paths"].as_array() {
+        let paths: Vec<_> = paths.iter().filter_map(Value::as_str).collect();
+        format!("changes to {}", paths.join(", "))
+    } else if let Some(command) = request["command"].as_str() {
+        format!("command: {command}")
+    } else {
+        "a request".into()
+    }
+}
+
 fn render_event(event: &AdapterEvent, streamed: &mut HashMap<String, String>) -> Result<()> {
     if let Some(text) = assistant_output(event, streamed) {
         return write_stdout(&terminal_text(&text));
@@ -1204,10 +1231,16 @@ fn render_event(event: &AdapterEvent, streamed: &mut HashMap<String, String>) ->
                 write_stderr(&format!("\n{}\n", terminal_text(&summary)))?;
             }
         }
-        "notice" | "adapter_error" => {
+        "notice" | "adapter_error" | "auto_approve_changed" => {
             if let Some(message) = event.payload["message"].as_str() {
                 write_stderr(&format!("\n{}\n", terminal_text(message)))?;
             }
+        }
+        "approval_resolved" if event.payload["decided_by"] == "auto_approve" => {
+            write_stderr(&format!(
+                "\nApproved automatically by the project's approval setting: {}.\n",
+                terminal_text(&approved_request(&event.payload["request"]))
+            ))?;
         }
         _ => {}
     }

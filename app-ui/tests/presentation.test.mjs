@@ -57,3 +57,45 @@ test('display paths hide Windows verbatim prefixes and leave other paths unchang
   assert.equal(displayPath('/home/user/app'),'/home/user/app');
   assert.equal(displayPath(undefined),'');
 });
+test('auto-approved operations stay distinguishable from human decisions',async()=>{
+  const { autoApproveChange }=await import('../presentation.js');
+  const operation={id:'o1',name:'apply_patch',arguments_hash:'abc'};
+  const events=[event(1,'tool.proposed',operation),event(2,'approval.decided',{operation_id:'o1',decision:'allow_once',decided_by:'auto_approve',policy_source:'session'}),event(3,'tool.started',{operation_id:'o1'}),event(4,'tool.completed',{operation_id:'o1',name:'apply_patch',result:{status:'completed'}})];
+  const [row]=transcript(events.slice(0,2));
+  assert.equal(row.status,'auto_approved');assert.equal(row.autoApproved,true);
+  const done=transcript(events)[0];
+  assert.equal(done.autoApproved,true);assert.equal(done.status,'completed');
+  const [reviewed]=reviewOperations(events);
+  assert.deepEqual(reviewed.approval,{decision:'allow_once',auto:true,source:'session'});
+  const human=reviewOperations([event(1,'tool.proposed',operation),event(2,'approval.decided',{operation_id:'o1',decision:'allow_once'})])[0];
+  assert.equal(human.state,'approved');assert.equal(human.approval.auto,false);
+  const change=transcript([event(5,'auto_approve.changed',{session_override:{edits:false,commands:false},effective:{edits:false,commands:false,source:'session'}})])[0];
+  assert.equal(change.type,'state');assert.match(change.text,/needs your approval \(this session only\)/);
+  assert.match(autoApproveChange({session_override:null,effective:{edits:true,commands:true,source:'project'}}),/edits and commands now run without asking \(following the project setting\)/);
+  // A project change recorded in a running session reads as following the project.
+  const projectChange=transcript([event(6,'auto_approve.changed',{scope:'project',project_policy:{edits:true,commands:false},effective:{edits:true,commands:false,source:'project'}})])[0];
+  assert.match(projectChange.text,/following the project setting/);
+});
+test('approval labels name what runs without asking',async()=>{
+  const { autoApproveLabel, autoApproveTone, effectivePolicy }=await import('../trust.js');
+  assert.equal(autoApproveLabel({edits:false,commands:false}),'Writes and commands need approval');
+  assert.equal(autoApproveLabel(undefined),'Writes and commands need approval');
+  assert.match(autoApproveLabel({edits:true,commands:false}),/^Edits apply without asking/);
+  assert.match(autoApproveLabel({edits:false,commands:true}),/^Commands run without asking/);
+  assert.equal(autoApproveTone({edits:true,commands:false}),'caution');
+  assert.equal(autoApproveTone({edits:true,commands:true}),'stop');
+  assert.equal(autoApproveTone({}),'neutral');
+  // Before a session exists the project's setting applies; a session view wins once present.
+  assert.deepEqual(effectivePolicy({auto_approve:{edits:true,commands:false}},null),{edits:true,commands:false,source:'project'});
+  assert.deepEqual(effectivePolicy({auto_approve:{edits:true,commands:true}},{auto_approve:{edits:false,commands:false,source:'session'}}),{edits:false,commands:false,source:'session'});
+  assert.deepEqual(effectivePolicy({},null),{edits:false,commands:false,source:'project'});
+});
+test('the approval dialog warns about project trust even when this session overrides it',async()=>{
+  const { trustWarning }=await import('../trust.js');
+  assert.equal(trustWarning({edits:false,commands:false},null),null);
+  assert.equal(trustWarning({edits:true,commands:false},null),'edits');
+  // Project commands reach other sessions and existing-agent runs.
+  assert.equal(trustWarning({edits:false,commands:true},{edits:false,commands:false}),'commands');
+  assert.equal(trustWarning({edits:false,commands:false},{edits:true,commands:true}),'commands');
+  assert.equal(trustWarning(undefined,{edits:true,commands:false}),'edits');
+});

@@ -1452,6 +1452,8 @@ mod tests {
                             // Stops at adapter validation after the account gates.
                             command_id: "invalid".into(),
                             continue_run_id: None,
+                            auto_approve: Default::default(),
+                            review_paths: Vec::new(),
                             profile: None,
                         },
                         profile_id,
@@ -1536,6 +1538,8 @@ mod tests {
             prompt: "fixture only".into(),
             command_id: uuid::Uuid::new_v4().to_string(),
             continue_run_id: None,
+            auto_approve: Default::default(),
+            review_paths: Vec::new(),
             profile: None,
         };
         let error = manager
