@@ -11,6 +11,10 @@ class Element {
   }
   get firstChild(){return this.childNodes[0]||null;}
   get nextSibling(){const siblings=this.parentNode?.childNodes||[];return siblings[siblings.indexOf(this)+1]||null;}
+  // Focus as a browser keeps it: the rendered root stands in for the document body.
+  get isConnected(){let node=this;while(node.parentNode)node=node.parentNode;return node===globalThis.document?.body;}
+  contains(node){for(;node;node=node.parentNode)if(node===this)return true;return false;}
+  focus(){globalThis.document.activeElement=this;}
   appendChild(node){if(node.parentNode)node.parentNode.removeChild(node);node.parentNode=this;this.childNodes.push(node);return node;}
   insertBefore(node,before){if(node.parentNode)node.parentNode.removeChild(node);node.parentNode=this;const i=this.childNodes.indexOf(before);this.childNodes.splice(i<0?this.childNodes.length:i,0,node);return node;}
   removeChild(node){this.childNodes.splice(this.childNodes.indexOf(node),1);node.parentNode=null;return node;}
@@ -41,7 +45,7 @@ async function until(check,label) {
   assert.fail(`Timed out waiting for ${label}`);
 }
 function installDom(root) {
-  globalThis.document={createElement:name=>new Element(name),createElementNS:(_,name)=>new Element(name),createTextNode:text=>Object.assign(new Element('#text',3),{data:text}),getElementById:()=>root,activeElement:null};
+  globalThis.document={createElement:name=>new Element(name),createElementNS:(_,name)=>new Element(name),createTextNode:text=>Object.assign(new Element('#text',3),{data:text}),getElementById:()=>root,activeElement:null,body:root};
   globalThis.location={hash:'#token=render-fixture-token',pathname:'/',search:''};
   globalThis.history={state:null,replaceState(){}};
   globalThis.sessionStorage=memoryStorage();globalThis.localStorage=memoryStorage();
@@ -372,6 +376,8 @@ test('a trusted project shows auto-approval plainly and saves the project settin
     await until(()=>toggle()&&textIn(toggle()).includes('Edits apply without asking'),'the trusted composer boundary');
     assert.equal(attribute(toggle(),'data-tone'),'caution');
     assert.ok(textIn(withClass(root,'trust-badge')[0]).includes('Auto-approve on'));
+    // The badge's name starts with its visible words and says what it opens.
+    assert.match(attribute(withClass(root,'trust-badge')[0],'aria-label'),/^Auto-approve on: Edits apply without asking.*Change approval settings$/);
     await until(()=>textIn(root).includes('Auto-approved · Completed'),'the auto-approved tool row');
     // The fixture DOM has no modal dialogs; record the state a browser would.
     Element.prototype.showModal??=function(){this.open=true;};
@@ -379,6 +385,7 @@ test('a trusted project shows auto-approval plainly and saves the project settin
     fire(toggle(),'click');
     const commands=()=>flatten(root).find(node=>attribute(node,'id')==='trust-project-commands');
     await until(()=>withClass(root,'trust-dialog')[0]?.open&&commands(),'the approval settings dialog');
+    assert.ok(flatten(root).some(node=>attribute(node,'id')==='trust-session'),'the open built-in session can override the project');
     // Let the dialog reset its fields on opening before they are edited.
     await new Promise(resolve=>setTimeout(resolve,50));
     fire(commands(),'change',{currentTarget:{checked:true}});
@@ -390,4 +397,226 @@ test('a trusted project shows auto-approval plainly and saves the project settin
     await until(()=>textIn(toggle()).includes('Edits and commands run without asking'),'the updated boundary');
     assert.equal(attribute(toggle(),'data-tone'),'stop');
   }finally{render(null,root);globalThis.fetch=originalFetch;}
+});
+
+// A fixture backend for one mounted App: `respond(method, path, body)` returns the JSON.
+function serveApp(respond){
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(url,options={})=>{
+    const value=respond(options.method||'GET',url.replace(/^\/api/,''),options.body?JSON.parse(options.body):undefined);
+    return {ok:true,status:200,json:async()=>value??{}};
+  };
+  return()=>{globalThis.fetch=originalFetch;};
+}
+const byId=(root,id)=>flatten(root).find(node=>attribute(node,'id')===id);
+const headingText=(root,text)=>flatten(root).find(node=>/^h[1-4]$/.test(node.localName)&&textIn(node)===text);
+function modalDialogs(){Element.prototype.showModal??=function(){this.open=true;};Element.prototype.close??=function(){this.open=false;};}
+
+test('approval settings opened from Existing agents offer only the project setting',async()=>{
+  const root=new Element('div');installDom(root);modalDialogs();
+  const project={id:'P',name:'Project',root:'/work/project',auto_approve:{edits:false,commands:false}};
+  // A built-in session stays selected in the background while Existing agents is open.
+  const session={id:'S1',title:'Earlier built-in work',state:'completed',model:'fixture-model',updated_at_ms:2,last_seq:0,revision:1,active_run_id:null,auto_approve:null};
+  const restore=serveApp((method,path)=>{
+    if(path==='/status')return {version:'fixture'};
+    if(path==='/models')return {models:[{id:'fixture-model',owned_by:'fixture'}]};
+    if(path==='/projects')return {projects:[project]};
+    if(path==='/workspace')return {selection:{project_id:'P',session_id:'S1',mode:'external',tool:'conversation'}};
+    if(path.startsWith('/sessions?'))return {sessions:[session]};
+    if(path.startsWith('/sessions/'))return {session,project,pending_operation:null,events:[],auto_approve:{edits:false,commands:false,source:'project'}};
+    if(path==='/adapters')return {adapters:[{id:'codex',name:'Codex',installed:true,supported:true,status:'available',permission_boundary:'Codex sandbox.'}]};
+    if(path==='/adapter-runs')return {runs:[]};
+    if(path==='/account-profiles')return {profiles:[],defaults:{}};
+  });
+  try{
+    await import('../app.js?external-trust-fixture');
+    const toggle=()=>withClass(root,'trust-open')[0];
+    await until(()=>toggle()&&withClass(root,'adapter-composer').length===1&&textIn(toggle())==='Edits and commands need approval','the existing-agent composer');
+    fire(toggle(),'click');
+    await until(()=>withClass(root,'trust-dialog')[0]?.open&&byId(root,'trust-project-edits'),'the approval settings dialog');
+    assert.equal(byId(root,'trust-session'),undefined,'existing-agent runs follow the project, so a hidden built-in session is not offered');
+    // Each checkbox is named by its short title and described by its explanation;
+    // the group is named by its section so the project and session sets differ.
+    const edits=byId(root,'trust-project-edits');
+    assert.equal(attribute(edits,'aria-labelledby'),'trust-project-edits-title');
+    assert.equal(textIn(byId(root,'trust-project-edits-title')),'Apply file edits without asking');
+    assert.equal(attribute(edits,'aria-describedby'),'trust-project-edits-hint');
+    assert.match(textIn(byId(root,'trust-project-edits-hint')),/recorded with its diff/);
+    assert.equal(attribute(flatten(root).find(node=>node.localName==='fieldset'),'aria-labelledby'),'trust-project');
+    // The project dialog's guidance is announced with its field.
+    assert.equal(attribute(byId(root,'project-path'),'aria-describedby'),'project-path-hint');
+    assert.match(textIn(byId(root,'project-path-hint')),/not a sandbox/);
+  }finally{render(null,root);restore();}
+});
+
+test('Existing agents says when no agent CLI is installed and finds one after checking again',async()=>{
+  const root=new Element('div');installDom(root);
+  const { AdapterWorkspace }=await import('../adapters.js');
+  const missing=[['codex','Codex'],['claude','Claude Code'],['antigravity','Antigravity']].map(([id,name])=>({id,name,installed:false,supported:true,status:'not_installed',permission_boundary:'Agent permissions.'}));
+  let installed=false,discoveries=0;
+  const api={async request(path){
+    if(path==='/adapters'){discoveries++;return {adapters:installed?[{...missing[0],installed:true,status:'available',version:'codex 1.0'},...missing.slice(1)]:missing};}
+    if(path==='/adapter-runs')return {runs:[]};
+    throw new Error(`Unexpected request ${path}`);
+  }};
+  render(html`<${AdapterWorkspace} api=${api} project=${{id:'p',name:'Project',root:'/work/project'}} hostId="no-agent-fixture" storage=${memoryStorage()} profiles=${[]} onNative=${()=>{}} onOpenProject=${()=>{}} onOpenNavigation=${()=>{}}/>`,root);
+  try{
+    await until(()=>textIn(root).includes('No agent CLI found'),'the missing-agent notice');
+    assert.ok(textIn(root).includes('Install one, then choose Check installed agents'));
+    const setup=withClass(root,'agent-setup-details')[0];
+    assert.equal(attribute(setup,'open'),'true','the per-agent status list opens');
+    assert.ok(textIn(setup).includes('Not installed'));
+    installed=true;
+    fire(buttonLabelled(root,'Check installed agents'),'click');
+    await until(()=>!textIn(root).includes('No agent CLI found'),'the newly installed agent');
+    assert.equal(discoveries,2,'checking again bypasses the cached discovery');
+    assert.equal(attribute(withClass(root,'agent-setup-details')[0],'open'),undefined);
+  }finally{render(null,root);}
+});
+
+test('the provider form says why a configuration name cannot be saved',async()=>{
+  const root=new Element('div');installDom(root);modalDialogs();
+  const { ProviderDialog, validProviderName }=await import('../providers.js');
+  for(const name of ['openai','my_openai-2','a'.repeat(48)])assert.equal(validProviderName(name),true,name);
+  for(const name of ['','Work','work openai','9lives','-x','a'.repeat(49)])assert.equal(validProviderName(name),false,name);
+  const api={async request(path){
+    if(path==='/providers')return {providers:[{name:'openai',kind:'openai',status:'catalog_ready',message:'Fixture.',credential_source:'api_key',model_count:3,enabled:true,config_applied:true}]};
+    throw new Error(`Unexpected request ${path}`);
+  }};
+  render(html`<${ProviderDialog} api=${api} open=${true} onClose=${()=>{}} onModelsChanged=${()=>{}}/>`,root);
+  const input=()=>byId(root,'provider-name'),hint=()=>byId(root,'provider-name-hint');
+  try{
+    // The default name is taken: a plain hint, not an invalid field.
+    await until(()=>hint()&&textIn(hint()).includes('already configured'),'the duplicate-name hint');
+    assert.equal(attribute(input(),'aria-describedby'),'provider-name-hint');
+    assert.equal(attribute(input(),'aria-invalid'),undefined);
+    fire(input(),'input',{currentTarget:{value:'Work OpenAI'}});
+    await until(()=>attribute(input(),'aria-invalid')==='true','the rejected name');
+    assert.equal(textIn(hint()),'Use lowercase letters, digits, hyphens or underscores, starting with a letter.');
+    assert.equal(attribute(hint(),'class'),'field-error');
+    fire(input(),'input',{currentTarget:{value:'work-openai'}});
+    await until(()=>!hint(),'the accepted name');
+    assert.equal(attribute(input(),'aria-invalid'),undefined);
+    assert.equal(attribute(input(),'aria-describedby'),undefined);
+  }finally{render(null,root);}
+});
+
+test('review focus follows opened details and returns to the pane heading after a decision',async()=>{
+  const root=new Element('div');installDom(root);
+  const project={id:'P',name:'Project',root:'/work/project'};
+  const command={id:'o1',session_id:'S1',name:'run_command',arguments_hash:'h1',arguments:{command:'npm test'},preview:{command:'npm test',cwd:'.'}};
+  const at=(seq,kind,payload)=>({seq,kind,payload,session_id:'S1',run_id:'R1',at_ms:seq});
+  const read={id:'o0',session_id:'S1',name:'read_file',arguments:{path:'package.json'}};
+  let state={session:{id:'S1',title:'Check',state:'awaiting_approval',model:'fixture-model',updated_at_ms:2,last_seq:5,revision:1,active_run_id:'R1'},project,pending_operation:command,
+    events:[at(1,'turn.started',{text:'Check the build'}),at(2,'tool.proposed',read),at(3,'tool.completed',{operation_id:'o0',name:'read_file',result:{status:'completed',output:'{}'}}),at(4,'tool.proposed',command),at(5,'approval.required',command)]};
+  const decisions=[];
+  const restore=serveApp((method,path,body)=>{
+    if(method==='POST'&&path.endsWith('/decision')){decisions.push(body);state={...state,session:{...state.session,state:'running',last_seq:6},pending_operation:null,events:[...state.events,at(6,'approval.decided',{operation_id:'o1',decision:'allow_once'})]};return {};}
+    if(path==='/status')return {version:'fixture'};
+    if(path==='/models')return {models:[{id:'fixture-model',owned_by:'fixture'}]};
+    if(path==='/projects')return {projects:[project]};
+    if(path==='/workspace')return {selection:{project_id:'P',session_id:'S1',mode:'native',tool:'conversation'}};
+    if(path.startsWith('/sessions?'))return {sessions:[state.session]};
+    if(path.startsWith('/sessions/'))return state;
+  });
+  const reviewContent=()=>withClass(root,'review-content')[0];
+  try{
+    await import('../app.js?review-focus-fixture');
+    await until(()=>buttonLabelled(root,'Allow once')&&withClass(root,'tool-event-trigger').length===2,'the pending approval');
+    // Opening a transcript row's details moves focus to them, which scrolls them into view.
+    fire(withClass(root,'tool-event-trigger').find(node=>textIn(node).includes('Read file')),'click');
+    await until(()=>document.activeElement===headingText(root,'Read file'),'focus on the opened details');
+    // Closing them returns focus to the pane heading, not to the page.
+    const close=buttonLabelled(root,'Close details');
+    close.focus();fire(reviewContent(),'focusin',{target:close});
+    fire(close,'click');
+    await until(()=>document.activeElement===headingText(root,'Actions & results'),'focus after closing the details');
+    // Deciding removes the approval card that had focus; focus returns to the heading.
+    const allow=buttonLabelled(root,'Allow once');
+    allow.focus();fire(reviewContent(),'focusin',{target:allow});
+    fire(allow,'click');
+    await until(()=>decisions.length===1&&!withClass(root,'approval').length,'the recorded decision');
+    await until(()=>document.activeElement===headingText(root,'Actions & results'),'focus after the decision');
+    assert.deepEqual(decisions,[{expected_hash:'h1',decision:'allow_once'}]);
+  }finally{render(null,root);restore();}
+});
+
+test('an approval resolved elsewhere never takes focus from the control in use',async()=>{
+  const root=new Element('div');installDom(root);
+  const project={id:'P',name:'Project',root:'/work/project'};
+  const command={id:'o1',session_id:'S1',name:'run_command',arguments_hash:'h1',arguments:{command:'npm test'},preview:{command:'npm test',cwd:'.'}};
+  const at=(seq,kind,payload)=>({seq,kind,payload,session_id:'S1',run_id:'R1',at_ms:seq});
+  let state={session:{id:'S1',title:'Check',state:'awaiting_approval',model:'fixture-model',updated_at_ms:2,last_seq:3,revision:1,active_run_id:'R1'},project,pending_operation:command,
+    events:[at(1,'turn.started',{text:'Run the tests'}),at(2,'tool.proposed',command),at(3,'approval.required',command)]};
+  const restore=serveApp((method,path)=>{
+    if(path==='/status')return {version:'fixture'};
+    if(path==='/models')return {models:[{id:'fixture-model',owned_by:'fixture'}]};
+    if(path==='/projects')return {projects:[project]};
+    if(path==='/workspace')return {selection:{project_id:'P',session_id:'S1',mode:'native',tool:'conversation'}};
+    if(path.startsWith('/sessions?'))return {sessions:[state.session]};
+    if(path.startsWith('/sessions/'))return state;
+  });
+  try{
+    await import('../app.js?focus-elsewhere-fixture');
+    await until(()=>buttonLabelled(root,'Deny')&&withClass(root,'tool-event-trigger').length===1,'the pending approval');
+    // The person opens the pending row (its details wait for the decision), reads the
+    // approval card, then moves on to the task input; the CLI then decides the request.
+    fire(withClass(root,'tool-event-trigger')[0],'click');
+    const deny=buttonLabelled(root,'Deny');
+    deny.focus();fire(withClass(root,'review-content')[0],'focusin',{target:deny});
+    taskInput(root).focus();
+    state={...state,session:{...state.session,state:'running',last_seq:4},pending_operation:null,events:[...state.events,at(4,'approval.decided',{operation_id:'o1',decision:'deny'})]};
+    await until(()=>!withClass(root,'approval').length&&headingText(root,'Run command'),'the request decided elsewhere, with its details');
+    // Without animation frames, Preact runs effects after a 100 ms fallback timer.
+    await new Promise(resolve=>setTimeout(resolve,300));
+    assert.equal(document.activeElement,taskInput(root));
+  }finally{render(null,root);restore();}
+});
+
+test('an existing-agent request opens in the visible review pane and focus survives the decision',async()=>{
+  const root=new Element('div');installDom(root);modalDialogs();
+  const { AdapterWorkspace }=await import('../adapters.js');
+  const approval={id:'a1',method:'claude/can_use_tool',can_allow_once:true,expected_hash:'h',permission_boundary:'OS permissions.',preview:{request:{tool_name:'Edit',input:{file_path:'a.txt',old_string:'a',new_string:'b'}}}};
+  let current={id:'r1',conversation_id:'c1',adapter_id:'claude',profile_name:'Existing Claude CLI',project_path:project.root,state:'awaiting_approval',thread_id:'t',turn_id:'u',started_at_ms:1,last_seq:3,first_retained_seq:1,pending_approvals:[approval],permission_boundary:'OS permissions.'};
+  let events=[{seq:1,kind:'user_task',payload:{text:'Edit a.txt'}},{seq:2,kind:'state_changed',payload:{state:'awaiting_approval'}},{seq:3,kind:'approval_requested',payload:{approval}}].map(event=>({...event,run_id:'r1',at_ms:event.seq}));
+  const decisions=[];
+  const api={async request(path,{method='GET',body}={}){
+    if(method==='POST'){
+      decisions.push({path,body});
+      current={...current,state:'running',pending_approvals:[],last_seq:4};
+      events=[...events,{seq:4,kind:'approval_resolved',payload:{approval_id:'a1',decision:'deny'},run_id:'r1',at_ms:4}];
+      return {ok:true};
+    }
+    if(path==='/adapters')return {adapters:[{id:'claude',name:'Claude Code',installed:true,supported:true,status:'available',permission_boundary:'OS permissions.'}]};
+    if(path==='/adapter-runs')return {runs:[current]};
+    if(path==='/adapter-runs/r1')return {run:current};
+    const after=Number(new URLSearchParams(path.split('?')[1]).get('after_seq'));
+    return {events:events.filter(event=>event.seq>after)};
+  }};
+  render(html`<${AdapterWorkspace} api=${api} project=${project} hostId="adapter-review-fixture" storage=${memoryStorage()} profiles=${[]} conversationId="c1" onNative=${()=>{}} onOpenProject=${()=>{}} onOpenNavigation=${()=>{}}/>`,root);
+  try{
+    await until(()=>buttonLabelled(root,'Review agent request'),'the held request row');
+    fire(buttonLabelled(root,'Review agent request'),'click');
+    const pane=flatten(root).find(node=>node.localName==='aside');
+    assert.equal(document.activeElement,pane,'the review pane on screen takes focus');
+    assert.ok(!withClass(root,'review-dialog')[0].open,'no drawer opens over the visible pane');
+    const deny=flatten(pane).find(node=>node.localName==='button'&&textIn(node)==='Deny');
+    deny.focus();fire(withClass(pane,'review-content')[0],'focusin',{target:deny});
+    fire(deny,'click');
+    await until(()=>decisions.length===1,'the decision');
+    assert.equal(decisions[0].body.decision,'deny');
+    await until(()=>document.activeElement===headingText(root,'Agent requests'),'focus on the review heading');
+  }finally{render(null,root);}
+});
+
+test('a tab without its launch token says where the launch link comes from',async()=>{
+  const root=new Element('div');installDom(root);
+  globalThis.location={hash:'',pathname:'/',search:''};
+  try{
+    await import('../app.js?no-token-fixture');
+    const shown=textIn(root);
+    assert.ok(shown.includes('Open Switchya from the local app.'));
+    assert.ok(shown.includes('switchya serve'));
+    assert.ok(!shown.includes('Provider keys'),'gateway configuration has nothing to do with reconnecting');
+  }finally{render(null,root);}
 });

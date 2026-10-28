@@ -26,6 +26,15 @@ test('bounded event merge deduplicates sequences and excludes another session',(
   const result=mergeEvents(old,[event(610,'changed'),event(611,'notice',{},'r','other')],'s1');
   assert.equal(result.length,600);assert.equal(result[0].seq,11);assert.equal(result.at(-1).kind,'changed');
 });
+test('cancelled and timed-out commands read the same in the transcript and the review result',async()=>{
+  const { toolStateLabel }=await import('../presentation.js');
+  assert.equal(toolStateLabel('cancelled'),'Cancelled');
+  assert.equal(toolStateLabel('timed_out'),'Timed out');
+  const [row]=transcript([event(1,'tool.proposed',{id:'o1',name:'run_command'}),event(2,'tool.completed',{operation_id:'o1',name:'run_command',result:{status:'timed_out',error:'command exceeded its 1000 ms timeout'}})]);
+  assert.equal(toolStateLabel(row.status),'Timed out');
+  // An unfamiliar state still shows its own words rather than a guess.
+  assert.equal(toolStateLabel('rolled_back'),'rolled back');
+});
 test('completed is neutral and uncertain recovery cannot submit a turn',()=>{
   assert.equal(stateTone('completed'),'neutral');assert.equal(canSubmit('recovery_required'),false);assert.equal(canSubmit('interrupted'),true);assert.equal(canSubmit('running'),false);
 });
@@ -78,8 +87,9 @@ test('auto-approved operations stay distinguishable from human decisions',async(
 });
 test('approval labels name what runs without asking',async()=>{
   const { autoApproveLabel, autoApproveTone, effectivePolicy }=await import('../trust.js');
-  assert.equal(autoApproveLabel({edits:false,commands:false}),'Writes and commands need approval');
-  assert.equal(autoApproveLabel(undefined),'Writes and commands need approval');
+  // The off state uses the same words as the on states and the dialog: edits and commands.
+  assert.equal(autoApproveLabel({edits:false,commands:false}),'Edits and commands need approval');
+  assert.equal(autoApproveLabel(undefined),'Edits and commands need approval');
   assert.match(autoApproveLabel({edits:true,commands:false}),/^Edits apply without asking/);
   assert.match(autoApproveLabel({edits:false,commands:true}),/^Commands run without asking/);
   assert.equal(autoApproveTone({edits:true,commands:false}),'caution');

@@ -19,6 +19,26 @@
   requests always wait for you. From the terminal, use
   `switchya trust --edits on --commands on` or `--auto-approve` on
   `chat` and `run`.
+- Approval settings opened from Existing agents shows only the project
+  setting, which those runs follow. It no longer offers the override of a
+  built-in session that is selected but out of view. The approval note now
+  reads "Edits and commands need approval", the same words as its other
+  states and the dialog; screen readers hear each checkbox by its title with
+  the explanation as its description, and the project and session sets are
+  named groups.
+- Existing agents, the first-run view, says "No agent CLI found" when no
+  Codex, Claude Code or Antigravity CLI is installed, and opens the list of
+  what it checked, instead of showing only a disabled agent picker.
+- Keyboard focus no longer drops to the page after Allow once, Deny or Close
+  details: it returns to the review heading. On wide screens, opening a
+  transcript row moves focus to its details, and Review agent request
+  focuses the review pane on screen instead of opening the narrow-window
+  drawer over it.
+- The provider form says why a configuration name is rejected (lowercase
+  letters, digits, hyphens or underscores, starting with a letter) instead
+  of only disabling Save. Cancelled and timed-out commands read "Cancelled"
+  and "Timed out" in transcript rows, as in their results, and a tab opened
+  without its launch token says where the launch link comes from.
 
 - Transcript rows, notices and the composer share one reading column.
   Existing-agent conversations show a repeated agent notice once, with one

@@ -17,6 +17,22 @@ export function SignalLight({count=0}) {
   const text=count>1?`${count} approvals needed`:count?'Approval needed':'Nothing to approve';
   return html`<span class="signal-light" data-tone=${count?'caution':'neutral'}><${Icon} name="signal"/><span>${text}</span></span>`;
 }
+/** Deciding an approval or closing details removes the control that had focus,
+ * which drops keyboard focus to the page. When `key` changes and the last focused
+ * control inside the tracked area is gone, focus `target` (the pane heading)
+ * instead. Focus on any other control is never moved. Returns the focusin handler
+ * for the tracked area. */
+export function useFocusRecovery(key,target) {
+  const last=useRef(null);
+  useEffect(()=>{
+    const previous=last.current;
+    if(!previous||previous.isConnected)return;
+    last.current=null;
+    const active=document.activeElement;
+    if(!active||!active.isConnected||active.contains?.(target.current))target.current?.focus();
+  },[key]);
+  return event=>{last.current=event.target;};
+}
 /** A turn boundary: one thin rule with the outcome and its time. */
 export function TurnRule({tone='neutral',label,time,fullTime,note}) {
   return html`<div class="turn-rule" data-tone=${tone}><${Icon} name=${tone==='neutral'?'junction':'alert'}/><span class="turn-rule-label">${label}</span>${time&&html`<time title=${fullTime}>${time}</time>`}${note&&html`<span class="turn-rule-note">${note}</span>`}</div>`;
