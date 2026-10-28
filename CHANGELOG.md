@@ -29,6 +29,9 @@
   announces its state, small text is at least 12px, dark-theme panes are
   easier to tell apart, and copied file previews no longer contain hidden
   zero-width characters.
+- On macOS, a command that finished normally is no longer reported as failed
+  with "Operation not permitted (os error 1)" when its process group had
+  already exited by the time Switchya cleaned it up.
 
 ### Gateway dashboard
 

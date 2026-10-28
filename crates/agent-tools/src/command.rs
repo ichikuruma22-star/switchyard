@@ -161,7 +161,12 @@ pub(super) async fn execute(
     };
     // Also end background children when the foreground shell returns. A command
     // tool is bounded work, never an implicit long-lived server launcher.
-    let cleanup_error = tree.terminate().err().map(|error| error.to_string());
+    let reaped = matches!(wait_result, Some(Ok(_)));
+    let cleanup_error = tree
+        .terminate_after(reaped)
+        .await
+        .err()
+        .map(|error| error.to_string());
     let exit = if let Some(result) = wait_result {
         result
     } else {
@@ -262,6 +267,44 @@ impl ProcessTree {
         }
         Ok(())
     }
+
+    /// Ends the group once the shell has finished. `reaped` says whether the
+    /// shell itself has already been waited for.
+    async fn terminate_after(&mut self, reaped: bool) -> io::Result<()> {
+        let result = self.terminate();
+        // Darwin's killpg skips zombies and can return EPERM for a group whose
+        // leader has already exited. After reaping the shell, accept that error
+        // only once the whole group is confirmed absent.
+        #[cfg(target_os = "macos")]
+        if reaped
+            && result
+                .as_ref()
+                .is_err_and(|error| error.raw_os_error() == Some(libc::EPERM))
+            && self.confirm_absent_after_reaping().await
+        {
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = reaped;
+        result
+    }
+
+    /// Probes the group with signal 0 until it reports ESRCH. Signal 0 delivers
+    /// nothing, so a reused PID cannot be affected. Exited members can stay
+    /// visible for a moment while they are reaped, hence the short retry.
+    #[cfg(target_os = "macos")]
+    async fn confirm_absent_after_reaping(&self) -> bool {
+        for _ in 0..20 {
+            // SAFETY: pgid is positive; signal 0 only probes the process group.
+            if unsafe { libc::kill(-self.pgid, 0) } != 0
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
 }
 
 #[cfg(unix)]
@@ -338,6 +381,10 @@ impl ProcessTree {
         self.active = false;
         Ok(())
     }
+
+    async fn terminate_after(&mut self, _reaped: bool) -> io::Result<()> {
+        self.terminate()
+    }
 }
 
 #[cfg(windows)]
@@ -393,6 +440,35 @@ fn resume_primary_thread(pid: u32) -> io::Result<()> {
 impl Drop for ProcessTree {
     fn drop(&mut self) {
         let _ = self.terminate();
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod process_group_tests {
+    use super::*;
+
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]).process_group(0);
+        command
+    }
+
+    #[tokio::test]
+    async fn permission_error_is_accepted_only_for_a_reaped_and_absent_group() {
+        // A live group is never confirmed absent, even if a caller says reaped.
+        let mut child = shell("sleep 30").spawn().unwrap();
+        let mut tree = ProcessTree::attach(&child).unwrap();
+        assert!(!tree.confirm_absent_after_reaping().await);
+        tree.terminate().unwrap();
+        child.wait().await.unwrap();
+
+        // Once the shell has been reaped its group is gone, which is what lets
+        // terminate_after accept Darwin's EPERM for an exited leader.
+        let mut child = shell("exit 0").spawn().unwrap();
+        let mut tree = ProcessTree::attach(&child).unwrap();
+        child.wait().await.unwrap();
+        assert!(tree.confirm_absent_after_reaping().await);
+        tree.terminate_after(true).await.unwrap();
     }
 }
 
