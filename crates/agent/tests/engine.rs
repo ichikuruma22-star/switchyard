@@ -103,7 +103,9 @@ id = "fixture"
     }
 
     async fn wait_session(&self, session_id: &str, state: SessionState) {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        // Generous on purpose: a cold shell on a busy Windows runner has taken more than
+        // 10 s to run `echo`. A session that works gets there long before this.
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let view = self.engine.session(session_id).unwrap();
                 if view.session.state == state {
