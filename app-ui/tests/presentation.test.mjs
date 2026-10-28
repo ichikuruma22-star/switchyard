@@ -72,6 +72,9 @@ test('auto-approved operations stay distinguishable from human decisions',async(
   const change=transcript([event(5,'auto_approve.changed',{session_override:{edits:false,commands:false},effective:{edits:false,commands:false,source:'session'}})])[0];
   assert.equal(change.type,'state');assert.match(change.text,/needs your approval \(this session only\)/);
   assert.match(autoApproveChange({session_override:null,effective:{edits:true,commands:true,source:'project'}}),/edits and commands now run without asking \(following the project setting\)/);
+  // A project change recorded in a running session reads as following the project.
+  const projectChange=transcript([event(6,'auto_approve.changed',{scope:'project',project_policy:{edits:true,commands:false},effective:{edits:true,commands:false,source:'project'}})])[0];
+  assert.match(projectChange.text,/following the project setting/);
 });
 test('approval labels name what runs without asking',async()=>{
   const { autoApproveLabel, autoApproveTone, effectivePolicy }=await import('../trust.js');
@@ -86,4 +89,13 @@ test('approval labels name what runs without asking',async()=>{
   assert.deepEqual(effectivePolicy({auto_approve:{edits:true,commands:false}},null),{edits:true,commands:false,source:'project'});
   assert.deepEqual(effectivePolicy({auto_approve:{edits:true,commands:true}},{auto_approve:{edits:false,commands:false,source:'session'}}),{edits:false,commands:false,source:'session'});
   assert.deepEqual(effectivePolicy({},null),{edits:false,commands:false,source:'project'});
+});
+test('the approval dialog warns about project trust even when this session overrides it',async()=>{
+  const { trustWarning }=await import('../trust.js');
+  assert.equal(trustWarning({edits:false,commands:false},null),null);
+  assert.equal(trustWarning({edits:true,commands:false},null),'edits');
+  // Project commands reach other sessions and existing-agent runs.
+  assert.equal(trustWarning({edits:false,commands:true},{edits:false,commands:false}),'commands');
+  assert.equal(trustWarning({edits:false,commands:false},{edits:true,commands:true}),'commands');
+  assert.equal(trustWarning(undefined,{edits:true,commands:false}),'edits');
 });

@@ -43,7 +43,7 @@ function TranscriptRow({item,session,onReview,pendingOperationId}) {
   if(item.type==='state'){
     const stop=item.kind==='run.failed'||item.kind==='recovery.required';
     const tone=stop?'stop':item.kind==='run.interrupted'?'caution':item.kind==='auto_approve.changed'?autoApproveTone(item.payload?.effective):'neutral';
-    return html`<div class="state-event" data-tone=${tone}><${Icon} name=${tone==='neutral'?'info':'alert'}/><div><strong>${({'run.failed':'Run failed','run.interrupted':'Run interrupted','recovery.required':'Recovery required','auto_approve.changed':'Session approval setting changed'})[item.kind]}</strong><p>${item.text}</p></div></div>`;
+    return html`<div class="state-event" data-tone=${tone}><${Icon} name=${tone==='neutral'?'info':'alert'}/><div><strong>${({'run.failed':'Run failed','run.interrupted':'Run interrupted','recovery.required':'Recovery required','auto_approve.changed':item.payload?.scope==='project'?'Project approval setting changed':'Session approval setting changed'})[item.kind]}</strong><p>${item.text}</p></div></div>`;
   }
   return html`<details class="activity-details"><summary>${item.label}</summary><${RawValue} value=${item.payload}/></details>`;
 }

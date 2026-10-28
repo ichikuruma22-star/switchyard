@@ -39,7 +39,7 @@ Later that day, live Windows runs used an existing Codex CLI account and a manag
 | `run_profile(id)` | Trusted host-only lookup of a run's binding, used to keep a continuation on the same account. The binding must never become an HTTP response. |
 | `shutdown().await` | Cancels active supervisors, stops owned process trees and waits for cleanup. |
 
-`StartRequest` contains `adapter_id`, `project_path`, `prompt`, `command_id`, an optional `continue_run_id`, an internal optional `ProfileBinding` and an internal `AutoApproval`. Neither the binding nor the approval setting can be deserialized from HTTP JSON; the host copies the approval setting from the saved project. The HTTP host must resolve both a project ID and profile ID from its trusted registries. It must apply the same loopback, bearer authentication, Origin, JSON body and body-size restrictions as the own-engine routes. A client command UUID is required. Reusing it with the same complete request, including profile identity/home, returns the same run; changing that request causes conflict. The registry retains all command IDs, including those of runs removed by retention, so an evicted ID cannot accidentally replay work. Each run exposes its pinned `profile_id` and `profile_name`; changing a default does not alter existing runs.
+`StartRequest` contains `adapter_id`, `project_path`, `prompt`, `command_id`, an optional `continue_run_id`, an internal optional `ProfileBinding`, an internal `AutoApprovalSource` and internal review paths. None of them can be deserialized from HTTP JSON; the host gives each run a source that reads the saved project's approval setting whenever a request arrives, plus the app's data directory and gateway configuration as review paths. The HTTP host must resolve both a project ID and profile ID from its trusted registries. It must apply the same loopback, bearer authentication, Origin, JSON body and body-size restrictions as the own-engine routes. A client command UUID is required. Reusing it with the same complete request, including profile identity/home, returns the same run; changing that request causes conflict. The registry retains all command IDs, including those of runs removed by retention, so an evicted ID cannot accidentally replay work. Each run exposes its pinned `profile_id` and `profile_name`; changing a default does not alter existing runs.
 
 Executable, shell arguments, config overrides, model IDs and provider tokens are not HTTP input. Discovery resolves a fixed CLI name to an absolute path, skips relative/empty PATH entries and excludes Windows `.cmd`/`.bat` shims. `Command` launches the native executable directly. Prompt text travels as JSON over stdin; it is never interpolated into a shell command. The selected Codex model comes from the CLI configuration and is reported only after thread creation. Discovery does not test authentication, available models, subscription eligibility or provider billing. Starting a real turn uses that installation's authentication and may consume provider usage.
 
@@ -98,12 +98,27 @@ message fields are not added to the transcript.
 
 ### Opt-in automatic approval
 
-When a run starts with a project `AutoApproval` of edits and/or commands,
-Switchya answers matching requests itself instead of holding them for a
-person. It journals `approval_requested` with the exact preview first, then
-sends the same one-time answer a person's **Allow once** would (`accept` for
-Codex; `behavior=allow` with the unchanged `updatedInput` for Claude Code) and
-records `approval_resolved` with `decided_by: "auto_approve"`.
+When the project's approval setting covers edits and/or commands at the time
+a request arrives, Switchya answers matching requests itself instead of
+holding them for a person. It journals `approval_requested` with the exact
+preview first, then sends the same one-time answer a person's **Allow once**
+would (`accept` for Codex; `behavior=allow` with the unchanged `updatedInput`
+for Claude Code) and records `approval_resolved` with
+`decided_by: "auto_approve"`, the `policy` that applied and a `request`
+summary (the paths written, or the command). Every `approval_resolved` event
+carries that summary and outlasts other events in the bounded window while
+decisions fit in half of it. A change to the project's setting is recorded in
+each active run as `auto_approve_changed` and updates the run's
+`auto_approve`.
+
+An edit qualifies only when Switchya knows every path it writes: Codex
+`changes[].path` and any `move_path`, or Claude Code's `file_path` or
+`notebook_path`. Each path must resolve inside the project and pass the
+built-in agent's checks for unreviewed edits: no repository metadata, likely
+secrets, links, short-name aliases or files other programs load by themselves,
+and no project that contains the home folder. It must also lie outside the
+review paths: the app's data directory, its gateway configuration, a managed
+account's home and any `CLAUDE_CONFIG_DIR` or `CODEX_HOME` folder.
 
 Only requests with `can_allow_once` and a known category qualify: Codex
 `item/commandExecution/requestApproval` (commands) and

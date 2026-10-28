@@ -8,7 +8,8 @@ use crate::{
         HANDSHAKE_TIMEOUT, INTERRUPT_TIMEOUT, Packet, RunInput, TURN_TIMEOUT, discard_stderr, fail,
         read_stdout, valid_id, write,
     },
-    types::{ApprovalKind, AutoApproval, CLAUDE_PERMISSION_BOUNDARY},
+    trust::{self, Trust},
+    types::{ApprovalKind, CLAUDE_PERMISSION_BOUNDARY},
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -49,7 +50,7 @@ pub(crate) async fn run(
         prompt,
         resume_thread,
         ephemeral,
-        auto_approve,
+        trust,
     } = input;
     let session = resume_thread
         .clone()
@@ -222,7 +223,7 @@ pub(crate) async fn run(
                                 fail(&state, "Claude Code requested permission before confirming the conversation.", requested);
                                 break;
                             }
-                            if let Err(error) = request(&mut stdin, &state, &mut pending, &mut seen_requests, &message, interrupting, auto_approve).await {
+                            if let Err(error) = request(&mut stdin, &state, &mut pending, &mut seen_requests, &message, interrupting, &trust).await {
                                 fail(&state, &error.to_string(), requested);
                                 break;
                             }
@@ -343,7 +344,7 @@ async fn request(
     seen: &mut HashSet<String>,
     message: &Value,
     interrupting: bool,
-    auto_approve: AutoApproval,
+    trust: &Trust,
 ) -> Result<()> {
     let wire_id = message
         .get("request_id")
@@ -402,7 +403,10 @@ async fn request(
         can_allow_once: !matches!(name, "AskUserQuestion" | "ExitPlanMode" | "EnterPlanMode"),
         permission_boundary: CLAUDE_PERMISSION_BOUNDARY.into(),
     };
-    if approval.can_allow_once && auto_approve.allows(tool_kind(name)) {
+    let targets = trust::claude_targets(name, input);
+    if approval.can_allow_once
+        && let Some(policy) = trust.approves(tool_kind(name), targets.as_deref())
+    {
         // Journal the exact request before answering it, as for a human decision.
         state
             .lock()
@@ -415,7 +419,8 @@ async fn request(
         .await?;
         state.lock().event(
             "approval_resolved",
-            json!({"approval_id":approval.id,"decision":"allow_once","decided_by":"auto_approve"}),
+            json!({"approval_id":approval.id,"decision":"allow_once","decided_by":"auto_approve",
+                "policy":policy,"request":trust::request_summary(&approval)}),
         );
         return Ok(());
     }
@@ -498,14 +503,16 @@ fn resolve(
     id: &str,
     decision: &str,
 ) {
-    pending.remove(id);
+    let summary = pending
+        .remove(id)
+        .map(|request| trust::request_summary(&request.approval));
     let mut run = state.lock();
     run.view
         .pending_approvals
         .retain(|approval| approval.id != id);
     run.event(
         "approval_resolved",
-        json!({"approval_id":id,"decision":decision}),
+        json!({"approval_id":id,"decision":decision,"request":summary}),
     );
     if pending.is_empty() && run.view.state == RunState::AwaitingApproval {
         run.state(RunState::Running);

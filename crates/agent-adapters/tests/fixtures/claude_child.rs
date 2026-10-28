@@ -34,8 +34,11 @@ fn main() {
     let project = std::env::current_dir().unwrap();
     let cwd = quoted(project.to_str().unwrap());
     let marker = project.join("approved.txt");
+    // A Git hook is never an ordinary project file, whatever the approval setting.
+    let target = if scenario == "write_hook" { project.join(".git").join("hooks").join("pre-commit") } else { marker.clone() };
+    let file_path = quoted(target.to_str().unwrap());
     let tool_name = if scenario == "deny_only" { "ExitPlanMode" } else { "Write" };
-    let approval = format!(r#"{{"type":"control_request","request_id":"permission-fixture","request":{{"subtype":"can_use_tool","tool_name":"{tool_name}","tool_use_id":"tool-fixture","input":{{"content":"literal $(not a shell) `text`"}},"permission_suggestions":[{{"type":"addRules","behavior":"allow","destination":"userSettings"}}]}}}}"#);
+    let approval = format!(r#"{{"type":"control_request","request_id":"permission-fixture","request":{{"subtype":"can_use_tool","tool_name":"{tool_name}","tool_use_id":"tool-fixture","input":{{"content":"literal $(not a shell) `text`","file_path":{file_path}}},"permission_suggestions":[{{"type":"addRules","behavior":"allow","destination":"userSettings"}}]}}}}"#);
     eprintln!("private-diagnostic-do-not-display");
     for line in io::stdin().lock().lines() {
         let line = line.unwrap();
@@ -110,7 +113,7 @@ fn main() {
             } else {
                 assert!(!line.contains("updatedPermissions"), "one-time approval must never grant persistent permission rules");
                 if line.contains("\"behavior\":\"allow\"") {
-                    assert!(line.contains("\"updatedInput\":{\"content\":\"literal $(not a shell) `text`\"}"));
+                    assert!(line.contains(&format!("\"updatedInput\":{{\"content\":\"literal $(not a shell) `text`\",\"file_path\":{file_path}}}")));
                     std::fs::write(&marker, "explicitly approved").unwrap();
                 } else { assert!(line.contains("\"behavior\":\"deny\"")); }
                 send(&format!(r#"{{"type":"user","session_id":{session},"message":{{"content":[{{"type":"tool_result","tool_use_id":"tool-fixture","content":[{{"type":"text","text":"Fixture tool result"}},{{"type":"image","data":"private-image-do-not-display"}}]}}]}},"tool_use_result":{{"private":"private-metadata-do-not-display"}}}}"#));

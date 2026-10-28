@@ -135,11 +135,17 @@ fn main() {
                     );
                     continue;
                 }
-                "file_no_preview" | "file_grant_root" | "file_preview" => {
+                "file_no_preview" | "file_grant_root" | "file_preview" | "file_hook" | "file_move_out" => {
+                    // A Git hook, or a move out of the project, is never an ordinary project file.
+                    let change = match scenario {
+                        "file_hook" => r#""path":".git/hooks/pre-commit","kind":{"type":"add"}"#,
+                        "file_move_out" => r#""path":"fixture.txt","kind":{"type":"update","move_path":"../outside.txt"}"#,
+                        _ => r#""path":"fixture.txt","kind":{"type":"update"}"#,
+                    };
                     if scenario != "file_no_preview" {
-                        send(
-                            r#"{"method":"item/started","params":{"threadId":"thread-fixture","turnId":"turn-fixture","item":{"id":"patch-1","type":"fileChange","status":"inProgress","changes":[{"path":"fixture.txt","kind":{"type":"update"},"diff":"-old\n+new"}]}}}"#,
-                        );
+                        send(&format!(
+                            r#"{{"method":"item/started","params":{{"threadId":"thread-fixture","turnId":"turn-fixture","item":{{"id":"patch-1","type":"fileChange","status":"inProgress","changes":[{{{change},"diff":"-old\n+new"}}]}}}}}}"#,
+                        ));
                     }
                     if scenario == "file_grant_root" {
                         send(

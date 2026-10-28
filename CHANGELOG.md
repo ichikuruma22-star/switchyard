@@ -9,10 +9,14 @@
   shell commands without a prompt; a session can override its project. It is
   off by default, and while it is on the composer note turns amber or red and
   the header reads "Auto-approve on". Every operation is still recorded and
-  marked Auto-approved; protected paths stay blocked, and edits to Switchya's
-  own state or gateway configuration still ask. The same project setting
-  covers complete Codex and Claude Code edit and command requests in Existing
-  agents; deny-only requests always wait for you. From the terminal, use
+  marked Auto-approved; protected paths stay blocked, and edits outside the
+  project, to Switchya's own state, gateway or agent account settings, to
+  files other programs load by themselves (shell profiles, Git, editor and
+  agent settings), or anywhere in a project that contains your home folder
+  still ask. The same project setting covers complete Codex and Claude Code
+  edit and command requests in Existing agents, read when each request
+  arrives, so turning it off reaches runs already in progress; deny-only
+  requests always wait for you. From the terminal, use
   `switchya trust --edits on --commands on` or `--auto-approve` on
   `chat` and `run`.
 

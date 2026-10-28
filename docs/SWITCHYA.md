@@ -206,20 +206,31 @@ Automatic approval only replaces the click. Each operation is still proposed,
 recorded with its exact arguments and diff, and marked **Auto-approved** in the
 transcript and review pane, followed by its real result. The tools still
 refuse repository metadata (`.git`), likely secrets such as `.env` and `.ssh`,
-links and Windows short-name aliases. Edits to Switchya's own data directory
-or gateway configuration always ask, even in a trusted project. **Interrupt**
-stops the run at any time; nothing is rolled back. A change applies to the
-next proposed operation: one already waiting still needs your decision.
+links and Windows short-name aliases. Some edits always ask, even in a
+trusted project: edits to Switchya's own data directory or gateway
+configuration, to files other programs load by themselves (shell startup files
+and PowerShell profiles, `.gitconfig`, `.husky`, `.githooks`,
+`.pre-commit-config.yaml`, `.envrc`, `.vscode`, `.mcp.json`, `.claude.json`),
+and every edit in a project that is, or contains, your home folder.
+**Interrupt** stops the run at any time; nothing is rolled back. A change
+applies at once to every operation that has not started, even one waiting
+behind another session's change; one already waiting for your decision still
+needs it. Running sessions that follow the project show the change in their
+history.
 
-The same project setting applies to **Existing agents** runs started after the
-change. Switchya then answers complete single-operation requests from Codex
-(commands, file changes) and Claude Code (Write, Edit, MultiEdit, NotebookEdit
-for edits; Bash and PowerShell for commands) itself and records them as
-**Approved automatically**. Requests that cannot be allowed once (deny-only,
-such as a broad Codex write grant or Claude's plan-mode and question tools)
-and any other tool, including MCP and web tools, still wait for you. The
-agents keep their own policies: Codex stays in its read-only sandbox with
-on-request approvals and Claude Code in default permission mode.
+The same project setting applies to **Existing agents** runs, including ones
+already running: Switchya reads it when each request arrives. Switchya then
+answers complete single-operation requests from Codex (commands, file changes)
+and Claude Code (Write, Edit, MultiEdit, NotebookEdit for edits; Bash and
+PowerShell for commands) itself and records them as **Approved
+automatically**, with the files or command they covered. A file change
+qualifies only when every file it writes is an ordinary file inside the
+project, under the same rules as the built-in agent, and outside the agent
+account's own settings. Requests that cannot be allowed once (deny-only, such
+as a broad Codex write grant or Claude's plan-mode and question tools) and any
+other tool, including MCP and web tools, still wait for you. The agents keep
+their own policies: Codex stays in its read-only sandbox with on-request
+approvals and Claude Code in default permission mode.
 
 After an operation, inspect the recorded result, output, file changes and
 command exit code. **Completed** means the model finished the run. It does

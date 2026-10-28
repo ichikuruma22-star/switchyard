@@ -81,16 +81,34 @@ What automatic approval keeps:
   `auto_approve` and the policy source, and the recorded result.
 - The tools still refuse repository metadata, likely secrets, links and
   reparse points, and Windows short-name aliases. Edits that target the app's
-  data directory or gateway configuration always require a person.
-- Turning the setting off applies to the next proposed operation; an
-  operation already awaiting a decision is not approved retroactively.
+  data directory or gateway configuration always require a person, compared
+  without regard to letter case on every platform.
+- Files that other programs load and act on by themselves always require a
+  person: shell startup files and PowerShell profiles, `.gitconfig`, Git hook
+  managers (`.husky`, `.githooks`, `.pre-commit-config.yaml`), `.envrc`,
+  `.vscode`, `.mcp.json` and `.claude.json`. This is a short list of
+  well-known names, not a guarantee.
+- Every edit in a project that is, or contains, your home folder requires a
+  person, because a home folder holds configuration that runs code.
+- A change to the setting applies at once to every operation that has not
+  started, including one waiting behind another session's change, and to
+  existing-agent runs already in progress. An operation already awaiting a
+  decision is not approved retroactively. Running sessions that follow the
+  project record the change in their history.
 - Uncertain outcomes still require recovery review and are never replayed.
 
 For existing agents (Codex, Claude Code), the same project setting lets
 Switchya answer complete single-operation requests of the matching kind. It
-does not change the agent's own sandbox or permission mode. Deny-only
-requests, broad permission grants, unknown request types and tools without a
-known edit or command category always wait for a person.
+does not change the agent's own sandbox or permission mode. Switchya reads the
+setting when each request arrives. An edit qualifies only when every path it
+writes, including a Codex move destination, is an ordinary file inside the
+project under the same checks as the built-in agent's edits, and outside the
+app's data, its gateway configuration and the agent account's own settings.
+Deny-only requests, broad permission grants, unknown request types, edits
+without a known target and tools without a known edit or command category
+always wait for a person. Each decision record names the setting that made it
+and the paths or command it covered, and decisions outlast other events in a
+long run's bounded history.
 
 ## Verification limits
 

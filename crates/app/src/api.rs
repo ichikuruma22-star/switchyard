@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use switchyard_agent::{AppEngine, AutoApprove, Decision};
-use switchyard_agent_adapters::{AdapterManager, ApprovalDecision, StartRequest};
+use switchyard_agent_adapters::{
+    AdapterManager, ApprovalDecision, AutoApproval, AutoApprovalSource, StartRequest,
+};
 
 const BODY_LIMIT: usize = 256 * 1024;
 
@@ -362,11 +364,21 @@ async fn open_project(
     Ok((StatusCode::CREATED, Json(json!({"project": project}))))
 }
 
+/// Both choices are required: a missing one is an error, never "off".
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProjectAutoApprove {
+struct AutoApproveInput {
     edits: bool,
     commands: bool,
+}
+
+impl From<AutoApproveInput> for AutoApprove {
+    fn from(input: AutoApproveInput) -> Self {
+        Self {
+            edits: input.edits,
+            commands: input.commands,
+        }
+    }
 }
 
 async fn set_project_auto_approve(
@@ -374,22 +386,33 @@ async fn set_project_auto_approve(
     Path(id): Path<String>,
     request: Request,
 ) -> Result<Json<Value>> {
-    let input: ProjectAutoApprove = body(request).await?;
-    let project = state.engine.set_project_auto_approve(
-        &id,
-        AutoApprove {
-            edits: input.edits,
-            commands: input.commands,
+    let input: AutoApproveInput = body(request).await?;
+    let project = state.engine.set_project_auto_approve(&id, input.into())?;
+    // Existing-agent runs read the setting live; record it in their history.
+    state.adapters.note_auto_approve(
+        std::path::Path::new(&project.root),
+        AutoApproval {
+            edits: project.auto_approve.edits,
+            commands: project.auto_approve.commands,
         },
-    )?;
+    );
     Ok(Json(json!({"project": project})))
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SessionAutoApprove {
-    /// `null` inherits the project's setting.
-    policy: Option<AutoApprove>,
+    /// Required; `null` inherits the project's setting.
+    #[serde(deserialize_with = "required_nullable")]
+    policy: Option<AutoApproveInput>,
+}
+
+fn required_nullable<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer)
 }
 
 async fn set_session_auto_approve(
@@ -398,8 +421,25 @@ async fn set_session_auto_approve(
     request: Request,
 ) -> Result<Json<Value>> {
     let input: SessionAutoApprove = body(request).await?;
-    let session = state.engine.set_session_auto_approve(&id, input.policy)?;
+    let session = state
+        .engine
+        .set_session_auto_approve(&id, input.policy.map(Into::into))?;
     Ok(Json(json!({"session": session})))
+}
+
+/// The project's current approval setting, read whenever an existing agent's
+/// request arrives. A project that cannot be read asks a person.
+fn project_auto_approval(engine: &AppEngine, project_id: &str) -> AutoApprovalSource {
+    let (engine, id) = (engine.clone(), project_id.to_owned());
+    AutoApprovalSource::new(move || {
+        engine
+            .project(&id)
+            .map(|project| AutoApproval {
+                edits: project.auto_approve.edits,
+                commands: project.auto_approve.commands,
+            })
+            .unwrap_or_default()
+    })
 }
 
 async fn sessions(State(state): State<Arc<AppState>>, request: Request) -> Result<Json<Value>> {
@@ -577,10 +617,9 @@ async fn start_adapter_run(
             prompt: input.prompt,
             command_id: input.command_id,
             continue_run_id: input.continue_run_id,
-            auto_approve: switchyard_agent_adapters::AutoApproval {
-                edits: project.auto_approve.edits,
-                commands: project.auto_approve.commands,
-            },
+            auto_approve: project_auto_approval(&state.engine, &project.id),
+            // Edits to the app's own state and gateway configuration always ask.
+            review_paths: vec![state.data_dir.clone(), state.config_path.clone()],
             profile: None,
         },
         input.profile_id.as_deref(),
@@ -1135,6 +1174,34 @@ mod tests {
             json!({"edits":true,"commands":false,"source":"project"})
         );
         let session_path = format!("/api/sessions/{id}/auto-approve");
+        // Both choices and the policy key are required; nothing defaults to "off".
+        for invalid in [
+            json!({}),
+            json!({"policy":{}}),
+            json!({"policy":{"edits":true}}),
+        ] {
+            assert_eq!(
+                harness
+                    .request("POST", &session_path, Some(invalid.clone()))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST,
+                "{invalid}"
+            );
+        }
+        // The setting is never accepted with an existing-agent request.
+        let (status, _) = harness
+            .request(
+                "POST",
+                "/api/adapter-runs",
+                Some(
+                    json!({"adapter_id":"codex","project_id":project.id,"prompt":"fixture",
+                    "command_id":uuid::Uuid::new_v4().to_string(),
+                    "auto_approve":{"edits":true,"commands":true}}),
+                ),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             harness
                 .request(

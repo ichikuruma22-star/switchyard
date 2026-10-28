@@ -1,3 +1,4 @@
+use crate::trust::AutoApprovalSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -29,10 +30,15 @@ pub struct StartRequest {
     /// Resolved by the trusted account manager, never accepted from HTTP JSON.
     #[serde(skip)]
     pub profile: Option<ProfileBinding>,
-    /// The project's opt-in approval setting when the run starts. Resolved by the
-    /// app from saved project state, never accepted from HTTP JSON.
+    /// Reads the project's opt-in approval setting whenever a request arrives.
+    /// Resolved by the app from saved project state, never accepted from HTTP
+    /// JSON; the default asks a person every time.
     #[serde(skip)]
-    pub auto_approve: AutoApproval,
+    pub auto_approve: AutoApprovalSource,
+    /// Files and folders whose edits always go to a person, such as the app's
+    /// data and gateway configuration. A managed account's home is added.
+    #[serde(skip)]
+    pub review_paths: Vec<PathBuf>,
 }
 
 /// Which complete, single-operation requests Switchya answers itself instead of
@@ -57,6 +63,22 @@ impl AutoApproval {
             Some(ApprovalKind::Edit) => self.edits,
             Some(ApprovalKind::Command) => self.commands,
             None => false,
+        }
+    }
+}
+
+/// A run history's description of a changed approval setting.
+pub(crate) fn auto_approval_text(policy: AutoApproval) -> &'static str {
+    match (policy.edits, policy.commands) {
+        (false, false) => "Every file change and command now waits for you.",
+        (true, false) => {
+            "Switchya now approves complete changes to ordinary project files itself; commands wait for you."
+        }
+        (false, true) => {
+            "Switchya now approves complete commands itself; file changes wait for you."
+        }
+        (true, true) => {
+            "Switchya now approves complete commands and changes to ordinary project files itself."
         }
     }
 }
@@ -123,7 +145,9 @@ pub struct AdapterRun {
     #[serde(default)]
     pub history_error: Option<String>,
     pub permission_boundary: String,
-    /// Approval setting this run started with. Changes apply to later runs.
+    /// The project's approval setting as this run last saw it: read when the run
+    /// starts and updated when the setting changes while it is active. Every
+    /// request reads the current setting.
     #[serde(default)]
     pub auto_approve: AutoApproval,
 }

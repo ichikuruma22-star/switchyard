@@ -43,6 +43,7 @@ fn request(project: &Path, previous: Option<String>) -> StartRequest {
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: previous,
         auto_approve: Default::default(),
+        review_paths: Vec::new(),
         profile: Some(ProfileBinding {
             id: "claude-fixture".into(),
             name: "Claude fixture".into(),
@@ -452,7 +453,7 @@ async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().canonicalize().unwrap();
         let mut request = request(&project, None);
-        request.auto_approve = auto_approve;
+        request.auto_approve = AutoApprovalSource::new(move || auto_approve);
         let run = manager
             .start_process(request, project, fixture(), vec![scenario.into()])
             .unwrap();
@@ -475,7 +476,8 @@ async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests
         && e.payload["decided_by"] == "auto_approve"
         && e.payload["decision"] == "allow_once"));
 
-    // Commands-only trust does not cover Write; deny-only plan changes always ask.
+    // Commands-only trust does not cover Write; deny-only plan changes and a
+    // write to a Git hook always ask.
     for (scenario, auto) in [
         (
             "allow",
@@ -491,6 +493,7 @@ async fn claude_auto_approval_covers_built_in_tools_but_never_deny_only_requests
                 commands: true,
             },
         ),
+        ("write_hook", edits),
     ] {
         let manager = AdapterManager::new();
         let (directory, run) = start_auto(&manager, scenario, auto);

@@ -225,10 +225,12 @@ impl AppRuntime {
             .map_err(|_| AppError::invalid("The gateway configuration could not start. Use `switchyard check --config <path>` to review it."))?;
         let opened =
             client_identity(&gateway, options.client_key_name.as_deref()).and_then(|identity| {
-                let mut engine_options = EngineOptions::new(&options.data_dir);
-                // Trusted projects never auto-approve edits to the gateway configuration.
-                engine_options.review_paths.push(path.clone());
-                AppEngine::open(gateway.clone(), identity, engine_options).map_err(AppError::from)
+                AppEngine::open(
+                    gateway.clone(),
+                    identity,
+                    engine_options(&options.data_dir, &path),
+                )
+                .map_err(AppError::from)
             });
         match opened {
             Ok(engine) => Ok(Self {
@@ -250,9 +252,24 @@ impl AppRuntime {
     }
 }
 
+/// Trusted projects never auto-approve edits to the gateway configuration; the
+/// engine always protects its data directory.
+fn engine_options(data_dir: &Path, config: &Path) -> EngineOptions {
+    let mut options = EngineOptions::new(data_dir);
+    options.review_paths.push(config.to_owned());
+    options
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_gateway_configuration_is_a_review_path() {
+        let options = engine_options(Path::new("data/sessions"), Path::new("data/gateway.toml"));
+        assert_eq!(options.data_dir, Path::new("data/sessions"));
+        assert_eq!(options.review_paths, [PathBuf::from("data/gateway.toml")]);
+    }
 
     #[test]
     fn managed_directory_is_private_and_existing_permissions_are_only_verified() {

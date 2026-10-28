@@ -378,6 +378,20 @@ pub(crate) fn get_session(connection: &Connection, id: &str) -> Result<Session> 
     decode(text.ok_or_else(|| AgentError::NotFound("session not found".into()))?)
 }
 
+/// A project's sessions with a run in progress.
+pub(crate) fn running_sessions(connection: &Connection, project: &str) -> Result<Vec<Session>> {
+    let mut query = connection.prepare("SELECT value FROM sessions WHERE project_id=?1")?;
+    let rows = query.query_map([project], |r| r.get::<_, String>(0))?;
+    let mut sessions = Vec::new();
+    for row in rows {
+        let session: Session = decode(row?)?;
+        if session.active_run_id.is_some() {
+            sessions.push(session);
+        }
+    }
+    Ok(sessions)
+}
+
 pub(crate) fn save_session(tx: &Transaction<'_>, session: &Session) -> Result<()> {
     tx.execute(
         "UPDATE sessions SET value=?2 WHERE id=?1",

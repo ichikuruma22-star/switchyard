@@ -2,7 +2,8 @@ use crate::{
     AdapterApproval, AdapterError, ApprovalDecision, Control, Result, RunState, StoredRun,
     hash_value,
     process_tree::{self, ProcessTree},
-    types::{ApprovalKind, AutoApproval, PERMISSION_BOUNDARY},
+    trust::{self, Trust},
+    types::{ApprovalKind, PERMISSION_BOUNDARY},
 };
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -47,7 +48,7 @@ pub(crate) struct RunInput {
     pub(crate) resume_thread: Option<String>,
     /// Ask the agent not to save a new thread. Used when Switchya keeps no history.
     pub(crate) ephemeral: bool,
-    pub(crate) auto_approve: AutoApproval,
+    pub(crate) trust: Trust,
 }
 
 pub(crate) async fn run(
@@ -64,7 +65,7 @@ pub(crate) async fn run(
         prompt,
         resume_thread,
         ephemeral,
-        auto_approve,
+        trust,
     } = input;
     let mut command = Command::new(executable);
     command
@@ -182,7 +183,7 @@ pub(crate) async fn run(
                         Some(Packet::End) | None => { fail(&state, "Codex exited without a confirmed turn completion. No work will be replayed.", turn_was_requested); break; }
                     };
                     if message.get("method").is_some() && message.get("id").is_some() {
-                        if let Err(error) = server_request(&mut stdin, &state, &mut pending, &items, &message, stage == Stage::Interrupting, auto_approve).await {
+                        if let Err(error) = server_request(&mut stdin, &state, &mut pending, &items, &message, stage == Stage::Interrupting, &trust).await {
                             fail(&state, &error.to_string(), turn_was_requested); break;
                         }
                         continue;
@@ -394,7 +395,7 @@ async fn server_request(
     items: &BTreeMap<String, Value>,
     message: &Value,
     interrupting: bool,
-    auto_approve: AutoApproval,
+    trust: &Trust,
 ) -> Result<()> {
     let method = message
         .get("method")
@@ -489,12 +490,14 @@ async fn server_request(
         can_allow_once,
         permission_boundary: PERMISSION_BOUNDARY.into(),
     };
-    let kind = if method == "item/commandExecution/requestApproval" {
-        ApprovalKind::Command
+    let (kind, targets) = if method == "item/commandExecution/requestApproval" {
+        (ApprovalKind::Command, None)
     } else {
-        ApprovalKind::Edit
+        (ApprovalKind::Edit, trust::codex_targets(item.as_ref()))
     };
-    if approval.can_allow_once && auto_approve.allows(Some(kind)) {
+    if approval.can_allow_once
+        && let Some(policy) = trust.approves(Some(kind), targets.as_deref())
+    {
         // Journal the exact request before answering it, as for a human decision.
         state
             .lock()
@@ -502,7 +505,8 @@ async fn server_request(
         write(stdin, &json!({"id":id,"result":{"decision":"accept"}})).await?;
         state.lock().event(
             "approval_resolved",
-            json!({"approval_id":approval.id,"decision":ApprovalDecision::AllowOnce,"decided_by":"auto_approve"}),
+            json!({"approval_id":approval.id,"decision":ApprovalDecision::AllowOnce,
+                "decided_by":"auto_approve","policy":policy,"request":trust::request_summary(&approval)}),
         );
         return Ok(());
     }
@@ -550,6 +554,7 @@ async fn decide(
         ApprovalDecision::AllowOnce => "accept",
         ApprovalDecision::Deny => "decline",
     };
+    let summary = trust::request_summary(&request.approval);
     write(
         stdin,
         &json!({"id":request.wire_id,"result":{"decision":result}}),
@@ -560,7 +565,7 @@ async fn decide(
     run.view.pending_approvals.retain(|p| p.id != approval_id);
     run.event(
         "approval_resolved",
-        json!({"approval_id":approval_id,"decision":decision}),
+        json!({"approval_id":approval_id,"decision":decision,"request":summary}),
     );
     if pending.is_empty() {
         run.state(RunState::Running);

@@ -1,6 +1,8 @@
 use serde_json::json;
 use std::{fs, time::Duration};
-use switchyard_agent_tools::{definitions, execute, prepare, project_search, sha256};
+use switchyard_agent_tools::{
+    check_unreviewed_edit, definitions, execute, path_within, prepare, project_search, sha256,
+};
 use tokio_util::sync::CancellationToken;
 
 #[test]
@@ -69,6 +71,66 @@ fn blocks_traversal_metadata_secrets_and_ambiguous_names() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn unreviewed_edits_skip_files_other_programs_load_and_home_folders() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::create_dir(root.join("src")).unwrap();
+    for path in ["src/main.rs", "new/folder/file.txt", "README.md"] {
+        assert!(check_unreviewed_edit(&root, path).is_ok(), "refused {path}");
+    }
+    for path in [
+        ".bashrc",
+        "nested/.ZSHRC",
+        ".gitconfig",
+        ".husky/pre-commit",
+        ".vscode/settings.json",
+        ".mcp.json",
+        ".claude.json",
+        "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+        ".git/hooks/pre-commit",
+        ".env",
+        "../outside.txt",
+        "/outside.txt",
+        "file.txt:stream",
+    ] {
+        assert!(
+            check_unreviewed_edit(&root, path).is_err(),
+            "allowed {path}"
+        );
+    }
+    // A project at (or above) the home folder never qualifies, whatever the file.
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from)
+        .unwrap();
+    let home = home.canonicalize().unwrap_or(home);
+    assert!(check_unreviewed_edit(&home, "switchyard-never-created.txt").is_err());
+}
+
+#[test]
+fn protected_locations_match_case_and_prefix_variants() {
+    use std::path::Path;
+    assert!(path_within(
+        Path::new("/data/App/STATE/notes.txt"),
+        Path::new("/data/app/state")
+    ));
+    assert!(path_within(
+        Path::new("/data/app/state"),
+        Path::new("/data/app/state")
+    ));
+    assert!(!path_within(
+        Path::new("/data/app/statefile"),
+        Path::new("/data/app/state")
+    ));
+    assert!(!path_within(Path::new("/data"), Path::new("/data/app")));
+    assert!(!path_within(Path::new("/data/app"), Path::new("")));
+    #[cfg(windows)]
+    assert!(path_within(
+        Path::new(r"\\?\C:\Users\Person\AppData\Local\Switchya\gateway.toml"),
+        Path::new(r"c:\users\person\appdata\local\switchya")
+    ));
 }
 
 #[tokio::test]

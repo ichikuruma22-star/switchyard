@@ -5,7 +5,10 @@ must retain that exact value while obtaining approval and call
 `execute(&prepared, cancellation_token)` only after approval when
 `requires_approval` is true. Approval is a person's decision or, for a project or
 session that opted in, the engine's journalled automatic approval; preparation
-refuses the same protected paths either way. Do not reconstruct an approved operation from model
+refuses the same protected paths either way. `check_unreviewed_edit` adds the
+checks for an edit no person reviews: files other programs load by themselves
+and projects that contain the home folder. `path_within` compares protected
+locations without regard to letter case or Windows `\\?\` prefixes. Do not reconstruct an approved operation from model
 arguments. The argument hash includes the canonical project root, operation name,
 and normalized arguments. Public metadata is checked against the sealed plan.
 

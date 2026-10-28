@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use switchyard_agent_tools::{PreparedTool, ToolResult};
+use switchyard_agent_tools::{PreparedTool, ToolResult, path_within};
 use switchyard_core::{FinishReason, ToolCallKind};
 use switchyard_gateway::{ClientIdentity, Gateway};
 use tokio::sync::oneshot;
@@ -256,8 +256,9 @@ impl AppEngine {
     }
 
     /// Opt a whole project in or out of auto-approval. Sessions with their own
-    /// override keep it. A change applies to the next proposed operation; an
-    /// operation already awaiting a decision still needs one.
+    /// override keep it. A change applies to every operation that has not
+    /// started; an operation already awaiting a decision still needs one.
+    /// Running sessions that follow the project record the change.
     pub fn set_project_auto_approve(
         &self,
         project_id: &str,
@@ -265,11 +266,27 @@ impl AppEngine {
     ) -> Result<Project> {
         self.inner.store.transaction(|tx| {
             let mut project = store::get_project(tx, project_id)?;
+            if project.auto_approve == policy {
+                return Ok(project);
+            }
             project.auto_approve = policy;
             tx.execute(
                 "UPDATE projects SET value=?2 WHERE id=?1",
                 params![project.id, serde_json::to_string(&project)?],
             )?;
+            for session in store::running_sessions(tx, &project.id)? {
+                if session.auto_approve.is_some() {
+                    continue;
+                }
+                let effective = EffectiveAutoApprove::resolve(&project, &session);
+                store::append_event(
+                    tx,
+                    &session.id,
+                    session.active_run_id.as_deref(),
+                    "auto_approve.changed",
+                    json!({"scope":"project","project_policy":policy,"effective":effective}),
+                )?;
+            }
             Ok(project)
         })
     }
@@ -681,61 +698,71 @@ impl AppEngine {
             )?;
             Ok(())
         })?;
-        let auto_approved =
-            operation.requires_approval && self.auto_approve(run, &prepared, &mut operation)?;
-        if operation.requires_approval && !auto_approved {
-            let receiver = {
-                let mut active = self.inner.active.lock();
-                let entry = active
-                    .get_mut(&run.session_id)
-                    .ok_or(AgentError::Interrupted)?;
-                if entry.cancel.is_cancelled() {
-                    return Err(AgentError::Interrupted);
+        // Trust is read here only to skip the prompt. It is read again, and the
+        // decision recorded, once this operation holds the mutation lock: trust
+        // turned off while it waited behind another change sends it to a person.
+        let mut auto_approved =
+            operation.requires_approval && self.trusted(run, &prepared)?.is_some();
+        let _mutation_guard = loop {
+            if operation.requires_approval && !auto_approved {
+                let receiver = {
+                    let mut active = self.inner.active.lock();
+                    let entry = active
+                        .get_mut(&run.session_id)
+                        .ok_or(AgentError::Interrupted)?;
+                    if entry.cancel.is_cancelled() {
+                        return Err(AgentError::Interrupted);
+                    }
+                    let (sender, receiver) = oneshot::channel();
+                    operation.state = "awaiting_approval".into();
+                    self.inner.store.transaction(|tx| {
+                        let mut session = store::get_session(tx, &run.session_id)?;
+                        session.state = SessionState::AwaitingApproval;
+                        store::save_session(tx, &session)?;
+                        store::save_operation(tx, &operation)?;
+                        store::append_event(
+                            tx,
+                            &run.session_id,
+                            Some(&run.id),
+                            "approval.required",
+                            serde_json::to_value(&operation)?,
+                        )?;
+                        Ok(())
+                    })?;
+                    entry.pending = Some(Pending {
+                        operation: operation.clone(),
+                        sender,
+                    });
+                    receiver
+                };
+                let decision = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Err(AgentError::Interrupted),
+                    decision = receiver => decision.map_err(|_| AgentError::Interrupted)?,
+                };
+                if decision == Decision::Deny {
+                    operation.state = "denied".into();
+                    self.record_result(run, &operation, json!({"status":"denied","error":"The user denied this operation. Do not disguise it or attempt to bypass this decision."}))?;
+                    return Ok(());
                 }
-                let (sender, receiver) = oneshot::channel();
-                operation.state = "awaiting_approval".into();
-                self.inner.store.transaction(|tx| {
-                    let mut session = store::get_session(tx, &run.session_id)?;
-                    session.state = SessionState::AwaitingApproval;
-                    store::save_session(tx, &session)?;
-                    store::save_operation(tx, &operation)?;
-                    store::append_event(
-                        tx,
-                        &run.session_id,
-                        Some(&run.id),
-                        "approval.required",
-                        serde_json::to_value(&operation)?,
-                    )?;
-                    Ok(())
-                })?;
-                entry.pending = Some(Pending {
-                    operation: operation.clone(),
-                    sender,
-                });
-                receiver
-            };
-            let decision = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return Err(AgentError::Interrupted),
-                decision = receiver => decision.map_err(|_| AgentError::Interrupted)?,
-            };
-            if decision == Decision::Deny {
-                operation.state = "denied".into();
-                self.record_result(run, &operation, json!({"status":"denied","error":"The user denied this operation. Do not disguise it or attempt to bypass this decision."}))?;
-                return Ok(());
             }
-        }
-        if cancel.is_cancelled() {
-            return Err(AgentError::Interrupted);
-        }
-        let _mutation_guard = if operation.requires_approval {
-            Some(tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return Err(AgentError::Interrupted),
-                guard = self.inner.mutations.lock() => guard,
-            })
-        } else {
-            None
+            if cancel.is_cancelled() {
+                return Err(AgentError::Interrupted);
+            }
+            let guard = if operation.requires_approval {
+                Some(tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Err(AgentError::Interrupted),
+                    guard = self.inner.mutations.lock() => guard,
+                })
+            } else {
+                None
+            };
+            if auto_approved && !self.auto_approve(run, &prepared, &mut operation)? {
+                auto_approved = false;
+                continue;
+            }
+            break guard;
         };
         operation.state = "started".into();
         self.inner.store.transaction(|tx| {
@@ -758,9 +785,32 @@ impl AppEngine {
         Ok(())
     }
 
+    /// The trust that would approve this operation now, if any. Read-only;
+    /// [`Self::auto_approve`] reads it again when it records the decision.
+    fn trusted(&self, run: &Run, prepared: &PreparedTool) -> Result<Option<EffectiveAutoApprove>> {
+        self.inner
+            .store
+            .transaction(|tx| self.trust(tx, run, prepared))
+    }
+
+    fn trust(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        run: &Run,
+        prepared: &PreparedTool,
+    ) -> Result<Option<EffectiveAutoApprove>> {
+        let session = store::get_session(tx, &run.session_id)?;
+        let project = store::get_project(tx, &session.project_id)?;
+        let effective = EffectiveAutoApprove::resolve(&project, &session);
+        let allowed = effective.policy().allows(&prepared.name)
+            && !(prepared.name == "apply_patch" && self.edits_private_state(prepared));
+        Ok(allowed.then_some(effective))
+    }
+
     /// Record an approval made by the session's opt-in trust instead of a
     /// person. The policy is read in the same transaction that records the
-    /// decision, so turning trust off applies to every later operation.
+    /// decision, while the operation holds the mutation lock, so turning trust
+    /// off applies to every operation that has not started.
     fn auto_approve(
         &self,
         run: &Run,
@@ -768,15 +818,9 @@ impl AppEngine {
         operation: &mut Operation,
     ) -> Result<bool> {
         self.inner.store.transaction(|tx| {
-            let session = store::get_session(tx, &run.session_id)?;
-            let project = store::get_project(tx, &session.project_id)?;
-            let effective = EffectiveAutoApprove::resolve(&project, &session);
-            if !effective.policy().allows(&operation.name)
-                || (operation.name == "apply_patch"
-                    && self.edits_private_state(Path::new(&project.root), prepared))
-            {
+            let Some(effective) = self.trust(tx, run, prepared)? else {
                 return Ok(false);
-            }
+            };
             operation.state = "approved".into();
             store::save_operation(tx, operation)?;
             store::append_event(
@@ -786,27 +830,30 @@ impl AppEngine {
                 "approval.decided",
                 json!({"operation_id":operation.id,"decision":Decision::AllowOnce,
                     "decided_by":"auto_approve","policy_source":effective.source,
-                    "arguments_hash":operation.arguments_hash}),
+                    "policy":effective.policy(),"arguments_hash":operation.arguments_hash}),
             )?;
             Ok(true)
         })
     }
 
     /// A project can contain the app's own state or gateway configuration (for
-    /// example a home directory). Edits there always go to a person.
-    fn edits_private_state(&self, root: &Path, prepared: &PreparedTool) -> bool {
+    /// example a home directory), or files other programs load by themselves.
+    /// Edits there always go to a person. Paths are checked under the prepared
+    /// root, the one the edit is written under.
+    fn edits_private_state(&self, prepared: &PreparedTool) -> bool {
         let Some(edits) = prepared.args["edits"].as_array() else {
             return true;
         };
+        let root = prepared.root();
         edits.iter().any(|edit| {
             let Some(path) = edit["path"].as_str() else {
                 return true;
             };
             let target = root.join(path);
-            self.inner
-                .review_paths
-                .iter()
-                .any(|protected| within(&target, protected) || within(protected, &target))
+            switchyard_agent_tools::check_unreviewed_edit(root, path).is_err()
+                || self.inner.review_paths.iter().any(|protected| {
+                    path_within(&target, protected) || path_within(protected, &target)
+                })
         })
     }
 
@@ -850,23 +897,4 @@ impl AppEngine {
             Ok(())
         })
     }
-}
-
-/// Component-wise prefix test. Windows paths compare case-insensitively.
-fn within(path: &Path, base: &Path) -> bool {
-    let normal = |path: &Path| -> Vec<String> {
-        path.components()
-            .filter(|c| !matches!(c, std::path::Component::CurDir))
-            .map(|c| {
-                let text = c.as_os_str().to_string_lossy();
-                if cfg!(windows) {
-                    text.to_lowercase()
-                } else {
-                    text.into_owned()
-                }
-            })
-            .collect()
-    };
-    let (path, base) = (normal(path), normal(base));
-    path.len() >= base.len() && path[..base.len()] == base[..]
 }

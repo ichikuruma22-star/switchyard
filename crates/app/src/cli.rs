@@ -659,7 +659,7 @@ fn trust_report(project: &Project) -> String {
         text.push_str("Commands run with your account's full OS and network permissions. The project folder is not a sandbox.\n");
     }
     if policy.any() {
-        text.push_str("Protected paths (repository metadata, likely secrets, links, short-name aliases) stay blocked, and edits to Switchya's own state or gateway configuration still ask. Every operation is recorded in its session. Sessions with their own --auto-approve setting keep it.\n");
+        text.push_str("Protected paths (repository metadata, likely secrets, links, short-name aliases) stay blocked. Edits outside the project, to Switchya's own state, the gateway configuration or agent account settings, and to files other programs load by themselves (shell profiles, Git, editor and agent settings) still ask, as does every edit in a project that contains your home folder. Every operation is recorded. The setting also applies to existing-agent runs, including ones already running. Sessions with their own --auto-approve setting keep it.\n");
     }
     text
 }
@@ -883,7 +883,7 @@ async fn drive(
     input: &mut Input,
 ) -> Result<()> {
     let mut decided = std::collections::HashSet::new();
-    let mut proposed = std::collections::HashMap::new();
+    let mut notices = AutoApprovalNotices::default();
     loop {
         let events = backend.events(id, after).await?;
         for event in &events {
@@ -891,21 +891,10 @@ async fn drive(
             if event.run_id.as_deref() != Some(run_id) {
                 continue;
             }
+            if let Some(notice) = notices.observe(event) {
+                write_stderr(&format!("\n{}\n", terminal_text(&notice)))?;
+            }
             match event.kind.as_str() {
-                "tool.proposed" => {
-                    if let Some(operation) = event.payload["id"].as_str() {
-                        proposed.insert(operation.to_owned(), event.payload.clone());
-                    }
-                }
-                "approval.decided" if event.payload["decided_by"] == "auto_approve" => {
-                    let operation = event.payload["operation_id"]
-                        .as_str()
-                        .and_then(|id| proposed.get(id));
-                    write_stderr(&format!(
-                        "\n{}\n",
-                        terminal_text(&auto_approved_notice(&event.payload, operation))
-                    ))?;
-                }
                 "model.delta" => {
                     if let Some(text) = event.payload["text"].as_str() {
                         write_stdout(&terminal_text(text))?;
@@ -1007,6 +996,43 @@ async fn drive(
             }
         }
         tokio::time::sleep(Duration::from_millis(120)).await;
+    }
+}
+
+/// Terminal notices for auto-approved operations. A proposal is kept only until
+/// its operation is decided or finishes, so a long run holds just the
+/// operations in flight.
+#[derive(Default)]
+struct AutoApprovalNotices(std::collections::HashMap<String, Value>);
+
+impl AutoApprovalNotices {
+    fn observe(&mut self, event: &Event) -> Option<String> {
+        let payload = &event.payload;
+        match event.kind.as_str() {
+            "tool.proposed" => {
+                if let Some(id) = payload["id"].as_str() {
+                    self.0.insert(id.to_owned(), payload.clone());
+                }
+                None
+            }
+            "approval.decided" => {
+                let operation = payload["operation_id"]
+                    .as_str()
+                    .and_then(|id| self.0.remove(id));
+                (payload["decided_by"] == "auto_approve")
+                    .then(|| auto_approved_notice(payload, operation.as_ref()))
+            }
+            "approval.required" | "tool.completed" | "tool.rejected" => {
+                if let Some(id) = payload["id"]
+                    .as_str()
+                    .or_else(|| payload["operation_id"].as_str())
+                {
+                    self.0.remove(id);
+                }
+                None
+            }
+            _ => None,
+        }
     }
 }
 
@@ -1631,56 +1657,62 @@ mod tests {
         assert!(report.contains("Every operation is recorded"));
     }
 
-    #[tokio::test]
-    async fn noninteractive_runs_follow_auto_approved_operations_without_a_decision() {
-        let router = Router::new()
-            .route(
-                "/api/sessions/sessiontest",
-                get(|| async {
-                    let mut view = fixture_view(false);
-                    view.session.state = SessionState::Completed;
-                    Json(view)
-                }),
-            )
-            .route(
-                "/api/sessions/sessiontest/events",
-                get(|| async {
-                    let at = |seq: u64, kind: &str, payload: Value| Event {
-                        schema_version: 1,
-                        session_id: "sessiontest".into(),
-                        run_id: Some("runtest".into()),
-                        seq,
-                        at_ms: 0,
-                        kind: kind.into(),
-                        payload,
-                    };
-                    Json(json!({"events":[
-                        at(1, "tool.proposed", json!({"id":"op","name":"run_command","arguments":{"command":"cargo test"}})),
-                        at(2, "approval.decided", json!({"operation_id":"op","decision":"allow_once","decided_by":"auto_approve","policy_source":"project"})),
-                        at(3, "tool.completed", json!({"operation_id":"op","name":"run_command","result":{"status":"completed","exit_code":0}})),
-                        at(4, "run.completed", json!({})),
-                    ]}))
-                }),
-            );
-        let (backend, stopped, server) = fixture_server(router).await;
-        // No terminal input: a pending approval would fail this run.
-        tokio::time::timeout(
-            Duration::from_secs(3),
-            watch(
-                &backend,
-                "sessiontest",
-                "runtest",
-                0,
-                &mut None,
-                &CancellationToken::new(),
-            ),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        drop(backend);
-        stopped.cancel();
-        server.await.unwrap();
+    #[test]
+    fn auto_approval_notices_name_the_operation_and_keep_only_operations_in_flight() {
+        let at = |seq: u64, kind: &str, payload: Value| Event {
+            schema_version: 1,
+            session_id: "sessiontest".into(),
+            run_id: Some("runtest".into()),
+            seq,
+            at_ms: 0,
+            kind: kind.into(),
+            payload,
+        };
+        let mut notices = AutoApprovalNotices::default();
+        let proposed = at(
+            1,
+            "tool.proposed",
+            json!({"id":"op","name":"run_command","arguments":{"command":"cargo test"}}),
+        );
+        assert_eq!(notices.observe(&proposed), None);
+        let decided = at(
+            2,
+            "approval.decided",
+            json!({"operation_id":"op","decision":"allow_once","decided_by":"auto_approve","policy_source":"project"}),
+        );
+        assert_eq!(
+            notices.observe(&decided).as_deref(),
+            Some("Auto-approved run_command (project setting): cargo test")
+        );
+        // A person's decision prints nothing here; finished operations are forgotten.
+        notices.observe(&at(
+            3,
+            "tool.proposed",
+            json!({"id":"edit","name":"apply_patch","arguments":{"edits":[{"path":"a.rs"}]}}),
+        ));
+        let reviewed = at(
+            4,
+            "approval.decided",
+            json!({"operation_id":"edit","decision":"allow_once"}),
+        );
+        assert_eq!(notices.observe(&reviewed), None);
+        notices.observe(&at(
+            5,
+            "tool.proposed",
+            json!({"id":"read","name":"read_file","arguments":{"path":"a.rs"}}),
+        ));
+        notices.observe(&at(
+            6,
+            "tool.completed",
+            json!({"operation_id":"read","name":"read_file"}),
+        ));
+        notices.observe(&at(
+            7,
+            "tool.proposed",
+            json!({"id":"wait","name":"run_command"}),
+        ));
+        notices.observe(&at(8, "approval.required", json!({"id":"wait"})));
+        assert!(notices.0.is_empty());
     }
 
     #[test]

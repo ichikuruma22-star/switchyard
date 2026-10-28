@@ -48,7 +48,8 @@ fn start_with(
                 prompt: "Inspect the fixture; literal $(never execute) `text`.".into(),
                 command_id: uuid::Uuid::new_v4().to_string(),
                 continue_run_id: None,
-                auto_approve,
+                auto_approve: AutoApprovalSource::new(move || auto_approve),
+                review_paths: Vec::new(),
                 profile: None,
             },
             project,
@@ -291,6 +292,7 @@ async fn retries_are_idempotent_and_changed_requests_conflict() {
         command_id: run.command_id.clone(),
         continue_run_id: None,
         auto_approve: Default::default(),
+        review_paths: Vec::new(),
         profile: None,
     };
     let repeat = manager
@@ -356,6 +358,7 @@ async fn retained_retry_uses_original_binding_without_cli_or_filesystem_readines
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: None,
         auto_approve: Default::default(),
+        review_paths: Vec::new(),
         profile: Some(binding.clone()),
     };
     let run = manager
@@ -411,6 +414,7 @@ async fn shutdown_stops_descendants_and_marks_uncertain_runs() {
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: None,
         auto_approve: Default::default(),
+        review_paths: Vec::new(),
         profile: None,
     };
     let run = manager
@@ -491,6 +495,7 @@ fn durable_request(project: &std::path::Path, continue_run_id: Option<&str>) -> 
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: continue_run_id.map(Into::into),
         auto_approve: Default::default(),
+        review_paths: Vec::new(),
         profile: None,
     }
 }
@@ -908,6 +913,7 @@ fn retention_removes_the_oldest_inactive_conversations_first() {
             command_id: pruned_command,
             continue_run_id: None,
             auto_approve: Default::default(),
+            review_paths: Vec::new(),
             profile: None,
         },
         project.path().canonicalize().unwrap(),
@@ -1087,6 +1093,7 @@ async fn antigravity_plan_run_streams_text_and_tools_to_completion() {
                 command_id: uuid::Uuid::new_v4().to_string(),
                 continue_run_id: None,
                 auto_approve: Default::default(),
+                review_paths: Vec::new(),
                 profile: None,
             },
             project,
@@ -1122,6 +1129,7 @@ fn antigravity_request(project: &std::path::Path, continue_run_id: Option<&str>)
         command_id: uuid::Uuid::new_v4().to_string(),
         continue_run_id: continue_run_id.map(Into::into),
         auto_approve: Default::default(),
+        review_paths: Vec::new(),
         profile: None,
     }
 }
@@ -1221,6 +1229,17 @@ async fn codex_auto_approval_answers_only_allowed_complete_requests() {
         assert_eq!(auto_resolved(&manager, &run.id), 1, "{scenario}");
         // The exact request is journalled before it is answered.
         let events = manager.events(&run.id, 0, 200).unwrap();
+        // The decision names the setting and what it covered.
+        let decision = events
+            .iter()
+            .find(|e| e.kind == "approval_resolved")
+            .unwrap();
+        assert_eq!(decision.payload["policy"], json!(auto));
+        if scenario == "happy" {
+            assert!(decision.payload["request"]["command"].is_string());
+        } else {
+            assert_eq!(decision.payload["request"]["paths"], json!(["fixture.txt"]));
+        }
         let requested = events
             .iter()
             .position(|e| e.kind == "approval_requested")
@@ -1237,7 +1256,13 @@ async fn codex_auto_approval_answers_only_allowed_complete_requests() {
         edits: true,
         commands: true,
     };
-    for (scenario, auto) in [("happy", edits), ("file_grant_root", all)] {
+    // So does an edit that is not an ordinary project file.
+    for (scenario, auto) in [
+        ("happy", edits),
+        ("file_grant_root", all),
+        ("file_hook", edits),
+        ("file_move_out", all),
+    ] {
         let manager = AdapterManager::new();
         let (_directory, run) = start_with(&manager, scenario, auto);
         let pending =
@@ -1256,4 +1281,111 @@ async fn codex_auto_approval_answers_only_allowed_complete_requests() {
         wait_until(&manager, &run.id, |r| !r.state.is_active()).await;
         manager.shutdown().await;
     }
+}
+
+#[test]
+fn decisions_outlive_other_events_in_a_long_run() {
+    let view = AdapterRun {
+        id: "adapter_fixture".into(),
+        adapter_id: "codex".into(),
+        command_id: "command".into(),
+        conversation_id: "adapter_fixture".into(),
+        continued_from: None,
+        title: "Fixture".into(),
+        profile_id: None,
+        profile_name: None,
+        project_path: "/fixture".into(),
+        state: RunState::Running,
+        thread_id: None,
+        turn_id: None,
+        model: None,
+        started_at_ms: 0,
+        ended_at_ms: None,
+        last_seq: 0,
+        first_retained_seq: 1,
+        pending_approvals: Vec::new(),
+        ephemeral: true,
+        history_error: None,
+        permission_boundary: String::new(),
+        auto_approve: Default::default(),
+    };
+    let mut run = StoredRun {
+        view,
+        events: VecDeque::new(),
+        event_bytes: 0,
+        store: None,
+    };
+    run.event(
+        "approval_resolved",
+        json!({"approval_id":"first","decision":"allow_once","decided_by":"auto_approve"}),
+    );
+    for i in 0..600 {
+        run.event("notice", json!({"text":"x".repeat(5000),"i":i}));
+    }
+    assert!(run.events.len() <= MAX_EVENTS);
+    assert!(run.event_bytes <= MAX_EVENT_BYTES);
+    // The window after `first_retained_seq` is complete; the early decision
+    // stays before it.
+    assert!(run.view.first_retained_seq > 2);
+    assert_eq!(run.events.front().unwrap().seq, 1);
+    assert_eq!(run.events[1].seq, run.view.first_retained_seq);
+    let retained: Vec<_> = run.events.iter().skip(1).map(|e| e.seq).collect();
+    assert_eq!(
+        retained,
+        (run.view.first_retained_seq..=600).collect::<Vec<_>>()
+    );
+    // Decisions keep at most half the window.
+    for i in 0..600 {
+        run.event(
+            "approval_resolved",
+            json!({"approval_id":format!("approval-{i}"),"decision":"deny"}),
+        );
+    }
+    let decisions = run
+        .events
+        .iter()
+        .filter(|e| e.kind == "approval_resolved")
+        .count();
+    assert!(decisions <= MAX_EVENTS / 2 + 1, "{decisions}");
+    assert!(run.events.iter().any(|e| e.kind == "notice"));
+}
+
+#[tokio::test]
+async fn project_setting_changes_reach_active_runs_and_their_history() {
+    let manager = AdapterManager::new();
+    let (directory, run) = start(&manager, "happy");
+    let pending = wait_until(&manager, &run.id, |r| r.state == RunState::AwaitingApproval).await;
+    assert_eq!(pending.auto_approve, AutoApproval::default());
+    let edits = AutoApproval {
+        edits: true,
+        commands: false,
+    };
+    manager.note_auto_approve(directory.path(), edits);
+    // Another project's runs are left alone; the matching run records it once.
+    manager.note_auto_approve(&directory.path().join("other"), AutoApproval::default());
+    manager.note_auto_approve(directory.path(), edits);
+    let canonical = directory.path().canonicalize().unwrap();
+    manager.note_auto_approve(&canonical, edits);
+    assert_eq!(manager.run(&run.id).unwrap().auto_approve, edits);
+    let changes: Vec<_> = manager
+        .events(&run.id, 0, 200)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "auto_approve_changed")
+        .collect();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].payload["policy"], json!(edits));
+    assert!(changes[0].payload["message"].is_string());
+    let approval = &pending.pending_approvals[0];
+    manager
+        .decide(
+            &run.id,
+            &approval.id,
+            &approval.expected_hash,
+            ApprovalDecision::Deny,
+        )
+        .await
+        .unwrap();
+    wait_until(&manager, &run.id, |r| !r.state.is_active()).await;
+    manager.shutdown().await;
 }

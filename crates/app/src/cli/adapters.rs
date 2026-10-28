@@ -1192,7 +1192,8 @@ fn append_output(text: &mut String, output: Option<&str>, run_id: &str) {
     }
 }
 
-/// The approval setting a run started with, in the words of the trust settings.
+/// The project's approval setting as the run last saw it, in the words of the
+/// trust settings. Each request reads the current setting.
 fn auto_approval_line(auto: switchyard_agent_adapters::AutoApproval) -> String {
     let what = match (auto.edits, auto.commands) {
         (false, false) => return "Approvals: you decide each file change and command.".into(),
@@ -1201,8 +1202,20 @@ fn auto_approval_line(auto: switchyard_agent_adapters::AutoApproval) -> String {
         (true, true) => "file changes and commands",
     };
     format!(
-        "Approvals: Switchya approves complete single-operation requests for {what} itself (project setting). Requests it cannot allow once still wait for you."
+        "Approvals: under the project setting, Switchya approves complete single-operation requests for {what} itself. Changes outside ordinary project files, and requests it cannot allow once, still wait for you."
     )
+}
+
+/// What an automatic approval covered, from its decision record.
+fn approved_request(request: &Value) -> String {
+    if let Some(paths) = request["paths"].as_array() {
+        let paths: Vec<_> = paths.iter().filter_map(Value::as_str).collect();
+        format!("changes to {}", paths.join(", "))
+    } else if let Some(command) = request["command"].as_str() {
+        format!("command: {command}")
+    } else {
+        "a request".into()
+    }
 }
 
 fn render_event(event: &AdapterEvent, streamed: &mut HashMap<String, String>) -> Result<()> {
@@ -1218,15 +1231,15 @@ fn render_event(event: &AdapterEvent, streamed: &mut HashMap<String, String>) ->
                 write_stderr(&format!("\n{}\n", terminal_text(&summary)))?;
             }
         }
-        "notice" | "adapter_error" => {
+        "notice" | "adapter_error" | "auto_approve_changed" => {
             if let Some(message) = event.payload["message"].as_str() {
                 write_stderr(&format!("\n{}\n", terminal_text(message)))?;
             }
         }
         "approval_resolved" if event.payload["decided_by"] == "auto_approve" => {
             write_stderr(&format!(
-                "\nApproved automatically by the project's approval setting ({}).\n",
-                terminal_text(event.payload["approval_id"].as_str().unwrap_or("request"))
+                "\nApproved automatically by the project's approval setting: {}.\n",
+                terminal_text(&approved_request(&event.payload["request"]))
             ))?;
         }
         _ => {}
