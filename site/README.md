@@ -29,7 +29,7 @@ For Cloudflare's local static-asset behavior, install the pinned development dep
 
 `wrangler.jsonc` uses Workers Static Assets with `public/` as the asset directory and `404-page` handling. Custom-domain routes attach switchya.com and www.switchya.com; workers_dev is disabled. No Worker code, account ID in source, storage binding, or backend is configured. `public/_headers` supplies the security policy. Static files and fonts are served from the same origin.
 
-Wrangler is pinned to **4.149.0**, verified against the npm registry on 11 October 2026. Its Miniflare dependency uses patched `sharp 0.35.5`, addressing [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) in the development tooling. Its declared Node requirement is `>=22.0.0`. The compatibility date is `2026-10-03`.
+Wrangler is pinned to **4.156.0**, verified against the npm registry on 30 October 2026. Its Miniflare dependency uses patched `sharp 0.35.5`, addressing [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w), and patched `undici 7.30.1` in the development tooling. Its declared Node requirement is `>=22.0.0`. The compatibility date is `2026-10-03`.
 
 For an authorized update after visual review, verify the account with `npx wrangler whoami`, run the checks and a deployment dry run, then use `npm run deploy`. Read back both domains, assets, custom 404, HTTPS redirects, and headers afterward. Regenerate asset-manifest.json when public files change. The global cache policy includes no-transform; at the last deployment read-back, live HTML matched its deployed source byte for byte, with no injected analytics beacon. The font rule replaces the global Cache-Control value with a 30-day cache policy.
 
@@ -40,7 +40,7 @@ Official configuration references checked for this implementation:
 - [Static asset configuration](https://developers.cloudflare.com/workers/static-assets/binding/)
 - [Custom 404 handling](https://developers.cloudflare.com/workers/static-assets/routing/static-site-generation/)
 - [Static response headers](https://developers.cloudflare.com/workers/static-assets/headers/)
-- [Wrangler 4.149.0 release](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.149.0)
+- [Wrangler 4.156.0 release](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.156.0)
 
 ## Content and assets
 

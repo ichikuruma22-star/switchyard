@@ -50,7 +50,7 @@ assert.deepEqual(config.routes, [
   { pattern: 'www.switchya.com', custom_domain: true },
 ], 'Only the two authorized custom domains may be configured');
 const pkg = JSON.parse(await readFile(resolve(here, 'package.json'), 'utf8'));
-assert.equal(pkg.devDependencies.wrangler, '4.149.0');
+assert.equal(pkg.devDependencies.wrangler, '4.156.0');
 const assets = await readdir(root, { recursive: true, withFileTypes: true });
 const files = assets.filter(entry => entry.isFile());
 // Deployment read-backs are compared with the manifest, so it must describe
