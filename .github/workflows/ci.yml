@@ -37,6 +37,9 @@ jobs:
         run: node --test scripts/tests/*.test.mjs
       - name: Website checks
         run: node site/check.mjs
+      # CI does not build the desktop shell, so check its separate lockfile.
+      - name: Desktop lockfile
+        run: cargo fetch --locked --manifest-path desktop/Cargo.toml
 
   test:
     name: Test (${{ matrix.os }})
