@@ -174,6 +174,66 @@ async fn interruption_is_confirmed_by_turn_completion() {
 }
 
 #[tokio::test]
+async fn failed_turns_say_why_without_exposing_runtime_text() {
+    for (scenario, shown) in [
+        (
+            "turn_failed",
+            "Codex reported that the turn failed: The 'fixture-model' model is not supported when using Codex with a ChatGPT account.",
+        ),
+        (
+            "turn_failed_secret",
+            "Codex reported that the turn failed. Check the selected account and CLI configuration in its own terminal.",
+        ),
+    ] {
+        let manager = AdapterManager::new();
+        let (_directory, run) = start(&manager, scenario);
+        let stopped = wait_until(&manager, &run.id, |r| !r.state.is_active()).await;
+        assert_eq!(stopped.state, RunState::Failed, "{scenario}");
+        let errors: Vec<_> = all_events(&manager, &run.id)
+            .into_iter()
+            .filter(|event| event.kind == "adapter_error")
+            .collect();
+        assert_eq!(errors.len(), 1, "{scenario}");
+        assert_eq!(errors[0].payload["message"], shown);
+        manager.shutdown().await;
+    }
+}
+
+#[test]
+fn failed_turn_messages_keep_only_short_plain_sentences() {
+    let reason = |message: &str| {
+        protocol::failed_turn_message(&serde_json::json!({"error":{"message":message}}))
+    };
+    let generic = "Codex reported that the turn failed. Check the selected account and CLI configuration in its own terminal.";
+    assert_eq!(
+        reason("You've hit your usage limit. Try again later."),
+        "Codex reported that the turn failed: You've hit your usage limit. Try again later."
+    );
+    assert_eq!(
+        reason(r#"{"message":"Model overloaded, request 0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"}"#),
+        "Codex reported that the turn failed: Model overloaded, request 0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+    );
+    for hidden in [
+        "",
+        "   ",
+        "{}",
+        r#"{"detail":"no message field"}"#,
+        "first line
+second line",
+        "Incorrect API key provided: sk-proj-abc",
+        "failed with key sy9FpjasjJXWVrsMsfeHvaTBGkPTZjtHuio7",
+        "login?access_token=abc",
+        &"x ".repeat(200),
+    ] {
+        assert_eq!(reason(hidden), generic, "{hidden:?}");
+    }
+    assert_eq!(
+        protocol::failed_turn_message(&serde_json::json!({"status":"failed"})),
+        generic
+    );
+}
+
+#[tokio::test]
 async fn malformed_oversized_and_unconfirmed_exit_require_recovery() {
     for scenario in ["malformed", "oversized", "early_exit", "duplicate_approval"] {
         let manager = AdapterManager::new();
