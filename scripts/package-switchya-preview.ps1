@@ -15,7 +15,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$')][string]$SourceRevision,
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$')]
-    [string]$Version = '0.1.0-preview.4',
+    [string]$Version = '0.1.0-preview.5',
     [string]$OutputDirectory = 'E:\switchya-artifacts'
 )
 

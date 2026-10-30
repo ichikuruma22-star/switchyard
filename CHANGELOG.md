@@ -1,9 +1,16 @@
 # Changelog
 
-## Unreleased
+## Switchya 0.1.0-preview.5 (2026-10-30)
 
-### Switchya workspace
+Adds opt-in automatic approval for projects you trust, and refines the
+workspace.
 
+### Workspace
+
+- A failed Codex turn says why, for example that the configured model is not
+  available for the account or that a usage limit was reached, instead of
+  stopping with only "Failed". Long messages, and any that look like they
+  carry a credential, keep the general advice to check the CLI.
 - Opt-in automatic approval. **Approval settings** (select the approval note
   beside the model picker) lets a trusted project apply file edits and/or run
   shell commands without a prompt; a session can override its project. It is
@@ -39,7 +46,6 @@
   of only disabling Save. Cancelled and timed-out commands read "Cancelled"
   and "Timed out" in transcript rows, as in their results, and a tab opened
   without its launch token says where the launch link comes from.
-
 - Transcript rows, notices and the composer share one reading column.
   Existing-agent conversations show a repeated agent notice once, with one
   thin rule per finished turn, and tool rows use readable names such as
@@ -56,16 +62,6 @@
 - On macOS, a command that finished normally is no longer reported as failed
   with "Operation not permitted (os error 1)" when its process group had
   already exited by the time Switchya cleaned it up.
-
-### Gateway dashboard
-
-- The Overview headline says "Degraded" when a model is cooling down on
-  every credential or 5% or more of the last minute's requests failed, and
-  names the model and when it comes back.
-- A Routes panel on the Overview shows where each model's requests go now;
-  rails turn amber while a route cools down.
-- Request lists on Requests and the Overview hold still while the pointer or
-  keyboard focus is on them; new requests wait behind "N new requests".
 
 ### Website
 
@@ -89,6 +85,25 @@
   SoftwareApplication and FAQ structured data for search engines. The footer
   links the user guide, changelog, security model and MIT License, and
   responses add a `Cross-Origin-Opener-Policy` header.
+
+## 0.1.2 (2026-10-30)
+
+A gateway release with a clearer dashboard. Configuration files from 0.1.1
+load unchanged.
+
+### Dashboard
+
+- The Overview headline says "Degraded" when a model is cooling down on
+  every credential or 5% or more of the last minute's requests failed, and
+  names the model and when it comes back.
+- A Routes panel on the Overview shows where each model's requests go now;
+  rails turn amber while a route cools down.
+- Request lists on Requests and the Overview hold still while the pointer or
+  keyboard focus is on them; new requests wait behind "N new requests".
+
+### Dependencies
+
+- `rustls` is updated to 0.23.46.
 
 ## Switchya 0.1.0-preview.4 (2026-10-15)
 
