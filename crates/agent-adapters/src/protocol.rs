@@ -663,6 +663,12 @@ fn notification(
                 .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
+            if status == "failed" {
+                run.event(
+                    "adapter_error",
+                    json!({"message":failed_turn_message(turn)}),
+                );
+            }
             run.event("turn_completed", json!({"status":status}));
             run.state(match status {
                 "completed" => RunState::Completed,
@@ -675,6 +681,60 @@ fn notification(
         _ => {} // Account, config, environment and unknown notifications are not forwarded.
     }
     false
+}
+
+/// The longest provider sentence shown for a failed turn.
+const MAX_TURN_FAILURE_CHARS: usize = 300;
+
+/// What to tell the user about a failed turn. Codex reports the reason in
+/// `turn.error.message`, often as a provider's JSON error body. Only its
+/// readable sentence is kept, and only when it is short and shows no sign of
+/// carrying a credential: like RPC errors, it can contain runtime text.
+pub(crate) fn failed_turn_message(turn: &Value) -> String {
+    match turn
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .and_then(readable_failure)
+    {
+        Some(reason) => format!("Codex reported that the turn failed: {reason}"),
+        None => "Codex reported that the turn failed. Check the selected account and CLI configuration in its own terminal.".into(),
+    }
+}
+
+fn readable_failure(message: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(message).ok();
+    let text = match &parsed {
+        Some(body) => body
+            .pointer("/error/message")
+            .or_else(|| body.get("message"))
+            .and_then(Value::as_str)?,
+        None => message,
+    }
+    .trim();
+    (!text.is_empty()
+        && text.chars().count() <= MAX_TURN_FAILURE_CHARS
+        && !text.chars().any(char::is_control)
+        && !looks_like_credential(text))
+    .then(|| text.to_owned())
+}
+
+fn looks_like_credential(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "bearer ",
+        "sk-",
+        "authorization",
+        "api_key",
+        "apikey",
+        "token=",
+        "password",
+        "secret",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+        || text
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|word| word.len() >= 32)
 }
 
 fn public_item(item: &Value) -> Value {

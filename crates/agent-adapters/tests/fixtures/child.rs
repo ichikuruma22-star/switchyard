@@ -100,6 +100,18 @@ fn main() {
                 r#"{"method":"account/updated","params":{"threadId":"thread-fixture","token":"fixture-private-account-token"}}"#,
             );
             match scenario {
+                "turn_failed" => {
+                    send(
+                        r#"{"method":"turn/completed","params":{"threadId":"thread-fixture","turn":{"id":"turn-fixture","status":"failed","items":[],"error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'fixture-model' model is not supported when using Codex with a ChatGPT account.\",\"code\":\"model_not_found\"}}","codexErrorInfo":"other"}}}}"#,
+                    );
+                    return;
+                }
+                "turn_failed_secret" => {
+                    send(
+                        r#"{"method":"turn/completed","params":{"threadId":"thread-fixture","turn":{"id":"turn-fixture","status":"failed","items":[],"error":{"message":"Request rejected: Bearer fixture-private-account-token","codexErrorInfo":"other"}}}}"#,
+                    );
+                    return;
+                }
                 "durable_complete" | "resume_complete" => {
                     for part in ["Saved ", "fixture ", "reply."] {
                         send(&format!(
