@@ -1,0 +1,147 @@
+{
+ "checkedAt": "2026-10-30T12:02:34.165Z",
+ "versionId": "d502953f-a589-43f1-8667-125255246f36",
+ "change": "Downloads updated to Switchya 0.1.0-preview.5 (release switchya-v0.1.0-preview.5, asset sha256 93367c26e317282d1e8d9dd236cf06b0165068c83848e8519033cb2d59f9ad8a, anonymous download verified byte-for-byte) and Switchyard Gateway v0.1.2. The FAQ, workspace list and known limits now describe opt-in automatic approval.",
+ "results": [
+  {
+   "url": "https://switchya.com/404.html",
+   "finalUrl": "https://switchya.com/404",
+   "status": 200,
+   "bytes": 2318,
+   "sha256": "0ac4eb29b8e10f0046705412475104743afe28b7aaa52abe4e910810e2662b0f",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/assets/apple-touch-icon.png",
+   "finalUrl": "https://switchya.com/assets/apple-touch-icon.png",
+   "status": 200,
+   "bytes": 2002,
+   "sha256": "784b173964d53f90f26b05b5794c286ddb5f39b699ae5fbf1ce1a2f6ec8e8cec",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/assets/fonts/archivo-latin-var.woff2",
+   "finalUrl": "https://switchya.com/assets/fonts/archivo-latin-var.woff2",
+   "status": 200,
+   "bytes": 90104,
+   "sha256": "e3a28eade21a900c7155a247757f4b2834c07bb7ef07ad7efa55cebaac1e8f5e",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/assets/fonts/Archivo-OFL.txt",
+   "finalUrl": "https://switchya.com/assets/fonts/Archivo-OFL.txt",
+   "status": 200,
+   "bytes": 4503,
+   "sha256": "c3c8402eec0e31dc9a76851235b1c02a0bb821488b2db8e35bcc2ab60ca8fc2b",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/assets/fonts/jetbrains-mono-latin-var.woff2",
+   "finalUrl": "https://switchya.com/assets/fonts/jetbrains-mono-latin-var.woff2",
+   "status": 200,
+   "bytes": 40404,
+   "sha256": "18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/assets/fonts/JetBrainsMono-OFL.txt",
+   "finalUrl": "https://switchya.com/assets/fonts/JetBrainsMono-OFL.txt",
+   "status": 200,
+   "bytes": 4524,
+   "sha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/assets/social-card.png",
+   "finalUrl": "https://switchya.com/assets/social-card.png",
+   "status": 200,
+   "bytes": 22246,
+   "sha256": "381f8a4f71495915824ea895cd3a2a3f99c7ded90d910049f2f2d7a2504c2ab8",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/assets/switchya-mark.svg",
+   "finalUrl": "https://switchya.com/assets/switchya-mark.svg",
+   "status": 200,
+   "bytes": 495,
+   "sha256": "5295d8ae25239f81ebec6ffa85ac49d7e56e3cc21693660208dabdc62bcfb7c9",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/favicon.ico",
+   "finalUrl": "https://switchya.com/favicon.ico",
+   "status": 200,
+   "bytes": 2410,
+   "sha256": "b8f284159ba7d6a7cd841fec8d92beda6ff161917dadd115a02d2ef41d4f7fa1",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/index.html",
+   "finalUrl": "https://switchya.com/",
+   "status": 200,
+   "bytes": 32463,
+   "sha256": "8fe8404179e6f4af25d7c09e752cdc097df46304f34136b399a41cc3047b7d2c",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/robots.txt",
+   "finalUrl": "https://switchya.com/robots.txt",
+   "status": 200,
+   "bytes": 66,
+   "sha256": "999c1936523f17f23ef0a3b81084dba3887c062146771eaaed6365df067e4126",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/site.css",
+   "finalUrl": "https://switchya.com/site.css",
+   "status": 200,
+   "bytes": 34629,
+   "sha256": "0dcfa050b831391c5228114b7d41930ac1d90c278e309767ebf8b1c1219abe96",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/site.js",
+   "finalUrl": "https://switchya.com/site.js",
+   "status": 200,
+   "bytes": 1949,
+   "sha256": "a8454b49ba4cbefd7e245441f5cc875c80ab0afbf6f1176c1a96eb8bccd823d5",
+   "matchesManifest": true
+  },
+  {
+   "url": "https://switchya.com/sitemap.xml",
+   "finalUrl": "https://switchya.com/sitemap.xml",
+   "status": 200,
+   "bytes": 185,
+   "sha256": "449e8e7d9b8c31c2ba7425f21dc94218b0c36844d5f2052fa2680afb37ce9e56",
+   "matchesManifest": true
+  }
+ ],
+ "wwwMatchesIndex": true,
+ "headers": {
+  "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+  "strict-transport-security": "max-age=31536000",
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()",
+  "cross-origin-opener-policy": "same-origin",
+  "cache-control": "public, max-age=0, must-revalidate, no-transform"
+ },
+ "notFound": {
+  "status": 404,
+  "isCustom404": true
+ },
+ "redirects": [
+  {
+   "from": "http://switchya.com/",
+   "status": 301,
+   "location": "https://switchya.com/"
+  },
+  {
+   "from": "http://www.switchya.com/",
+   "status": 301,
+   "location": "https://www.switchya.com/"
+  }
+ ],
+ "failures": 0
+}
