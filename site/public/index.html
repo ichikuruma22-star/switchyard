@@ -11,7 +11,7 @@
   <meta property="og:site_name" content="Switchya">
   <meta property="og:locale" content="en_US">
   <meta property="og:title" content="Switchya — A coding workspace. Your choice of models.">
-  <meta property="og:description" content="A desktop app and CLI for your projects, with OpenAI, Anthropic, Gemini or local Ollama models. Open source. Windows x64 portable preview 0.1.0-preview.4.">
+  <meta property="og:description" content="A desktop app and CLI for your projects, with OpenAI, Anthropic, Gemini or local Ollama models. Open source. Windows x64 portable preview 0.1.0-preview.5.">
   <meta property="og:url" content="https://switchya.com/">
   <meta property="og:image" content="https://switchya.com/assets/social-card.png">
   <meta property="og:image:type" content="image/png">
@@ -50,10 +50,10 @@
         "operatingSystem": "Windows 10, Windows 11",
         "processorRequirements": "x64",
         "softwareRequirements": "Microsoft Visual C++ v14 x64 runtime; Microsoft Edge WebView2 Runtime for the desktop app",
-        "softwareVersion": "0.1.0-preview.4",
-        "downloadUrl": "https://github.com/ichikuruma22-star/switchyard/releases/download/switchya-v0.1.0-preview.4/switchya-0.1.0-preview.4-windows-x86_64-portable.zip",
-        "releaseNotes": "https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4",
-        "fileSize": "20.7MB",
+        "softwareVersion": "0.1.0-preview.5",
+        "downloadUrl": "https://github.com/ichikuruma22-star/switchyard/releases/download/switchya-v0.1.0-preview.5/switchya-0.1.0-preview.5-windows-x86_64-portable.zip",
+        "releaseNotes": "https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.5",
+        "fileSize": "20.9MB",
         "license": "https://opensource.org/license/mit",
         "isAccessibleForFree": true,
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
@@ -71,7 +71,7 @@
           { "@type": "Question", "name": "Is Switchya free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Switchya and Switchyard Gateway are open source under the MIT License. Cloud model providers bill their usage to your own account or subscription." } },
           { "@type": "Question", "name": "Does my code leave my computer?", "acceptedAnswer": { "@type": "Answer", "text": "Switchya has no analytics or telemetry, no Switchya account and no cloud sync, and its local server only accepts connections from your own computer. A task sends the conversation and the files the agent reads to the model provider you chose for it. With a local Ollama model it stays on your machine. Codex, Claude Code and Antigravity handle data under their own terms." } },
           { "@type": "Question", "name": "Which models can I use?", "acceptedAnswer": { "@type": "Answer", "text": "The setup dialog connects OpenAI, Anthropic, Gemini or a local Ollama server, and the model list shows the IDs your connection offers. Switchyard Gateway's configuration adds compatible endpoints, aliases and failover. You can also work through your own Codex, Claude Code or Antigravity setup." } },
-          { "@type": "Question", "name": "Will it change my files without asking?", "acceptedAnswer": { "@type": "Answer", "text": "Not with the native engine: file edits are shown as diffs and commands wait for your approval before they run. Codex and Claude Code approval requests appear in the conversation for your decision, and Antigravity runs in read-only plan mode." } },
+          { "@type": "Question", "name": "Will it change my files without asking?", "acceptedAnswer": { "@type": "Answer", "text": "Only if you turn that on. By default, file edits are shown as diffs and commands wait for your approval before they run, and Codex and Claude Code requests appear in the conversation for your decision. For a project you trust, you can let edits, commands or both go ahead without asking. Every operation is still recorded, protected paths stay blocked, and Antigravity runs in read-only plan mode." } },
           { "@type": "Question", "name": "Where are my projects and conversations stored?", "acceptedAnswer": { "@type": "Answer", "text": "Your code stays in your project folder, and Switchya edits it in place. Settings and saved conversations are in %LOCALAPPDATA%\\Switchya on your PC, not in the ZIP. Keep gateway.toml there private: it holds the API keys you saved." } },
           { "@type": "Question", "name": "Why does Windows warn when I open it?", "acceptedAnswer": { "@type": "Answer", "text": "The preview isn't code-signed yet, so Microsoft Defender SmartScreen may warn about an unrecognized app. Compare the ZIP's SHA-256 with the value listed under Downloads before you run it, for example with Get-FileHash in PowerShell." } },
           { "@type": "Question", "name": "How do I update to a new preview?", "acceptedAnswer": { "@type": "Answer", "text": "Switchya doesn't update itself. New previews are published on the GitHub releases page. Close the desktop app and any switchya serve terminal, extract the new ZIP into a new folder and start it from there. Your settings, accounts and conversations stay in %LOCALAPPDATA%\\Switchya." } },
@@ -102,14 +102,14 @@
     <section class="hero wrap" aria-labelledby="hero-title">
       <div class="hero-copy">
         <div>
-          <p class="status"><span class="status-dot" aria-hidden="true"></span>Windows preview · 0.1.0-preview.4</p>
+          <p class="status"><span class="status-dot" aria-hidden="true"></span>Windows preview · 0.1.0-preview.5</p>
           <h1 id="hero-title">A coding workspace.<br>Your choice of models.</h1>
         </div>
         <div class="hero-intro">
           <p>A desktop app and CLI for working on your code with the model providers you choose.</p>
           <p class="muted">Open a project. Work through a task. Review the proposed changes alongside the conversation.</p>
-          <div class="hero-actions"><a class="button button-primary" href="https://github.com/ichikuruma22-star/switchyard/releases/download/switchya-v0.1.0-preview.4/switchya-0.1.0-preview.4-windows-x86_64-portable.zip">Download Windows preview</a><a class="text-link" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4">Release notes</a></div>
-          <p class="download-meta">Portable ZIP · 20.7 MB · Windows 10/11 x64. Needs the Microsoft Visual C++ x64 runtime and WebView2. <a href="#availability">Requirements</a></p>
+          <div class="hero-actions"><a class="button button-primary" href="https://github.com/ichikuruma22-star/switchyard/releases/download/switchya-v0.1.0-preview.5/switchya-0.1.0-preview.5-windows-x86_64-portable.zip">Download Windows preview</a><a class="text-link" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.5">Release notes</a></div>
+          <p class="download-meta">Portable ZIP · 20.9 MB · Windows 10/11 x64. Needs the Microsoft Visual C++ x64 runtime and WebView2. <a href="#availability">Requirements</a></p>
         </div>
       </div>
 
@@ -171,6 +171,7 @@
         <div><dt>Connect your model providers</dt><dd>Give the native engine model access through Switchyard Gateway, with OpenAI, Anthropic, Gemini or a local Ollama model, or work through your own Codex, Claude Code or Antigravity setup.</dd></div>
         <div><dt>Switch accounts, not tools</dt><dd>Keep named Codex, Claude Code and Antigravity accounts side by side and pick one per conversation. Sign-in stays with each agent’s official CLI.</dd></div>
         <div><dt>Inspect what changed</dt><dd>Proposed file edits are shown as diffs before you approve them, next to tool actions and their results.</dd></div>
+        <div><dt>Skip the prompts on projects you trust</dt><dd>Approval is on by default. Turn on automatic approval for a project and its edits, commands or both go ahead without asking. Every operation is still recorded.</dd></div>
         <div><dt>Files, Git changes and a terminal</dt><dd>Browse project files, read Git diffs and open a terminal in the same workspace. Handoff notes record where the work stands, and agents connected over MCP can read and add them.</dd></div>
       </dl>
     </section>
@@ -201,7 +202,7 @@
     </section>
 
     <section class="gateway-section wrap section-space" id="gateway" aria-labelledby="gateway-title">
-      <div class="gateway-intro"><p class="section-context">Available now</p><h2 id="gateway-title">Switchyard Gateway.</h2><p>A standalone API gateway for your existing tools. Run it on your machine or server, add your provider credentials, and connect compatible clients to one endpoint.</p><a class="button button-outline" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1">Download the Gateway <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 2v10m-4-4 4 4 4-4M4 14v3h12v-3"/></svg></a><p class="release-note">Gateway v0.1.1 for Windows, Linux and macOS.<br>The Gateway is separate from the Switchya app.</p></div>
+      <div class="gateway-intro"><p class="section-context">Available now</p><h2 id="gateway-title">Switchyard Gateway.</h2><p>A standalone API gateway for your existing tools. Run it on your machine or server, add your provider credentials, and connect compatible clients to one endpoint.</p><a class="button button-outline" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.2">Download the Gateway <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 2v10m-4-4 4 4 4-4M4 14v3h12v-3"/></svg></a><p class="release-note">Gateway v0.1.2 for Windows, Linux and macOS.<br>The Gateway is separate from the Switchya app.</p></div>
       <div class="gateway-details"><dl><div><dt>API compatibility</dt><dd>OpenAI Chat Completions, Responses, Anthropic Messages, and Gemini protocols, with streaming.</dd></div><div><dt>Routing and operations</dt><dd>Model aliases, credential pools, cooldowns, and failover, with a built-in dashboard.</dd></div><div><dt>Runs on your infrastructure</dt><dd>A single Rust binary, also published as a Linux container image. Upstream access uses your API keys or service accounts.</dd></div></dl><div class="gateway-command"><div><span>With Gateway on your PATH</span><button type="button" class="copy-command" aria-label="Copy the Switchyard Gateway startup command" data-copy="switchyard" hidden>Copy</button></div><code><span aria-hidden="true">$ </span>switchyard</code><span class="copy-feedback" role="status" aria-live="polite"></span></div><a class="text-link" href="https://github.com/ichikuruma22-star/switchyard#readme">Setup and requirements</a></div>
     </section>
 
@@ -209,7 +210,7 @@
       <div class="section-heading"><h2 id="availability-title">Downloads and status.</h2><p>Try the Windows portable preview: the desktop app and CLI for your local projects.</p></div>
       <article class="download-primary" aria-labelledby="download-title">
         <div class="download-body">
-          <p class="status"><span class="status-dot" aria-hidden="true"></span>Windows preview · 0.1.0-preview.4</p>
+          <p class="status"><span class="status-dot" aria-hidden="true"></span>Windows preview · 0.1.0-preview.5</p>
           <h3 id="download-title">Switchya for Windows</h3>
           <p>The desktop app and CLI in one portable ZIP.</p>
           <ul class="requirements">
@@ -219,18 +220,19 @@
             <li>Extract the whole ZIP, then open <code>switchya-desktop.exe</code></li>
           </ul>
         </div>
-        <div class="download-actions"><a class="button button-primary" href="https://github.com/ichikuruma22-star/switchyard/releases/download/switchya-v0.1.0-preview.4/switchya-0.1.0-preview.4-windows-x86_64-portable.zip">Download Windows ZIP <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 2v10m-4-4 4 4 4-4M4 14v3h12v-3"/></svg></a><a class="text-link" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4">Release notes</a></div>
-        <dl class="download-facts"><div><dt>Size</dt><dd>21,738,632 bytes (20.7 MB)</dd></div><div><dt>SHA-256</dt><dd><code>574fc84df733e45734deccd297fd13049d0ebfe0502926c44a99bca8f5fc5529</code></dd></div></dl>
+        <div class="download-actions"><a class="button button-primary" href="https://github.com/ichikuruma22-star/switchyard/releases/download/switchya-v0.1.0-preview.5/switchya-0.1.0-preview.5-windows-x86_64-portable.zip">Download Windows ZIP <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 2v10m-4-4 4 4 4-4M4 14v3h12v-3"/></svg></a><a class="text-link" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.5">Release notes</a></div>
+        <dl class="download-facts"><div><dt>Size</dt><dd>21,907,753 bytes (20.9 MB)</dd></div><div><dt>SHA-256</dt><dd><code>93367c26e317282d1e8d9dd236cf06b0165068c83848e8519033cb2d59f9ad8a</code></dd></div></dl>
       </article>
       <div class="availability-list">
-        <article><div><h3>Switchya CLI and source</h3><p>The CLI is included in the Windows download. Source is available for other platforms.</p></div><a class="availability-release" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4">Preview release notes <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 4h10v10M16 4 4 16"/></svg></a></article>
-        <article><div><h3>Switchyard Gateway</h3><p>Separate public releases for Windows, Linux and macOS, and a container image for Linux. Source and setup documentation are available on GitHub.</p></div><a class="availability-release" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1">Gateway v0.1.1 <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 4h10v10M16 4 4 16"/></svg></a></article>
+        <article><div><h3>Switchya CLI and source</h3><p>The CLI is included in the Windows download. Source is available for other platforms.</p></div><a class="availability-release" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.5">Preview release notes <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 4h10v10M16 4 4 16"/></svg></a></article>
+        <article><div><h3>Switchyard Gateway</h3><p>Separate public releases for Windows, Linux and macOS, and a container image for Linux. Source and setup documentation are available on GitHub.</p></div><a class="availability-release" href="https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.2">Gateway v0.1.2 <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 4h10v10M16 4 4 16"/></svg></a></article>
       </div>
       <h3 class="limits-title">Known limits</h3>
       <ul class="limits">
         <li>Portable ZIP for Windows 10/11 x64. It is unsigned, with no installer or bundled runtimes.</li>
         <li>No macOS or Linux desktop download yet. Source is available on GitHub for other platforms.</li>
-        <li>Live checks have used an existing Codex CLI account, one managed Claude profile and Antigravity in plan mode. Switching between accounts, and this release’s sign-in changes, have not been verified live.</li>
+        <li>Live checks have used an existing Codex CLI account, one managed Claude profile and Antigravity in plan mode. Switching between accounts and the newer sign-in methods have not been verified live.</li>
+        <li>Automatic approval was checked with the real Codex and Claude Code CLIs against a scripted local model, not a live one.</li>
         <li>Claude subscription quota isn’t shown, and Switchya can’t check Antigravity sign-in status.</li>
       </ul>
     </section>
@@ -241,11 +243,11 @@
         <details><summary>Is Switchya free?</summary><p>Yes. Switchya and Switchyard Gateway are open source under the <a href="https://github.com/ichikuruma22-star/switchyard/blob/main/LICENSE">MIT License</a>. Cloud model providers bill their usage to your own account or subscription.</p></details>
         <details><summary>Does my code leave my computer?</summary><p>Switchya has no analytics or telemetry, no Switchya account and no cloud sync, and its local server only accepts connections from your own computer. A task sends the conversation and the files the agent reads to the model provider you chose for it. With a local Ollama model it stays on your machine. Codex, Claude Code and Antigravity handle data under their own terms.</p></details>
         <details><summary>Which models can I use?</summary><p>The setup dialog connects OpenAI, Anthropic, Gemini or a local Ollama server, and the model list shows the IDs your connection offers. Switchyard Gateway’s configuration adds compatible endpoints, aliases and failover. You can also work through your own Codex, Claude Code or Antigravity setup.</p></details>
-        <details><summary>Will it change my files without asking?</summary><p>Not with the native engine: file edits are shown as diffs and commands wait for your approval before they run. Codex and Claude Code approval requests appear in the conversation for your decision, and Antigravity runs in read-only plan mode.</p></details>
+        <details><summary>Will it change my files without asking?</summary><p>Only if you turn that on. By default, file edits are shown as diffs and commands wait for your approval before they run, and Codex and Claude Code requests appear in the conversation for your decision. For a project you trust, you can let edits, commands or both go ahead without asking. Every operation is still recorded, protected paths stay blocked, and Antigravity runs in read-only plan mode.</p></details>
         <details><summary>Where are my projects and conversations stored?</summary><p>Your code stays in your project folder, and Switchya edits it in place. Settings and saved conversations are in <code>%LOCALAPPDATA%\Switchya</code> on your PC, not in the ZIP. Keep <code>gateway.toml</code> there private: it holds the API keys you saved.</p></details>
-        <details><summary>Why does Windows warn when I open it?</summary><p>The preview isn’t code-signed yet, so Microsoft Defender SmartScreen may warn about an unrecognized app. Compare the ZIP’s SHA-256 with the value listed under <a href="#availability">Downloads</a> before you run it:</p><pre tabindex="0" role="region" aria-label="PowerShell command to check the download"><code>Get-FileHash .\switchya-0.1.0-preview.4-windows-x86_64-portable.zip</code></pre></details>
+        <details><summary>Why does Windows warn when I open it?</summary><p>The preview isn’t code-signed yet, so Microsoft Defender SmartScreen may warn about an unrecognized app. Compare the ZIP’s SHA-256 with the value listed under <a href="#availability">Downloads</a> before you run it:</p><pre tabindex="0" role="region" aria-label="PowerShell command to check the download"><code>Get-FileHash .\switchya-0.1.0-preview.5-windows-x86_64-portable.zip</code></pre></details>
         <details><summary>How do I update to a new preview?</summary><p>Switchya doesn’t update itself. New previews are published on the <a href="https://github.com/ichikuruma22-star/switchyard/releases">GitHub releases page</a>. Close the desktop app and any <code>switchya serve</code> terminal, extract the new ZIP into a new folder and start it from there. Your settings, accounts and conversations stay in <code>%LOCALAPPDATA%\Switchya</code>.</p></details>
-        <details><summary>Is there a Mac or Linux version?</summary><p>Not as a desktop download yet. The browser workspace and CLI build from source, and their tests pass on Linux and macOS, but the desktop shell isn’t released there. Switchyard Gateway has <a href="https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1">release builds</a> for Windows, Linux and macOS.</p></details>
+        <details><summary>Is there a Mac or Linux version?</summary><p>Not as a desktop download yet. The browser workspace and CLI build from source, and their tests pass on Linux and macOS, but the desktop shell isn’t released there. Switchyard Gateway has <a href="https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.2">release builds</a> for Windows, Linux and macOS.</p></details>
         <details><summary>How do Switchya and Switchyard Gateway relate?</summary><p>Switchya is the app and CLI. Switchyard Gateway is a standalone API gateway that the native engine uses for model access. You can also run the Gateway on its own for other tools and SDKs.</p></details>
         <details><summary>Where can I get help or report a bug?</summary><p>The <a href="https://github.com/ichikuruma22-star/switchyard/blob/main/docs/SWITCHYA.md">user guide</a> covers setup, approvals, accounts and recovery. To report a bug or ask a question, <a href="https://github.com/ichikuruma22-star/switchyard/issues">open an issue on GitHub</a>. Issues are public, so leave out API keys and private code.</p></details>
       </div>

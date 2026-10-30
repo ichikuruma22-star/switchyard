@@ -1,6 +1,6 @@
 # Switchya & Switchyard Gateway
 
-**Website: [switchya.com](https://switchya.com/)** · [Windows preview download](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4) · [User guide](docs/SWITCHYA.md) · [Gateway v0.1.1](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1)
+**Website: [switchya.com](https://switchya.com/)** · [Windows preview download](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.5) · [User guide](docs/SWITCHYA.md) · [Gateway v0.1.1](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1)
 
 **Switchya** is a local coding workspace with a browser interface, a terminal
 CLI, and a native desktop shell. Open a project, choose a model,
@@ -17,9 +17,9 @@ published `preview.2` archive; they ship in `preview.3`.
 
 | Start here | Purpose | Availability |
 |---|---|---|
-| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.4) |
+| [Switchya user guide](docs/SWITCHYA.md) | Provider setup, projects, sessions, approvals, account boundaries, and app/CLI handoff | [Windows x64 portable preview](https://github.com/ichikuruma22-star/switchyard/releases/tag/switchya-v0.1.0-preview.5) |
 | [Native desktop build](desktop/README.md) | Build the separate desktop shell | Separate Cargo workspace; operating-system runtime verification is distinct from gateway verification |
-| [Switchyard Gateway](#switchyard-gateway) | Protocol translation, routing, credential pools, and its operations dashboard | [v0.1.1 downloads for Windows, Linux and macOS](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.1) |
+| [Switchyard Gateway](#switchyard-gateway) | Protocol translation, routing, credential pools, and its operations dashboard | [v0.1.2 downloads for Windows, Linux and macOS](https://github.com/ichikuruma22-star/switchyard/releases/tag/v0.1.2) |
 
 The Switchya preview targets Windows 10/11 x64 and contains the native
 shell and CLI in an unsigned portable archive, with no installer or bundled
@@ -31,7 +31,7 @@ No macOS app binary is available, and separate Linux checks do not constitute
 a Linux desktop release. See [the preview verification status](docs/SWITCHYA.md#published-preview-verification-status)
 for the tested scope and remaining limits.
 
-The gateway release (v0.1.1) includes archives for Windows x64, Linux x64 and
+The gateway release (v0.1.2) includes archives for Windows x64, Linux x64 and
 arm64 (glibc and static musl) and macOS arm64 and Intel, each with a SHA-256
 file. The release workflow tested each target and started its binary on a
 GitHub-hosted runner of that platform. A multi-architecture container image is
@@ -51,8 +51,10 @@ Open the private launch URL printed in the terminal. Choose **Connect a
 provider** to add an OpenAI, Anthropic or Gemini API key, an environment-variable
 reference, or an existing local Ollama server. A starter mock model is not a
 working coding model. Open a local project, select a real model, and send a
-task. File edits and commands require an exact, single-use human decision;
-commands run with your operating-system permissions.
+task. By default, file edits and commands require an exact, single-use human
+decision. For a project you trust, you can turn on
+[automatic approval](docs/SWITCHYA.md#approve-automatically-opt-in). Commands
+run with your operating-system permissions.
 
 To build the Windows desktop shell, use its separate manifest:
 
@@ -265,7 +267,7 @@ export SWITCHYARD_ADMIN_SECRET="$(openssl rand -hex 32)"
 docker run -d --name switchyard -p 127.0.0.1:8317:8317 \
   -v switchyard-data:/data \
   -e SWITCHYARD_ADMIN_SECRET -e SWITCHYARD_ADMIN_ALLOW_REMOTE=true \
-  ghcr.io/ichikuruma22-star/switchyard:0.1.1
+  ghcr.io/ichikuruma22-star/switchyard:0.1.2
 ```
 
 This bash example generates a fresh admin secret in `SWITCHYARD_ADMIN_SECRET`;
